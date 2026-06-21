@@ -1,0 +1,130 @@
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+    environment:
+      NODE_ENV: production
+      RUNNING_IN_DOCKER: "1"
+      NO_UPDATE_NOTIFIER: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      REQUIRE_STRONG_LOCAL_SECRETS: "true"
+      DATABASE_URL: postgresql://jiying:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/jiying?schema=public
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required for production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  jiying-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "0.0.0.0:3000:3000"
+    environment:
+      NODE_ENV: production
+      RUNNING_IN_DOCKER: "1"
+      NO_UPDATE_NOTIFIER: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      WORKFLOW_WORKER_ENABLED: "false"
+      REQUIRE_STRONG_LOCAL_SECRETS: "true"
+      APP_URL: ${APP_URL:?APP_URL is required for production}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:?PUBLIC_APP_URL is required for production}
+      DATABASE_URL: postgresql://jiying:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/jiying?schema=public
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required for production}
+      UPLOADS_DIR: /app/uploads
+      PRIVATE_STORAGE_DIR: /app/storage/private
+      API_PROVIDER_CONFIG_PATH: ${API_PROVIDER_CONFIG_PATH:-config/api-providers.local.json}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
+      WRITE_RATE_LIMIT_PER_MINUTE: ${WRITE_RATE_LIMIT_PER_MINUTE:-120}
+      JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-10mb}
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-100}
+      SHOWCASE_UPLOAD_MAX_MB: ${SHOWCASE_UPLOAD_MAX_MB:-1024}
+    volumes:
+      - ./config:/app/config:ro
+      - jiying_uploads:/app/uploads
+      - jiying_private_storage:/app/storage/private
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  jiying-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "start:worker"]
+    environment:
+      NODE_ENV: production
+      RUNNING_IN_DOCKER: "1"
+      NO_UPDATE_NOTIFIER: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      DATABASE_URL: postgresql://jiying:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/jiying?schema=public
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required for production}
+      UPLOADS_DIR: /app/uploads
+      PRIVATE_STORAGE_DIR: /app/storage/private
+      API_PROVIDER_CONFIG_PATH: ${API_PROVIDER_CONFIG_PATH:-config/api-providers.local.json}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      WORKFLOW_WORKER_CONCURRENCY: ${WORKFLOW_WORKER_CONCURRENCY:-2}
+    volumes:
+      - ./config:/app/config:ro
+      - jiying_uploads:/app/uploads
+      - jiying_private_storage:/app/storage/private
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jiying
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: jiying
+    volumes:
+      - jiying_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jiying -d jiying"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - jiying_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  jiying_postgres_data:
+  jiying_redis_data:
+  jiying_uploads:
+  jiying_private_storage:

@@ -1,0 +1,50 @@
+{
+  "_comment": "Copy this file to config/api-providers.local.json. Keep the local file private and never commit it.",
+  "ownerId": "guest",
+  "providers": [
+    {
+      "id": "local-text-openai-compatible",
+      "alias": "OpenAI Compatible Text",
+      "type": "text",
+      "baseUrl": "https://api.example.com/v1/chat/completions",
+      "modelName": "gpt-4o-mini",
+      "apiKey": "replace_with_text_api_key",
+      "isEnabled": true,
+      "metadata": {
+        "provider": "openai-compatible",
+        "requestFormat": "chat-completions"
+      }
+    },
+    {
+      "id": "local-image-model",
+      "alias": "Image Generation API",
+      "type": "image",
+      "baseUrl": "https://api.example.com/v1/images/generations",
+      "modelName": "image-model-name",
+      "apiKey": "replace_with_image_api_key",
+      "isEnabled": false,
+      "metadata": {
+        "provider": "openai-compatible",
+        "resolutions": ["1024x1024", "1536x1024", "1024x1536"],
+        "ratios": ["1:1", "16:9", "9:16"],
+        "quality": "standard"
+      }
+    },
+    {
+      "id": "local-video-model",
+      "alias": "Video Generation API",
+      "type": "video",
+      "baseUrl": "https://api.example.com/v1/videos/generations",
+      "modelName": "video-model-name",
+      "apiKey": "replace_with_video_api_key",
+      "isEnabled": false,
+      "metadata": {
+        "provider": "custom-video",
+        "resolutions": ["1280x720", "1920x1080"],
+        "ratios": ["16:9", "9:16"],
+        "durations": [5, 10],
+        "hasAudio": true
+      }
+    }
+  ]
+}

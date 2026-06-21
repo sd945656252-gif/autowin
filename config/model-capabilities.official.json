@@ -1,0 +1,316 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-10T00:00:00.000Z",
+  "models": [
+    {
+      "canonicalModelId": "openai:gpt-image-2",
+      "officialModelId": "gpt-image-2",
+      "provider": "OpenAI",
+      "capability": "IMAGE_GENERATOR",
+      "aliases": [
+        "gpt-image-2",
+        "gpt-image-2-2026-04-21",
+        "gpt image 2",
+        "gpt_image_2",
+        "gptimage2"
+      ],
+      "verificationStatus": "VERIFIED",
+      "sourceType": "official_docs",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/guides/image-generation",
+        "https://developers.openai.com/api/reference/resources/images/methods/generate",
+        "https://developers.openai.com/api/reference/resources/images/methods/edit"
+      ],
+      "params": {
+        "imageCapabilities": {
+          "modes": ["text_to_image", "image_to_image", "image_edit"],
+          "defaultMode": "text_to_image",
+          "inputSlots": {
+            "referenceImages": { "enabled": true, "maxCount": 16 },
+            "sourceImage": { "enabled": true },
+            "maskImage": {
+              "enabled": true,
+              "requirements": {
+                "sameFormatAndSize": true,
+                "alphaChannelRequired": true,
+                "maxBytes": 52428800
+              }
+            }
+          },
+          "modeDetection": {
+            "strategy": "asset_slot_inference",
+            "text_to_image": { "when": "no referenceImageAssetIds, no sourceImageAssetId, no maskImageAssetId" },
+            "image_to_image": { "when": "referenceImageAssetIds is non-empty or sourceImageAssetId is present without mask/editInstruction", "endpoint": "/v1/images/edits" },
+            "image_edit": { "when": "sourceImageAssetId plus maskImageAssetId or editInstruction", "endpoint": "/v1/images/edits" }
+          },
+          "controls": {
+            "prompt": true,
+            "promptMaxChars": 32000,
+            "negativePrompt": false,
+            "aspectRatio": ["auto", "1:3", "9:16", "2:3", "3:4", "4:5", "1:1", "5:4", "4:3", "3:2", "16:9", "21:9", "2:1", "3:1"],
+            "size": ["1024x1024", "1024x3072", "1152x2048", "1024x1536", "1024x1280", "1280x1024", "1536x1024", "2048x1152", "2560x1088", "2048x1024", "3072x1024", "3840x2160", "auto"],
+            "sizeConstraints": {
+              "minTotalPixels": 655360,
+              "maxTotalPixels": 8294400,
+              "maxEdge": 3840,
+              "multipleOf": 16,
+              "maxLongToShortRatio": 3
+            },
+            "quality": ["low", "medium", "high", "auto"],
+            "outputFormat": ["png", "jpeg", "webp"],
+            "outputCompression": {
+              "enabled": true,
+              "requiresOutputFormat": ["jpeg", "webp"],
+              "min": 0,
+              "max": 100,
+              "default": 100
+            },
+            "background": ["auto", "opaque"],
+            "transparentBackground": false,
+            "moderation": ["auto", "low"],
+            "stream": true,
+            "partialImages": { "enabled": true, "min": 0, "max": 3, "default": 0 },
+            "inputFidelity": false,
+            "responseFormat": false,
+            "style": false,
+            "seed": false,
+            "steps": false,
+            "cfgScale": false,
+            "strength": false
+          },
+          "limits": { "maxOutputImages": 1, "maxInputImages": 16 },
+          "officialLimits": { "maxOutputImages": 10, "maxInputImages": 16 },
+          "sourceDocs": [
+            { "url": "https://developers.openai.com/api/docs/guides/image-generation", "via": "openaiDeveloperDocs MCP", "checkedAt": "2026-06-10" },
+            { "url": "https://developers.openai.com/api/reference/resources/images/methods/generate", "via": "openaiDeveloperDocs MCP", "checkedAt": "2026-06-10" },
+            { "url": "https://developers.openai.com/api/reference/resources/images/methods/edit", "via": "openaiDeveloperDocs MCP", "checkedAt": "2026-06-10" }
+          ],
+          "providerAdapter": "openai-image",
+          "runtime": {
+            "responsePaths": ["data.0.url", "data.0.b64_json", "url", "image_url", "result.url", "result.image_url"],
+            "taskIdPaths": ["id", "task_id", "taskId"]
+          }
+        }
+      }
+    },
+    {
+      "canonicalModelId": "google:nano-banana-2",
+      "officialModelId": "gemini-3.1-flash-image",
+      "provider": "Google",
+      "capability": "IMAGE_GENERATOR",
+      "aliases": [
+        "nano-banana-2",
+        "nano banana 2",
+        "nanobanana2",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-image-preview",
+        "gemini-2.5-flash-image"
+      ],
+      "verificationStatus": "MANUAL_VERIFIED",
+      "sourceType": "official_docs",
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/image-generation"
+      ],
+      "params": {
+        "imageCapabilities": {
+          "modes": ["text_to_image"],
+          "defaultMode": "text_to_image",
+          "inputSlots": {
+            "referenceImages": { "enabled": false, "maxCount": 0 },
+            "sourceImage": { "enabled": false },
+            "maskImage": { "enabled": false }
+          },
+          "modeDetection": {
+            "strategy": "asset_slot_inference",
+            "text_to_image": { "when": "prompt only" },
+            "image_to_image": { "when": "disabled until native Gemini image adapter is available" },
+            "image_edit": { "when": "disabled until native Gemini image adapter is available" }
+          },
+          "controls": {
+            "prompt": true,
+            "promptMaxChars": 32000,
+            "negativePrompt": false,
+            "aspectRatio": ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"],
+            "size": ["512", "1K", "2K", "4K"],
+            "quality": [],
+            "outputFormat": ["png"],
+            "outputCompression": false,
+            "background": ["auto"],
+            "transparentBackground": false,
+            "moderation": [],
+            "stream": false,
+            "partialImages": false,
+            "inputFidelity": false,
+            "responseFormat": false,
+            "style": false,
+            "seed": false,
+            "steps": false,
+            "cfgScale": false,
+            "strength": false
+          },
+          "limits": { "maxOutputImages": 4, "maxInputImages": 0 },
+          "sourceDocs": [
+            { "url": "https://ai.google.dev/gemini-api/docs/image-generation", "via": "official docs", "checkedAt": "2026-06-16" }
+          ],
+          "providerAdapter": "google-gemini-image",
+          "runtime": {
+            "modelOverride": "gemini-3.1-flash-image",
+            "endpoint": "/v1/images/generations",
+            "payloadFields": {
+              "model": "model",
+              "prompt": "prompt",
+              "aspectRatio": "aspect_ratio",
+              "resolution": "resolution"
+            },
+            "responsePaths": ["data.0.url", "data.0.b64_json", "data.0.image_url", "url", "image_url", "result.url", "result.image_url", "result.images.0.url", "output.0.url"],
+            "taskIdPaths": ["id", "task_id", "taskId", "data.id", "data.task_id", "data.taskId"]
+          }
+        }
+      }
+    },
+    {
+      "canonicalModelId": "google:nano-banana-pro",
+      "officialModelId": "gemini-3-pro-image",
+      "provider": "Google",
+      "capability": "IMAGE_GENERATOR",
+      "aliases": [
+        "nano-banana-pro",
+        "nano banana pro",
+        "nanobananapro",
+        "gemini-3-pro-image",
+        "gemini-3-pro-image-preview"
+      ],
+      "verificationStatus": "MANUAL_VERIFIED",
+      "sourceType": "official_docs",
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/image-generation"
+      ],
+      "params": {
+        "imageCapabilities": {
+          "modes": ["text_to_image"],
+          "defaultMode": "text_to_image",
+          "inputSlots": {
+            "referenceImages": { "enabled": false, "maxCount": 0 },
+            "sourceImage": { "enabled": false },
+            "maskImage": { "enabled": false }
+          },
+          "modeDetection": {
+            "strategy": "asset_slot_inference",
+            "text_to_image": { "when": "prompt only" },
+            "image_to_image": { "when": "disabled until native Gemini image adapter is available" },
+            "image_edit": { "when": "disabled until native Gemini image adapter is available" }
+          },
+          "controls": {
+            "prompt": true,
+            "promptMaxChars": 32000,
+            "negativePrompt": false,
+            "aspectRatio": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+            "size": ["1K", "2K", "4K"],
+            "quality": [],
+            "outputFormat": ["png"],
+            "outputCompression": false,
+            "background": ["auto"],
+            "transparentBackground": false,
+            "moderation": [],
+            "stream": false,
+            "partialImages": false,
+            "inputFidelity": false,
+            "responseFormat": false,
+            "style": false,
+            "seed": false,
+            "steps": false,
+            "cfgScale": false,
+            "strength": false
+          },
+          "limits": { "maxOutputImages": 4, "maxInputImages": 0 },
+          "sourceDocs": [
+            { "url": "https://ai.google.dev/gemini-api/docs/image-generation", "via": "official docs", "checkedAt": "2026-06-16" }
+          ],
+          "providerAdapter": "google-gemini-image",
+          "runtime": {
+            "modelOverride": "gemini-3-pro-image",
+            "endpoint": "/v1/images/generations",
+            "payloadFields": {
+              "model": "model",
+              "prompt": "prompt",
+              "aspectRatio": "aspect_ratio",
+              "resolution": "resolution"
+            },
+            "responsePaths": ["data.0.url", "data.0.b64_json", "data.0.image_url", "url", "image_url", "result.url", "result.image_url", "result.images.0.url", "output.0.url"],
+            "taskIdPaths": ["id", "task_id", "taskId", "data.id", "data.task_id", "data.taskId"]
+          }
+        }
+      }
+    },
+    {
+      "canonicalModelId": "bytedance:seedance-2.0",
+      "officialModelId": "seedance-2.0",
+      "provider": "ByteDance",
+      "capability": "VIDEO_GENERATOR",
+      "aliases": [
+        "seedance-2.0",
+        "seedance2",
+        "seedance 2.0",
+        "enhancor-seedance2"
+      ],
+      "verificationStatus": "MANUAL_VERIFIED",
+      "sourceType": "official_capability_public_page",
+      "sourceUrls": [
+        "https://www.volcengine.com/docs/82379/1520757?lang=zh"
+      ],
+      "params": {
+        "videoCapabilities": {
+          "modes": ["text_to_video", "image_to_video", "first_last_frame", "reference_to_video"],
+          "defaultMode": "text_to_video",
+          "inputSlots": {
+            "firstFrame": { "enabled": true },
+            "lastFrame": { "enabled": true },
+            "referenceImages": { "enabled": true, "maxCount": 9 },
+            "sourceVideo": { "enabled": true },
+            "referenceVideo": { "enabled": true },
+            "audio": { "enabled": true }
+          },
+          "controls": {
+            "prompt": true,
+            "negativePrompt": false,
+            "duration": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            "aspectRatio": ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+            "resolution": ["480p", "720p", "1080p"],
+            "fps": [24],
+            "cameraControl": false,
+            "motionStrength": false,
+            "seed": true,
+            "generateAudio": true
+          },
+          "limits": {
+            "maxInputImages": 9,
+            "maxInputVideos": 3,
+            "maxInputAudios": 3
+          },
+          "sourceDocs": [
+            { "url": "https://www.volcengine.com/docs/82379/1520757?lang=zh", "via": "official docs", "checkedAt": "2026-06-16" }
+          ],
+          "providerAdapter": "seedance-video",
+          "runtime": {
+            "endpoint": "/video/generations",
+            "payloadFields": {
+              "model": "model",
+              "prompt": "prompt",
+              "aspectRatio": "ratio",
+              "resolution": "resolution",
+              "duration": "duration",
+              "generateAudio": "generate_audio",
+              "seed": "seed"
+            },
+            "responsePaths": ["data.0.url", "data.0.video_url", "data.0.videoUrl", "url", "video_url", "videoUrl", "result.url", "result.video_url", "result.videoUrl", "result.videos.0.url", "output.0.url", "output.0"],
+            "taskIdPaths": ["id", "task_id", "taskId", "data.id", "data.task_id", "data.taskId"],
+            "pollEndpoint": "/video/status/{taskId}",
+            "pollResultPaths": ["url", "video_url", "videoUrl", "data.0.url", "data.0.video_url", "data.0.videoUrl", "result.url", "result.video_url", "output.0"],
+            "pollStatusPaths": ["status", "state", "data.status", "data.state"],
+            "failedStatuses": ["failed", "error", "canceled", "cancelled"]
+          }
+        }
+      }
+    }
+  ]
+}
