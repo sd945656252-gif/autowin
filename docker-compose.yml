@@ -1,0 +1,139 @@
+name: jiying
+
+services:
+  migrate:
+    image: ${JIYING_DEV_IMAGE:-localhost/jiying-dev:latest}
+    working_dir: /app
+    command: ["sh", "-c", "npx prisma generate && npx prisma migrate deploy"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      RUNNING_IN_DOCKER: "1"
+      NO_UPDATE_NOTIFIER: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      DATABASE_URL: postgresql://jiying:jiying_dev_password@postgres:5432/jiying?schema=public
+    volumes:
+      - .:/app
+      - jiying_node_modules:/app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  jiying-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-}
+        HTTPS_PROXY: ${CONTAINER_HTTPS_PROXY:-}
+        ALL_PROXY: ${CONTAINER_ALL_PROXY:-}
+        NO_PROXY: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis}
+        http_proxy: ${CONTAINER_HTTP_PROXY:-}
+        https_proxy: ${CONTAINER_HTTPS_PROXY:-}
+        all_proxy: ${CONTAINER_ALL_PROXY:-}
+        no_proxy: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis}
+    image: ${JIYING_DEV_IMAGE:-localhost/jiying-dev:latest}
+    working_dir: /app
+    command: ["sh", "-c", "npm run dev:server:watch"]
+    ports:
+      - "0.0.0.0:${PREVIEW_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      RUNNING_IN_DOCKER: "1"
+      NO_UPDATE_NOTIFIER: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      WORKFLOW_WORKER_ENABLED: "false"
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://172.19.1.27:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://172.19.1.27:3000}
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://jiying:jiying_dev_password@postgres:5432/jiying?schema=public
+      REDIS_URL: redis://redis:6379
+      HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-}
+      HTTPS_PROXY: ${CONTAINER_HTTPS_PROXY:-}
+      ALL_PROXY: ${CONTAINER_ALL_PROXY:-}
+      NO_PROXY: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    volumes:
+      - .:/app
+      - jiying_node_modules:/app/node_modules
+      - jiying_uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  jiying-worker:
+    image: ${JIYING_DEV_IMAGE:-localhost/jiying-dev:latest}
+    working_dir: /app
+    command: ["sh", "-c", "npm run dev:worker:watch"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      RUNNING_IN_DOCKER: "1"
+      NO_UPDATE_NOTIFIER: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      DATABASE_URL: postgresql://jiying:jiying_dev_password@postgres:5432/jiying?schema=public
+      REDIS_URL: redis://redis:6379
+      HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-}
+      HTTPS_PROXY: ${CONTAINER_HTTPS_PROXY:-}
+      ALL_PROXY: ${CONTAINER_ALL_PROXY:-}
+      NO_PROXY: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    volumes:
+      - .:/app
+      - jiying_node_modules:/app/node_modules
+      - jiying_uploads:/app/uploads
+      - jiying_private_storage:/app/storage/private
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jiying
+      POSTGRES_PASSWORD: jiying_dev_password
+      POSTGRES_DB: jiying
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - jiying_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jiying -d jiying"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    volumes:
+      - jiying_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  jiying_node_modules:
+  jiying_postgres_data:
+  jiying_redis_data:
+  jiying_uploads:
+  jiying_private_storage:

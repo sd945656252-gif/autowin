@@ -1,0 +1,1031 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  DEVELOPER
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ProductionStage {
+  SCRIPT_01
+  DIRECTOR_02
+  ART_03
+  SHOT_04
+  EDIT_05
+}
+
+enum ProductionAssetScope {
+  PERSONAL
+  TEAM
+  INTERNAL
+}
+
+enum ProductionAssetReviewStatus {
+  UNREVIEWED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  ARCHIVED
+  REFERENCE
+}
+
+enum ProductionProjectMemberRole {
+  OWNER
+  MEMBER
+}
+
+enum ProductionProjectGrantRole {
+  PROJECT_DEVELOPER
+}
+
+enum ProductionAssetReviewAction {
+  CREATE
+  SUBMIT_REVIEW
+  APPROVE
+  REJECT
+  ARCHIVE
+  SOFT_DELETE
+  REFERENCE_UPLOAD
+  REFERENCE_DISTRIBUTE
+}
+
+enum NotificationType {
+  ASSET_SUBMITTED
+  ASSET_APPROVED
+  ASSET_REJECTED
+  ASSET_ARCHIVED
+  REFERENCE_ASSIGNED
+  PROJECT_DEVELOPER_GRANTED
+  PROJECT_DEVELOPER_REVOKED
+  USER_NOTICE
+  PROJECT_BROADCAST
+  ANNOUNCEMENT
+}
+
+enum NotificationAudience {
+  USER
+  PROJECT
+  GLOBAL
+}
+
+enum WorkflowRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum MediaAssetType {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  EXECUTE
+  LOGIN
+  ACCESS
+}
+
+enum MediaVisibility {
+  PUBLIC
+  OWNER_ONLY
+  DEVELOPER_ONLY
+  ADMIN_ONLY
+}
+
+enum ShowcaseWorkStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ModelCapability {
+  TEXT_GENERATOR
+  IMAGE_GENERATOR
+  VIDEO_GENERATOR
+}
+
+enum ModelCapabilityVerificationStatus {
+  VERIFIED
+  UNVERIFIED
+  MANUAL_VERIFIED
+  DEPRECATED
+}
+
+enum ScriptProjectSourceType {
+  FILE
+  IDEA
+}
+
+enum ScriptProjectStatus {
+  DRAFT
+  PROCESSING
+  READY
+  FAILED
+  DELETED
+}
+
+enum ScriptProcessingJobType {
+  FILE_BREAKDOWN
+  IDEA_BREAKDOWN
+  REGENERATE_IMAGE_PROMPT
+  REGENERATE_VIDEO_PROMPT
+  BULK_REGENERATE_PROMPTS
+  EXPORT_EXCEL
+}
+
+enum ScriptProcessingJobStatus {
+  QUEUED
+  PARSING
+  GENERATING
+  VALIDATING
+  SAVING
+  SUCCEEDED
+  FAILED
+}
+
+enum ScriptProjectVersionType {
+  SOURCE
+  AI_GENERATED
+  USER_EDITED
+  EXPORTED
+}
+
+enum PipelineAssistantMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum PipelineAssistantActionType {
+  SCRIPT_CREATE_OR_UPDATE
+  SCRIPT_IMPORT_PARSE
+  DIRECTOR_PROMPT_FILL
+  DIRECTOR_PROMPT_GENERATE
+  ART_NODE_CREATE
+  ART_NODE_UPDATE
+  ART_GENERATE_START
+  SHOT_NODE_CREATE
+  SHOT_NODE_UPDATE
+  SHOT_GENERATE_START
+  EDIT_TIMELINE_UPDATE
+  EDIT_ROUGH_CUT_CREATE
+  EDIT_EFFECT_OR_AUDIO_MARKER_ADD
+}
+
+enum PipelineAssistantActionStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  EXPIRED
+  FAILED
+}
+
+model User {
+  id                            String                               @id @default(cuid())
+  email                         String?                              @unique
+  username                      String?                              @unique
+  displayName                   String?
+  avatarUrl                     String?
+  passwordHash                  String?
+  emailVerified                 Boolean                              @default(false)
+  role                          UserRole                             @default(USER)
+  status                        UserStatus                           @default(ACTIVE)
+  lastLoginAt                   DateTime?
+  lastSeenAt                    DateTime?
+  createdAt                     DateTime                             @default(now())
+  updatedAt                     DateTime                             @updatedAt
+  workflows                     Workflow[]
+  workflowRuns                  WorkflowRun[]
+  mediaAssets                   MediaAsset[]
+  auditLogs                     AuditLog[]
+  sessions                      AuthSession[]
+  oauthAccounts                 OAuthAccount[]
+  createdShowcaseWorks          ShowcaseWork[]
+  scriptProjects                ScriptProject[]
+  editingProjects               EditingProject[]
+  createdProductionProjects     ProductionProject[]                  @relation("ProductionProjectCreatedBy")
+  productionProjectMemberships  ProductionProjectMember[]
+  grantedProductionProjectRoles ProductionProjectRoleGrant[]         @relation("ProductionProjectRoleGrantedBy")
+  productionProjectRoleGrants   ProductionProjectRoleGrant[]         @relation("ProductionProjectRoleUser")
+  createdProductionAssets       ProductionAsset[]                    @relation("ProductionAssetCreator")
+  submittedProductionAssets     ProductionAsset[]                    @relation("ProductionAssetSubmitter")
+  reviewedProductionAssets      ProductionAsset[]                    @relation("ProductionAssetReviewer")
+  createdProductionSnapshots    ProductionAssetSnapshot[]            @relation("ProductionAssetSnapshotCreator")
+  reviewedProductionSnapshots   ProductionAssetSnapshot[]            @relation("ProductionAssetSnapshotReviewer")
+  assignedProductionReferences  ProductionAssetReferenceVisibility[] @relation("ProductionAssetReferenceAssignedBy")
+  visibleProductionReferences   ProductionAssetReferenceVisibility[] @relation("ProductionAssetReferenceUser")
+  notifications                 Notification[]                       @relation("NotificationReceiver")
+  sentNotifications             Notification[]                       @relation("NotificationSender")
+  pipelineAssistantSessions     PipelineAssistantSession[]
+  pipelineAssistantMessages     PipelineAssistantMessage[]
+  pipelineAssistantActions      PipelineAssistantAction[]
+  pipelineAssistantAttachments  PipelineAssistantAttachment[]
+  pipelineWorkspaceSnapshots    PipelineWorkspaceSnapshot[]
+  updatedPromptOptimizationProfiles PromptOptimizationProfile[]
+}
+
+model OAuthAccount {
+  id             String   @id @default(cuid())
+  userId         String
+  provider       String
+  providerUserId String
+  email          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+}
+
+model AuthSession {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  userAgent String?
+  ipAddress String?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Workflow {
+  id            String            @id @default(cuid())
+  ownerId       String?
+  name          String
+  description   String?
+  draftRevision Int               @default(0)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  owner         User?             @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  versions      WorkflowVersion[]
+  runs          WorkflowRun[]
+
+  @@index([ownerId])
+}
+
+model WorkflowVersion {
+  id            String   @id @default(cuid())
+  workflowId    String
+  version       Int
+  schemaJson    Json
+  reactFlowJson Json?
+  createdAt     DateTime @default(now())
+  workflow      Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, version])
+  @@index([workflowId])
+}
+
+model WorkflowRun {
+  id         String            @id @default(cuid())
+  ownerId    String?
+  workflowId String?
+  versionId  String?
+  status     WorkflowRunStatus @default(QUEUED)
+  inputJson  Json?
+  outputJson Json?
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime          @default(now())
+  owner      User?             @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  workflow   Workflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  nodeRuns   WorkflowNodeRun[]
+
+  @@index([ownerId])
+  @@index([workflowId])
+  @@index([status])
+}
+
+model WorkflowNodeRun {
+  id         String            @id @default(cuid())
+  runId      String
+  nodeId     String
+  nodeType   String
+  status     WorkflowRunStatus @default(QUEUED)
+  inputJson  Json?
+  outputJson Json?
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime          @default(now())
+  run        WorkflowRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([nodeId])
+}
+
+model MediaAsset {
+  id                  String                    @id @default(cuid())
+  ownerId             String?
+  createdById         String?
+  type                MediaAssetType
+  title               String?
+  description         String?
+  category            String?
+  tags                Json?
+  url                 String
+  fileKey             String?
+  storageKey          String?
+  originalName        String?
+  fileHash            String?
+  mimeType            String?
+  sizeBytes           Int?
+  visibility          MediaVisibility           @default(PUBLIC)
+  metadata            Json?
+  lastAccessedAt      DateTime?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  owner               User?                     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  scriptProjects      ScriptProject[]
+  productionAssets    ProductionAsset[]
+  productionSnapshots ProductionAssetSnapshot[]
+  pipelineAssistantAttachments PipelineAssistantAttachment[]
+  notificationAttachments NotificationAttachment[]
+
+  @@unique([ownerId, fileHash, sizeBytes, originalName])
+  @@index([ownerId])
+  @@index([type])
+  @@index([category])
+  @@index([fileHash])
+  @@index([visibility])
+  @@index([lastAccessedAt])
+  @@index([createdAt])
+}
+
+model ProductionProject {
+  id            String                       @id @default(cuid())
+  name          String
+  description   String?
+  createdById   String?
+  metadata      Json?
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+  createdBy     User?                        @relation("ProductionProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members       ProductionProjectMember[]
+  roleGrants    ProductionProjectRoleGrant[]
+  assets        ProductionAsset[]
+  notifications Notification[]
+  assistantSessions PipelineAssistantSession[]
+  assistantMessages PipelineAssistantMessage[]
+  assistantActions  PipelineAssistantAction[]
+  assistantAttachments PipelineAssistantAttachment[]
+  workspaceSnapshots PipelineWorkspaceSnapshot[]
+
+  @@index([createdById])
+  @@index([updatedAt])
+}
+
+model ProductionProjectMember {
+  id        String                      @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProductionProjectMemberRole @default(MEMBER)
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+  project   ProductionProject           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@index([projectId, role])
+}
+
+model ProductionProjectRoleGrant {
+  id          String                     @id @default(cuid())
+  projectId   String
+  userId      String
+  role        ProductionProjectGrantRole
+  grantedById String?
+  grantedAt   DateTime                   @default(now())
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  project     ProductionProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user        User                       @relation("ProductionProjectRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy   User?                      @relation("ProductionProjectRoleGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId, role, revokedAt])
+  @@index([userId, revokedAt])
+}
+
+model ProductionAsset {
+  id                    String                               @id @default(cuid())
+  projectId             String?
+  stage                 ProductionStage
+  scope                 ProductionAssetScope
+  reviewStatus          ProductionAssetReviewStatus          @default(UNREVIEWED)
+  creatorId             String?
+  submitterId           String?
+  reviewerId            String?
+  mediaAssetId          String?
+  originalName          String
+  displayName           String
+  description           String?
+  mimeType              String?
+  sizeBytes             Int?
+  version               Int                                  @default(1)
+  currentSnapshotId     String?
+  sourceType            String?
+  sourceId              String?
+  sourcePayload         Json?
+  metadata              Json?
+  deletedAt             DateTime?
+  archivedAt            DateTime?
+  createdAt             DateTime                             @default(now())
+  updatedAt             DateTime                             @updatedAt
+  project               ProductionProject?                   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  creator               User?                                @relation("ProductionAssetCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  submitter             User?                                @relation("ProductionAssetSubmitter", fields: [submitterId], references: [id], onDelete: SetNull)
+  reviewer              User?                                @relation("ProductionAssetReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  mediaAsset            MediaAsset?                          @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  snapshots             ProductionAssetSnapshot[]
+  reviewEvents          ProductionAssetReviewEvent[]
+  referenceVisibilities ProductionAssetReferenceVisibility[]
+
+  @@index([projectId, stage, scope, reviewStatus])
+  @@index([creatorId, scope, deletedAt])
+  @@index([submitterId])
+  @@index([mediaAssetId])
+  @@index([currentSnapshotId])
+}
+
+model ProductionAssetSnapshot {
+  id                     String                       @id @default(cuid())
+  assetId                String
+  version                Int
+  reviewStatus           ProductionAssetReviewStatus  @default(IN_REVIEW)
+  createdById            String?
+  reviewedById           String?
+  mediaAssetId           String?
+  originalName           String
+  displayName            String
+  frozenPayload          Json?
+  frozenStorageObjectKey String?
+  mimeType               String?
+  sizeBytes              Int?
+  reviewNote             String?
+  createdAt              DateTime                     @default(now())
+  reviewedAt             DateTime?
+  asset                  ProductionAsset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdBy              User?                        @relation("ProductionAssetSnapshotCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  reviewedBy             User?                        @relation("ProductionAssetSnapshotReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  mediaAsset             MediaAsset?                  @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  reviewEvents           ProductionAssetReviewEvent[]
+
+  @@unique([assetId, version])
+  @@index([reviewStatus, createdAt])
+  @@index([createdById])
+  @@index([mediaAssetId])
+}
+
+model ProductionAssetReviewEvent {
+  id         String                      @id @default(cuid())
+  assetId    String
+  snapshotId String?
+  actorId    String?
+  action     ProductionAssetReviewAction
+  note       String?
+  metadata   Json?
+  createdAt  DateTime                    @default(now())
+  asset      ProductionAsset             @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  snapshot   ProductionAssetSnapshot?    @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, createdAt])
+  @@index([snapshotId])
+  @@index([actorId])
+  @@index([action])
+}
+
+model ProductionAssetReferenceVisibility {
+  id           String          @id @default(cuid())
+  assetId      String
+  userId       String
+  assignedById String?
+  createdAt    DateTime        @default(now())
+  asset        ProductionAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user         User            @relation("ProductionAssetReferenceUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy   User?           @relation("ProductionAssetReferenceAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([assetId, userId])
+  @@index([userId])
+}
+
+model Notification {
+  id         String             @id @default(cuid())
+  receiverId String
+  senderId   String?
+  type       NotificationType
+  audience   NotificationAudience @default(USER)
+  title      String
+  content    String
+  targetType String
+  targetId   String?
+  projectId  String?
+  metadata   Json?
+  readAt     DateTime?
+  deletedAt  DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  receiver   User               @relation("NotificationReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  sender     User?              @relation("NotificationSender", fields: [senderId], references: [id], onDelete: SetNull)
+  project    ProductionProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  attachments NotificationAttachment[]
+
+  @@index([receiverId, readAt, createdAt])
+  @@index([receiverId, deletedAt, createdAt])
+  @@index([senderId])
+  @@index([projectId])
+  @@index([targetType, targetId])
+  @@index([expiresAt])
+}
+
+model NotificationAttachment {
+  id             String        @id @default(cuid())
+  notificationId String
+  mediaAssetId   String
+  displayName    String
+  mimeType       String?
+  sizeBytes      Int?
+  createdAt      DateTime      @default(now())
+  notification   Notification  @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  mediaAsset     MediaAsset    @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, mediaAssetId])
+  @@index([mediaAssetId])
+}
+
+model ScriptProject {
+  id             String                  @id @default(cuid())
+  ownerId        String
+  title          String
+  sourceType     ScriptProjectSourceType
+  sourceFileId   String?
+  originalIdea   String?
+  status         ScriptProjectStatus     @default(PROCESSING)
+  currentVersion Int                     @default(1)
+  errorMessage   String?
+  metadata       Json?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  owner          User                    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sourceFile     MediaAsset?             @relation(fields: [sourceFileId], references: [id], onDelete: SetNull)
+  rows           ScriptBreakdownRow[]
+  versions       ScriptProjectVersion[]
+  jobs           ScriptProcessingJob[]
+
+  @@index([ownerId, updatedAt])
+  @@index([sourceFileId])
+  @@index([status])
+}
+
+model ScriptBreakdownRow {
+  id                     String        @id @default(cuid())
+  projectId              String
+  orderIndex             Int
+  shotSize               String        @default("")
+  shot                   String        @default("")
+  cameraMovement         String        @default("")
+  characters             String        @default("")
+  scene                  String        @default("")
+  action                 String        @default("")
+  props                  String        @default("")
+  composition            String        @default("")
+  emotion                String        @default("")
+  lighting               String        @default("")
+  soundEffect            String        @default("")
+  dialogueOrVoiceover    String        @default("")
+  vfx                    String        @default("")
+  duration               String        @default("")
+  motionSpeed            String        @default("")
+  dynamic                String        @default("")
+  storyboardImagePrompt  String        @default("")
+  storyboardVideoPrompt  String        @default("")
+  sourceText             String        @default("")
+  confidence             Float         @default(0.7)
+  version                Int           @default(1)
+  characterAssetIds      Json?
+  sceneAssetId           String?
+  propAssetIds           Json?
+  storyboardImageAssetId String?
+  storyboardVideoAssetId String?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  project                ScriptProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, orderIndex])
+  @@index([projectId])
+}
+
+model ScriptProjectVersion {
+  id           String                   @id @default(cuid())
+  projectId    String
+  version      Int
+  type         ScriptProjectVersionType
+  summary      String?
+  rowCount     Int                      @default(0)
+  snapshotJson Json
+  createdById  String?
+  createdAt    DateTime                 @default(now())
+  project      ScriptProject            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+  @@index([projectId, createdAt])
+  @@index([createdById])
+}
+
+model ScriptProcessingJob {
+  id           String                    @id @default(cuid())
+  projectId    String?
+  ownerId      String
+  type         ScriptProcessingJobType
+  status       ScriptProcessingJobStatus @default(QUEUED)
+  progress     Int                       @default(0)
+  message      String?
+  errorMessage String?
+  inputJson    Json?
+  resultJson   Json?
+  bullJobId    String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  project      ScriptProject?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, createdAt])
+  @@index([projectId])
+  @@index([status])
+  @@index([type])
+}
+
+model PipelineAssistantSession {
+  id        String                      @id @default(cuid())
+  projectId String?
+  userId    String
+  stage     ProductionStage
+  title     String?
+  metadata  Json?
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+  project   ProductionProject?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  PipelineAssistantMessage[]
+  actions   PipelineAssistantAction[]
+  attachments PipelineAssistantAttachment[]
+
+  @@index([projectId, stage, createdAt])
+  @@index([projectId, userId])
+  @@index([userId, stage, updatedAt])
+}
+
+model PipelineAssistantMessage {
+  id             String                       @id @default(cuid())
+  sessionId      String?
+  projectId      String?
+  userId         String
+  stage          ProductionStage
+  role           PipelineAssistantMessageRole
+  content        String
+  attachmentsJson Json?
+  rawResponseJson Json?
+  createdAt      DateTime                     @default(now())
+  session        PipelineAssistantSession?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  project        ProductionProject?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user           User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actions        PipelineAssistantAction[]
+
+  @@index([projectId, stage, createdAt])
+  @@index([projectId, userId])
+  @@index([sessionId, createdAt])
+}
+
+model PipelineAssistantAction {
+  id                  String                         @id @default(cuid())
+  sessionId           String?
+  messageId           String?
+  projectId           String?
+  userId              String
+  stage               ProductionStage
+  type                PipelineAssistantActionType
+  status              PipelineAssistantActionStatus @default(PENDING)
+  targetId            String?
+  payload             Json
+  previewText         String
+  workspaceVersion    Int                            @default(1)
+  workspaceSnapshotId String?
+  executionResult     Json?
+  errorMessage        String?
+  expiresAt           DateTime
+  confirmedAt         DateTime?
+  createdAt           DateTime                       @default(now())
+  updatedAt           DateTime                       @updatedAt
+  session             PipelineAssistantSession?       @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  message             PipelineAssistantMessage?       @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  project             ProductionProject?             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user                User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceSnapshot   PipelineWorkspaceSnapshot?      @relation(fields: [workspaceSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, stage, createdAt])
+  @@index([id, status])
+  @@index([projectId, userId])
+  @@index([status, expiresAt])
+}
+
+model PipelineAssistantAttachment {
+  id           String                    @id @default(cuid())
+  sessionId    String?
+  projectId    String?
+  userId       String
+  stage        ProductionStage
+  mediaAssetId String?
+  originalName String
+  mimeType     String?
+  sizeBytes    Int?
+  parseStatus  String                    @default("PENDING")
+  parsedJson   Json?
+  errorMessage String?
+  createdAt    DateTime                  @default(now())
+  session      PipelineAssistantSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  project      ProductionProject?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaAsset   MediaAsset?               @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, stage, createdAt])
+  @@index([projectId, userId])
+  @@index([mediaAssetId])
+}
+
+model PipelineWorkspaceSnapshot {
+  id           String                    @id @default(cuid())
+  projectId    String?
+  userId       String
+  stage        ProductionStage
+  version      Int                       @default(1)
+  summary      String?
+  snapshotJson Json
+  createdAt    DateTime                  @default(now())
+  project      ProductionProject?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actions      PipelineAssistantAction[]
+
+  @@index([projectId, stage, createdAt])
+  @@index([projectId, userId])
+}
+
+model EditingProject {
+  id            String   @id @default(cuid())
+  ownerId       String
+  title         String
+  schemaVersion Int      @default(1)
+  durationMs    Int      @default(0)
+  timelineJson  Json
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  owner         User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, updatedAt])
+}
+
+model VideoRegistryItem {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  url       String?
+  title     String
+  category  String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ShowcaseWork {
+  id          String             @id @default(cuid())
+  key         String             @unique
+  title       String
+  category    String
+  videoUrl    String?
+  coverUrl    String?
+  fileKey     String?
+  storageKey  String?
+  sortOrder   Int                @default(0)
+  status      ShowcaseWorkStatus @default(PUBLISHED)
+  createdById String?
+  createdBy   User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  metadata    Json?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([status, sortOrder])
+  @@index([createdById])
+}
+
+model CustomApiConfig {
+  id                         String          @id @default(cuid())
+  ownerId                    String?
+  alias                      String
+  provider                   String          @default("Custom")
+  type                       String
+  capability                 ModelCapability @default(TEXT_GENERATOR)
+  canonicalModelId           String?
+  activeCapabilityRevisionId String?
+  baseUrl                    String
+  modelName                  String
+  encryptedKey               String?
+  keyPreview                 String?
+  metadata                   Json?
+  isEnabled                  Boolean         @default(true)
+  userAccessEnabled          Boolean         @default(false)
+  createdAt                  DateTime        @default(now())
+  updatedAt                  DateTime        @updatedAt
+
+  @@index([ownerId])
+  @@index([provider])
+  @@index([type])
+  @@index([capability])
+  @@index([canonicalModelId])
+  @@index([activeCapabilityRevisionId])
+}
+
+model PromptOptimizationProfile {
+  id                  String   @id @default(cuid())
+  key                 String   @unique
+  label               String
+  description         String?
+  systemPrompt        String   @db.Text
+  defaultSystemPrompt String   @db.Text
+  isEnabled           Boolean  @default(true)
+  sortOrder           Int      @default(0)
+  updatedById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  updatedBy           User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([isEnabled, sortOrder])
+  @@index([updatedById])
+}
+
+model ModelCapabilityProfile {
+  id                 String                            @id @default(cuid())
+  canonicalModelId   String
+  officialModelId    String?
+  provider           String
+  capability         ModelCapability
+  aliases            Json
+  sourceUrls         Json?
+  verificationStatus ModelCapabilityVerificationStatus @default(UNVERIFIED)
+  activeRevisionId   String?
+  lastCheckedAt      DateTime?
+  createdAt          DateTime                          @default(now())
+  updatedAt          DateTime                          @updatedAt
+  revisions          ModelCapabilityRevision[]
+
+  @@unique([provider, capability, canonicalModelId])
+  @@index([capability])
+  @@index([canonicalModelId])
+  @@index([verificationStatus])
+}
+
+model ModelCapabilityRevision {
+  id             String                 @id @default(cuid())
+  profileId      String
+  revision       Int
+  params         Json
+  sourceHash     String?
+  changedSummary String?
+  createdById    String?
+  createdAt      DateTime               @default(now())
+  profile        ModelCapabilityProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, revision])
+  @@index([profileId])
+  @@index([createdById])
+}
+
+model ModelParamCache {
+  id        String   @id @default(cuid())
+  provider  String
+  modelName String
+  type      String
+  params    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, modelName, type])
+}
+
+model NewsItem {
+  id                String    @id @default(cuid())
+  dedupeKey         String    @unique
+  dateGroup         String?
+  title             String
+  summary           String?
+  category          String?
+  url               String?
+  source            String?
+  credibilityStatus String    @default("VERIFIED")
+  publishedAt       DateTime?
+  fetchedAt         DateTime?
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  @@index([dateGroup])
+  @@index([publishedAt])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String?
+  nodeId    String?
+  role      String
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([nodeId])
+}
+
+model PromptHistoryItem {
+  id          String                    @id @default(cuid())
+  ownerId     String?
+  featureMode String
+  input       String
+  output      String
+  model       String
+  mode        String?
+  duration    String?
+  techniques  Json?
+  styles      Json?
+  promptCount Int?
+  metadata    Json?
+  createdAt   DateTime                  @default(now())
+  attachments PromptHistoryAttachment[]
+
+  @@index([ownerId, createdAt])
+}
+
+model PromptHistoryAttachment {
+  id          String            @id @default(cuid())
+  historyId   String
+  name        String
+  mimeType    String
+  data        String
+  sizeBytes   Int?
+  createdAt   DateTime          @default(now())
+  historyItem PromptHistoryItem @relation(fields: [historyId], references: [id], onDelete: Cascade)
+
+  @@index([historyId])
+}
+
+model SavedPrompt {
+  id        String   @id @default(cuid())
+  ownerId   String?
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId, createdAt])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  action     AuditAction
+  entityType String
+  entityId   String?
+  ip         String?
+  userAgent  String?
+  metadata   Json?
+  beforeJson Json?
+  afterJson  Json?
+  createdAt  DateTime    @default(now())
+  actor      User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+}
