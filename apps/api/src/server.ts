@@ -80,7 +80,7 @@ app.use(applySecurityHeaders);
 app.use(applyCorsAndUtf8);
 app.use(applyUnsafeRequestOriginGuard);
 app.use("/api/auth", createRateLimiter({ keyPrefix: "auth", windowMs: 60_000, max: Number(process.env.AUTH_RATE_LIMIT_PER_MINUTE || 20) }));
-app.use(["/api/workflow/execute", "/api/workflow/check", "/api/pipeline/generate", "/api/pipeline", "/api/api-configs/test", "/api/custom-ai", "/api/model-params", "/api/news/crawl", "/api/news/broadcast/refresh", "/api/news/arena/refresh", "/api/scripts/import", "/api/scripts/ideas"], applyAiRateLimit);
+app.use(["/api/workflow/execute", "/api/workflow/scene3d", "/api/workflow/check", "/api/pipeline/generate", "/api/pipeline", "/api/api-configs/test", "/api/custom-ai", "/api/model-params", "/api/news/crawl", "/api/news/broadcast/refresh", "/api/news/arena/refresh", "/api/scripts/import", "/api/scripts/ideas"], applyAiRateLimit);
 app.use("/api", applyWriteRateLimit);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "10mb" }));
 

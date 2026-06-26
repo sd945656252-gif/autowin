@@ -15,10 +15,18 @@ function emptyCanvasState(projectId?: string | null): CanvasState {
 export async function fetchCanvasState(userId?: string, projectId?: string | null): Promise<CanvasState> {
   if (!userId || userId === 'guest') return emptyCanvasState(projectId);
   try {
-    const data = await apiFetch<{ state?: CanvasState }>('/api/canvas-state', {
+    const data = await apiFetch<{ state?: CanvasState; workflowId?: string | null }>('/api/canvas-state', {
       query: { userId: userId || 'guest', projectId: projectId || undefined }
     });
-    return data.state || emptyCanvasState(projectId);
+    const state = data.state || emptyCanvasState(projectId);
+    return {
+      ...state,
+      metadata: {
+        ...(state.metadata || {}),
+        projectId: state.metadata?.projectId ?? projectId ?? null,
+        workflowId: data.workflowId || state.metadata?.workflowId || null
+      }
+    };
   } catch (e) {
     console.warn('Canvas state API fetch failed:', e);
     return emptyCanvasState(projectId);

@@ -111,6 +111,17 @@ export interface CanvasNode {
     audioAssetId?: string;
     editInstruction?: string;
   };
+
+  // Scene3D Director Stage v1
+  scene3dState?: Record<string, any>;
+  scene3dCaptures?: Record<string, any>[];
+  activeCameraId?: string;
+  scene3dLastCaptureUrl?: string;
+  scene3dLastCaptureAssetId?: string;
+  scene3dMotionPrompt?: string;
+  scene3dMoodPrompt?: string;
+  scene3dRenderStylePrompt?: string;
+  scene3dVisualContext?: Record<string, any>;
 }
 
 export interface ChatMessage {

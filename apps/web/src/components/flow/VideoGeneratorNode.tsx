@@ -71,6 +71,13 @@ export default function VideoGeneratorNode({
   const currentSelectValue = node.selected_api_id || (availableConfigs.length > 0 ? availableConfigs[0].id : '');
   const currentModel = node.model || (availableConfigs.length > 0 ? configLabel(availableConfigs[0]) : '');
   const currentPrompt = node.prompt || '';
+  const scene3dVisualPromptParts = [
+    node.scene3dMotionPrompt ? `Scene3D motion plan: ${node.scene3dMotionPrompt}` : '',
+    node.scene3dMoodPrompt ? `Scene3D mood: ${node.scene3dMoodPrompt}` : '',
+    node.scene3dRenderStylePrompt ? `Scene3D render style: ${node.scene3dRenderStylePrompt}` : '',
+    node.scene3dVisualContext ? `Scene3D visual context: ${JSON.stringify(node.scene3dVisualContext).slice(0, 2000)}` : ''
+  ].filter(Boolean);
+  const executionPrompt = [currentPrompt, ...scene3dVisualPromptParts].filter(Boolean).join('\n\n');
   const useCustomApi = !!node.use_custom_api;
   const customModel = node.custom_model || '';
   const rawGeneratedMedia = node.generated_media || '';
@@ -286,8 +293,10 @@ export default function VideoGeneratorNode({
     }
 
     if (mode === 'image_to_video') {
+      const referenceImageAssetIds = keepImage ? (safeInputs.referenceImageAssetIds || []).filter(Boolean).map(String) : [];
       return {
-        referenceImageAssetIds: keepImage ? (safeInputs.referenceImageAssetIds || []).filter(Boolean).map(String) : []
+        referenceImageAssetIds,
+        firstFrameAssetId: keepImage ? (safeInputs.firstFrameAssetId || referenceImageAssetIds[0]) : undefined
       };
     }
 
@@ -636,7 +645,7 @@ export default function VideoGeneratorNode({
           node_id: node.id,
           node_type: 'video_generator',
           model: currentModel,
-          prompt: currentPrompt,
+          prompt: executionPrompt,
           user_role: userRole,
           use_custom_api: useProxyApi,
           custom_config_id: matchedConfig?.id,
@@ -743,6 +752,10 @@ export default function VideoGeneratorNode({
         sourcePayload: {
           mediaUrl: generatedMedia,
           prompt: currentPrompt,
+          executionPrompt,
+          scene3dMoodPrompt: node.scene3dMoodPrompt || null,
+          scene3dRenderStylePrompt: node.scene3dRenderStylePrompt || null,
+          scene3dVisualContext: node.scene3dVisualContext || null,
           nodeId: node.id,
           nodeName: node.name,
           nodeType: node.type,

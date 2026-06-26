@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Header from './Header';
 import PipelineNav from './PipelineNav';
@@ -27,8 +27,8 @@ interface FuwaAppProps {
 
 export default function FuwaApp({ currentProjectId, onBack, onNavigateHome, onNavigateNews, onNavigateDeveloper, onNavigateTeam, onNavigateHistory, onNavigateAdmin }: FuwaAppProps) {
   const { user, role: currentUserRole, saveCanvas, loadCanvasForProject, canvasState, globalApiConfigs, saveGlobalApiConfigs, loading: isAuthLoading } = useAuth();
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(true);
+  const [rightCollapsed, setRightCollapsed] = useState(true);
   const {
     activeNode,
     setActiveNode,
@@ -51,6 +51,11 @@ export default function FuwaApp({ currentProjectId, onBack, onNavigateHome, onNa
     globalApiConfigs,
     saveGlobalApiConfigs
   });
+
+  useEffect(() => {
+    setLeftCollapsed(true);
+    setRightCollapsed(true);
+  }, [currentProjectId]);
 
   const personalProjectsQuery = useQuery({
     queryKey: ['team-projects', user?.uid || 'guest', 'PERSONAL'],

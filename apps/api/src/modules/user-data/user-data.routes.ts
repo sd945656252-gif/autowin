@@ -417,7 +417,7 @@ export function registerUserDataRoutes(app: express.Express) {
       }
 
       const state = workflow?.versions?.[0]?.reactFlowJson || defaultCanvasState();
-      res.json({ success: true, state });
+      res.json({ success: true, state, workflowId: workflow?.id || null });
     } catch (error: any) {
       console.error("[CanvasState] Failed to fetch canvas state:", error);
       sendApiError(res, error, "Failed to fetch canvas state.");

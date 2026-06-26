@@ -65,7 +65,7 @@ function cspSourceList(envName: string, defaults: string[]) {
 export function applySecurityHeaders(_req: express.Request, res: express.Response, next: express.NextFunction) {
   const sharedMode = isSharedMode();
   const scriptSrc = sharedMode
-    ? "'self'"
+    ? "'self' 'wasm-unsafe-eval'"
     : "'self' 'unsafe-inline' 'unsafe-eval' blob:";
   const styleSrc = sharedMode && process.env.CSP_STRICT_STYLE === "true"
     ? cspSourceList("CSP_STYLE_SRC_EXTRA", ["'self'"])

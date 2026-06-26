@@ -28,6 +28,8 @@ const ALLOWED_UPLOAD_MIMES = new Set([
   "text/markdown",
   "text/csv",
   "application/json",
+  "model/gltf-binary",
+  "model/gltf+json",
   "application/zip",
   "application/msword",
   "application/vnd.ms-excel",
@@ -59,6 +61,8 @@ const EXTENSION_BY_MIME = new Map<string, string>([
   ["text/markdown", ".md"],
   ["text/csv", ".csv"],
   ["application/json", ".json"],
+  ["model/gltf-binary", ".glb"],
+  ["model/gltf+json", ".gltf"],
   ["application/zip", ".zip"],
   ["application/msword", ".doc"],
   ["application/vnd.ms-excel", ".xls"],
@@ -97,6 +101,8 @@ const MIME_BY_EXTENSION = new Map<string, string>([
   [".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
   [".csv", "text/csv"],
   [".json", "application/json"],
+  [".glb", "model/gltf-binary"],
+  [".gltf", "model/gltf+json"],
   [".zip", "application/zip"]
 ]);
 
@@ -161,6 +167,11 @@ export function hasValidMagicNumber(buffer: Buffer, mimeType: string) {
   if (mime === "audio/flac") return buffer.subarray(0, 4).toString("ascii") === "fLaC";
   if (mime === "audio/ogg") return buffer.subarray(0, 4).toString("ascii") === "OggS";
   if (mime === "application/pdf") return buffer.subarray(0, 4).toString("ascii") === "%PDF";
+  if (mime === "model/gltf-binary") return buffer.subarray(0, 4).toString("ascii") === "glTF";
+  if (mime === "model/gltf+json") {
+    const sample = buffer.subarray(0, Math.min(buffer.length, 256)).toString("utf8").trimStart();
+    return !buffer.includes(0x00) && sample.startsWith("{");
+  }
   if (mime === "application/zip") return buffer[0] === 0x50 && buffer[1] === 0x4b;
   if (mime.includes("openxmlformats-officedocument")) return buffer[0] === 0x50 && buffer[1] === 0x4b;
   if (mime === "application/msword" || mime === "application/vnd.ms-excel" || mime === "application/vnd.ms-powerpoint") {
@@ -197,7 +208,7 @@ export function createLocalUpload(maxMb = uploadMaxMb) {
     storage,
     fileFilter: (_req, file, cb) => {
       if (!isAllowedUploadFile(file)) {
-        cb(new Error("Only supported image, video, audio, and document uploads are allowed."));
+        cb(new Error("Only supported image, video, audio, 3D model, and document uploads are allowed."));
         return;
       }
       cb(null, true);

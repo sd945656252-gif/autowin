@@ -3,6 +3,7 @@ import { CanvasNode, CustomApiConfig } from '../types';
 import ImageGeneratorNode from './flow/ImageGeneratorNode';
 import VideoGeneratorNode from './flow/VideoGeneratorNode';
 import ShotNode from './flow/ShotNode';
+import Scene3DNode from './flow/Scene3DNode';
 
 interface CanvasProps {
   activeNode: string;
@@ -347,6 +348,7 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
     
     const timestamp = Date.now();
     const isImageNode = ['图片生成', '角色', '场景', '道具', '氛围'].includes(type);
+    const isScene3DNode = type === '3D导演台';
     const isGenNode = isImageNode || type === '视频生成';
     
     if (isGenNode && (activeNode === '04' || activeNode === '05')) {
@@ -433,11 +435,18 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
         use_custom_api: false,
         generated_media: ''
       };
+    } else if (isScene3DNode) {
+      extraFields = {
+        status: '草稿',
+        aspect_ratio: '16:9',
+        generated_media: ''
+      };
     }
 
     let nodeName = `${type}视窗`;
     if (type === '图片生成') nodeName = '生图节点';
     else if (type === '视频生成') nodeName = '生视频节点';
+    else if (isScene3DNode) nodeName = '3D导演台';
     else if (['角色', '场景', '道具', '氛围'].includes(type)) {
       nodeName = `${type}生成节点`;
     }
@@ -507,6 +516,14 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
         model: '',
         prompt: 'cinematic lighting transition, panning movement following the subject smoothly, extreme realistic detail, 4k resolution',
         use_custom_api: false,
+        generated_media: ''
+      };
+    } else if (category === '3D导演台') {
+      childType = '3D导演台';
+      childName = '3D导演台';
+      extraFields = {
+        status: '草稿',
+        aspect_ratio: '16:9',
         generated_media: ''
       };
     }
@@ -885,6 +902,257 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
       );
     }
 
+    if (node.type === 'scene3d' || node.type === '3D导演台') {
+      return (
+        <div key={node.id} className="node-tree flex items-center relative select-none animate-in fade-in duration-300">
+          <div
+            id={`node-box-${node.id}`}
+            className="z-10 relative group"
+            data-testid="pipeline-canvas-node"
+            data-node-id={node.id}
+            data-node-type={node.type}
+            data-node-name={node.name}
+          >
+            <Scene3DNode
+              node={node}
+              isSelected={isSelected}
+              currentProjectId={currentProjectId}
+              availableImageSources={nodes
+                .filter((candidate) => candidate.id !== node.id && Boolean(candidate.generated_media_asset_id && candidate.generated_media))
+                .map((candidate) => ({
+                  id: candidate.id,
+                  label: candidate.name || candidate.type || candidate.id,
+                  mediaAssetId: candidate.generated_media_asset_id!,
+                  mediaUrl: candidate.generated_media!,
+                  kind: 'upstream' as const
+                }))}
+              onUpdate={(fields) => {
+                onUpdateNodes((prevNodes) => prevNodes.map(n => {
+                  if (n.id !== node.id) return n;
+                  const updatedFields = typeof fields === 'function' ? fields(n) : fields;
+                  return { ...n, ...updatedFields };
+                }));
+              }}
+              onCreateImageNode={({ capture }) => {
+                onUpdateNodes((prevNodes) => {
+                  const sourceNode = prevNodes.find(n => n.id === node.id);
+                  if (!sourceNode || !capture.mediaUrl || !capture.mediaAssetId) return prevNodes;
+                  const childNode: CanvasNode = {
+                    id: `node_scene3d_image_${Date.now()}`,
+                    name: '3D截图生图节点',
+                    type: '图片生成',
+                    x: sourceNode.x + 460,
+                    y: sourceNode.y,
+                    parentId: sourceNode.id,
+                    collapsed: false,
+                    status: '草稿',
+                    prompt: '基于 3D导演台真实截图生成电影感参考帧，保持构图、机位和角色空间关系。',
+                    model: '',
+                    use_custom_api: false,
+                    generated_media: capture.mediaUrl,
+                    generated_media_asset_id: capture.mediaAssetId,
+                    uploaded_images: [capture.mediaUrl],
+                    imageInputs: {
+                      referenceImageAssetIds: [capture.mediaAssetId]
+                    },
+                    aspect_ratio: sourceNode.aspect_ratio || '16:9',
+                    resolution: '1K',
+                    width: 1024,
+                    height: 576,
+                    num_outputs: 1,
+                    style_preset: 'photorealistic',
+                    negative_prompt: 'blurry, low quality, distorted anatomy, text defects',
+                    cfg_scale: 7.5,
+                    steps: 25,
+                    seed: -1
+                  };
+                  return [...prevNodes, childNode];
+                });
+              }}
+              onSendCaptureToCanvas={({ capture }) => {
+                onUpdateNodes((prevNodes) => {
+                  const sourceNode = prevNodes.find(n => n.id === node.id);
+                  if (!sourceNode || !capture.mediaUrl || !capture.mediaAssetId) return prevNodes;
+                  const childNode: CanvasNode = {
+                    id: `node_scene3d_ref_${Date.now()}`,
+                    name: '3D capture reference',
+                    type: '图片生成',
+                    x: sourceNode.x + 460,
+                    y: sourceNode.y + 220,
+                    parentId: sourceNode.id,
+                    collapsed: false,
+                    status: '草稿',
+                    prompt: 'Use this Scene3D capture as a visual reference.',
+                    model: '',
+                    use_custom_api: false,
+                    generated_media: capture.mediaUrl,
+                    generated_media_asset_id: capture.mediaAssetId,
+                    uploaded_images: [capture.mediaUrl],
+                    imageInputs: { referenceImageAssetIds: [capture.mediaAssetId] },
+                    aspect_ratio: sourceNode.aspect_ratio || capture.aspectRatio || '16:9',
+                    resolution: '1K',
+                    width: 1024,
+                    height: 576,
+                    num_outputs: 1,
+                    style_preset: 'photorealistic',
+                    negative_prompt: '',
+                    cfg_scale: 7.5,
+                    steps: 25,
+                    seed: -1
+                  };
+                  return [...prevNodes, childNode];
+                });
+              }}
+              onCreateVideoNode={({ capture }) => {
+                onUpdateNodes((prevNodes) => {
+                  const sourceNode = prevNodes.find(n => n.id === node.id);
+                  if (!sourceNode || !capture.mediaUrl || !capture.mediaAssetId) return prevNodes;
+                  const childNode: CanvasNode = {
+                    id: `node_scene3d_video_${Date.now()}`,
+                    name: '3D capture video node',
+                    type: '视频生成',
+                    x: sourceNode.x + 460,
+                    y: sourceNode.y + 440,
+                    parentId: sourceNode.id,
+                    collapsed: false,
+                    status: '草稿',
+                    prompt: 'Animate this Scene3D capture into a short cinematic shot.',
+                    model: '',
+                    use_custom_api: false,
+                    generated_media: capture.mediaUrl,
+                    generated_media_asset_id: capture.mediaAssetId,
+                    uploaded_images: [capture.mediaUrl],
+                    video_generation_mode: 'image_to_video',
+                    videoInputs: {
+                      firstFrameAssetId: capture.mediaAssetId,
+                      referenceImageAssetIds: [capture.mediaAssetId]
+                    },
+                    video_media_list: [{
+                      url: capture.mediaUrl,
+                      assetId: capture.mediaAssetId,
+                      type: 'image',
+                      name: capture.name
+                    }],
+                    aspect_ratio: sourceNode.aspect_ratio || capture.aspectRatio || '16:9',
+                    video_resolution: '720p',
+                    video_duration: 5,
+                    generate_audio: false,
+                    negative_prompt: 'blurry, low quality, distorted anatomy, text defects',
+                    seed: -1
+                  };
+                  return [...prevNodes, childNode];
+                });
+              }}
+              onCreateActionVideoNode={({ actionPlan, scene }) => {
+                onUpdateNodes((prevNodes) => {
+                  const sourceNode = prevNodes.find(n => n.id === node.id);
+                  const actionKeyframes = Array.isArray(actionPlan.keyframes)
+                    ? [...actionPlan.keyframes].sort((a, b) => (a.timeSec || 0) - (b.timeSec || 0))
+                    : [];
+                  const startCapture = (actionKeyframes[0] || actionPlan.startKeyframe)?.capture;
+                  const endCapture = (actionKeyframes[actionKeyframes.length - 1] || actionPlan.endKeyframe)?.capture;
+                  if (!sourceNode || !startCapture?.mediaUrl || !startCapture.mediaAssetId || !endCapture?.mediaUrl || !endCapture.mediaAssetId) return prevNodes;
+                  const visualContext = {
+                    sceneLights: scene?.sceneLights || [],
+                    environmentMood: scene?.environmentMood || null,
+                    materialDirectives: scene?.materialDirectives || [],
+                    visualKeyframes: scene?.visualKeyframes || [],
+                    aiDirectorPlan: actionPlan.aiDirectorPlan || null
+                  };
+                  const moodPrompt = actionPlan.aiDirectorPlan?.moodPrompt || scene?.environmentMood?.moodPreset || '';
+                  const renderStylePrompt = actionPlan.aiDirectorPlan?.renderStylePrompt || [
+                    scene?.environmentMood?.timeOfDay ? `time of day: ${scene.environmentMood.timeOfDay}` : '',
+                    scene?.environmentMood?.weatherHint ? `weather: ${scene.environmentMood.weatherHint}` : '',
+                    scene?.sceneLights?.length ? `${scene.sceneLights.length} directed Scene3D lights` : '',
+                    scene?.materialDirectives?.length ? `${scene.materialDirectives.length} material directives` : ''
+                  ].filter(Boolean).join(', ');
+                  const childNode: CanvasNode = {
+                    id: `node_scene3d_action_video_${Date.now()}`,
+                    name: 'Scene3D first-last frame video',
+                    type: '视频生成',
+                    x: sourceNode.x + 460,
+                    y: sourceNode.y + 660,
+                    parentId: sourceNode.id,
+                    collapsed: false,
+                    status: '草稿',
+                    prompt: actionPlan.generatedMotionPrompt || actionPlan.actionIntent || 'Animate a natural transition between the first and last Scene3D frames.',
+                    scene3dMotionPrompt: actionPlan.generatedMotionPrompt || actionPlan.actionIntent || '',
+                    scene3dMoodPrompt: moodPrompt,
+                    scene3dRenderStylePrompt: renderStylePrompt,
+                    scene3dVisualContext: visualContext,
+                    model: '',
+                    use_custom_api: false,
+                    generated_media: startCapture.mediaUrl,
+                    generated_media_asset_id: startCapture.mediaAssetId,
+                    uploaded_images: [startCapture.mediaUrl, endCapture.mediaUrl],
+                    video_generation_mode: 'first_last_frame',
+                    videoInputs: {
+                      firstFrameAssetId: startCapture.mediaAssetId,
+                      lastFrameAssetId: endCapture.mediaAssetId,
+                      referenceImageAssetIds: []
+                    },
+                    video_media_list: [
+                      {
+                        url: startCapture.mediaUrl,
+                        assetId: startCapture.mediaAssetId,
+                        type: 'image',
+                        name: startCapture.name || 'Scene3D start frame'
+                      },
+                      {
+                        url: endCapture.mediaUrl,
+                        assetId: endCapture.mediaAssetId,
+                        type: 'image',
+                        name: endCapture.name || 'Scene3D end frame'
+                      }
+                    ],
+                    aspect_ratio: sourceNode.aspect_ratio || startCapture.aspectRatio || endCapture.aspectRatio || '16:9',
+                    video_resolution: '720p',
+                    video_duration: 5,
+                    generate_audio: false,
+                    negative_prompt: 'blurry, low quality, distorted anatomy, inconsistent identity, mismatched final frame',
+                    seed: -1
+                  };
+                  return [...prevNodes, childNode];
+                });
+              }}
+              onDelete={(e) => removeNodeFromCanvas(node.id, e)}
+              onSelect={(e) => {
+                e.stopPropagation();
+                setSelectedNodeId(node.id);
+                setContextMenu(null);
+              }}
+            />
+
+            <div className="absolute -right-3 top-1/2 -translate-y-1/2 flex flex-col space-y-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50">
+              {hasChildren && (
+                <button
+                  onClick={(e) => toggleCollapseStatus(node.id, e)}
+                  className="w-6 h-6 bg-[#0a0a0a] text-white/70 border border-white/20 rounded-full flex items-center justify-center font-bold hover:scale-110 hover:text-white shadow-xl cursor-pointer"
+                  title={node.collapsed ? '展开子节点' : '收起子节点'}
+                >
+                  <svg className={`w-3.5 h-3.5 transition-transform duration-250 ${node.collapsed ? '-rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              )}
+              <button
+                onClick={(e) => handlePlusClick(node.id, e)}
+                className="w-6 h-6 bg-violet-400 text-black rounded-full flex items-center justify-center font-black hover:scale-110 shadow-xl cursor-pointer"
+                title="选择并添加子节点"
+              >
+                +
+              </button>
+            </div>
+          </div>
+          {hasChildren && !node.collapsed && (
+            <div className="node-children flex flex-col justify-center gap-6 pl-[60px] relative">
+              {childList.map(child => renderNodeElement(child))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div key={node.id} className="node-tree flex items-center relative select-none">
         
@@ -1111,8 +1379,8 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
               {activeNode === '05' ? '添加流处理器' : '选择资产类目'}
             </div>
             {(activeNode === '05' 
-              ? ['图片生成', '视频生成'] 
-              : ['角色', '场景', '道具', '氛围', '3D世界']
+              ? ['图片生成', '视频生成', '3D导演台'] 
+              : ['角色', '场景', '道具', '氛围']
             ).map((category) => {
               const getDetails = (cat: string) => {
                 switch (cat) {
@@ -1120,7 +1388,7 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
                   case '场景': return { icon: '🏞️', color: 'text-purple-400' };
                   case '道具': return { icon: '📦', color: 'text-yellow-400' };
                   case '氛围': return { icon: '✨', color: 'text-pink-400' };
-                  case '3D世界': return { icon: '🧊', color: 'text-green-400' };
+                  case '3D导演台': return { icon: '🎥', color: 'text-violet-400' };
                   case '图片生成': return { icon: '🎨', color: 'text-cyan-400' };
                   case '视频生成': return { icon: '🎬', color: 'text-emerald-400' };
                   default: return { icon: '⚙️', color: 'text-zinc-400' };
@@ -1156,8 +1424,8 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
               选择衍生节点类型
             </div>
             {(activeNode === '05' 
-              ? ['图片生成', '视频生成'] 
-              : ['角色', '场景', '道具', '氛围', '3D世界']
+              ? ['图片生成', '视频生成', '3D导演台'] 
+              : ['角色', '场景', '道具', '氛围']
             ).map((category) => {
               const getDetails = (cat: string) => {
                 switch (cat) {
@@ -1165,7 +1433,7 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
                   case '场景': return { icon: '🏞️', color: 'text-purple-400' };
                   case '道具': return { icon: '📦', color: 'text-yellow-400' };
                   case '氛围': return { icon: '✨', color: 'text-pink-400' };
-                  case '3D世界': return { icon: '🧊', color: 'text-green-400' };
+                  case '3D导演台': return { icon: '🎥', color: 'text-violet-400' };
                   case '图片生成': return { icon: '🎨', color: 'text-cyan-400' };
                   case '视频生成': return { icon: '🎬', color: 'text-emerald-400' };
                   default: return { icon: '⚙️', color: 'text-zinc-400' };
