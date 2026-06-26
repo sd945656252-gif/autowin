@@ -39,10 +39,26 @@ const VIEW_PATHS: Record<AppView, string> = {
   admin: '/admin'
 };
 
+const ACTIVE_PIPELINE_PROJECT_STORAGE_KEY = 'jiying-active-pipeline-project-id';
+
 function viewFromPath(pathname: string): AppView {
   const normalized = pathname.replace(/\/+$/, '') || '/';
   const match = (Object.entries(VIEW_PATHS) as Array<[AppView, string]>).find(([, path]) => path === normalized);
   return match?.[0] || 'home';
+}
+
+function readPipelineProjectIdFromUrl(search = window.location.search) {
+  const value = new URLSearchParams(search).get('projectId');
+  return value?.trim() || null;
+}
+
+function readStoredPipelineProjectId() {
+  return sessionStorage.getItem(ACTIVE_PIPELINE_PROJECT_STORAGE_KEY)?.trim() || null;
+}
+
+function pipelineUrl(projectId?: string | null) {
+  const trimmed = projectId?.trim();
+  return trimmed ? `/pipeline?projectId=${encodeURIComponent(trimmed)}` : '/pipeline';
 }
 
 function RouteLoading({ compact = false }: { compact?: boolean }) {
@@ -87,7 +103,11 @@ export default function App() {
   const { user, role: currentUserRole, loading: isAuthLoading } = useAuth();
   const queryClient = useQueryClient();
   const [currentView, setCurrentViewState] = useState<AppView>(() => viewFromPath(window.location.pathname));
-  const [activePipelineProjectId, setActivePipelineProjectId] = useState<string | null>(null);
+  const [activePipelineProjectId, setActivePipelineProjectId] = useState<string | null>(() => (
+    viewFromPath(window.location.pathname) === 'pipeline'
+      ? readPipelineProjectIdFromUrl() || readStoredPipelineProjectId()
+      : null
+  ));
   const setCurrentView = useCallback((view: AppView) => {
     setCurrentViewState(view);
   }, []);
@@ -96,7 +116,13 @@ export default function App() {
   const canOpenDeveloperArea = currentUserRole === 'ADMIN' || currentUserRole === 'DEVELOPER';
 
   useEffect(() => {
-    const handlePopState = () => setCurrentViewState(viewFromPath(window.location.pathname));
+    const handlePopState = () => {
+      const nextView = viewFromPath(window.location.pathname);
+      setCurrentViewState(nextView);
+      if (nextView === 'pipeline') {
+        setActivePipelineProjectId(readPipelineProjectIdFromUrl() || readStoredPipelineProjectId());
+      }
+    };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
@@ -139,14 +165,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const nextPath = VIEW_PATHS[currentView];
+    const nextPath = currentView === 'pipeline'
+      ? pipelineUrl(activePipelineProjectId)
+      : VIEW_PATHS[currentView];
     const nextHash = currentView === 'developer' && window.location.hash === '#developer-models' ? window.location.hash : '';
     const nextUrl = `${nextPath}${nextHash}`;
-    const currentUrl = `${window.location.pathname}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (currentUrl !== nextUrl) {
       window.history.replaceState(null, '', nextUrl);
     }
-  }, [currentView]);
+  }, [activePipelineProjectId, currentView]);
+
+  useEffect(() => {
+    if (currentView !== 'pipeline') return;
+    const projectId = activePipelineProjectId?.trim();
+    if (projectId) {
+      sessionStorage.setItem(ACTIVE_PIPELINE_PROJECT_STORAGE_KEY, projectId);
+      return;
+    }
+    const restoredProjectId = readPipelineProjectIdFromUrl() || readStoredPipelineProjectId();
+    if (restoredProjectId) {
+      setActivePipelineProjectId(restoredProjectId);
+    }
+  }, [activePipelineProjectId, currentView]);
+
+  const effectivePipelineProjectId = currentView === 'pipeline'
+    ? activePipelineProjectId || readPipelineProjectIdFromUrl() || readStoredPipelineProjectId()
+    : activePipelineProjectId;
 
   useEffect(() => {
     if (isAuthLoading) return;
@@ -504,7 +549,9 @@ export default function App() {
   };
 
   const goToPipeline = (projId: string) => {
-    setActivePipelineProjectId(projId);
+    const projectId = projId.trim();
+    sessionStorage.setItem(ACTIVE_PIPELINE_PROJECT_STORAGE_KEY, projectId);
+    setActivePipelineProjectId(projectId);
     setCurrentView('pipeline');
   };
 
@@ -710,7 +757,7 @@ export default function App() {
           <div className="fixed inset-0 z-40 bg-[#030303] overflow-hidden flex flex-col">
             <Suspense fallback={<RouteLoading />}>
               <FuwaApp 
-                currentProjectId={activePipelineProjectId}
+                currentProjectId={effectivePipelineProjectId}
                 onBack={() => setCurrentView('dashboard')} 
                 onNavigateHome={() => {
                   setCurrentView('home');

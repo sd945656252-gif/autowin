@@ -300,6 +300,9 @@ type Scene3DHistorySnapshot = {
     lights: LightObject[];
   };
   activeCameraId?: string;
+  selectedObjectId?: string;
+  activeViewMode: 'director' | 'camera';
+  activeTransitionId?: string;
   aspectRatio: string;
   gridSnapEnabled: boolean;
   groundGridEnabled: boolean;
@@ -1220,6 +1223,9 @@ function createHistorySnapshot(scene: Scene3DState): Scene3DHistorySnapshot {
     background: scene.background,
     objects: scene.objects,
     activeCameraId: scene.activeCameraId,
+    selectedObjectId: scene.selectedObjectId,
+    activeViewMode: scene.activeViewMode,
+    activeTransitionId: scene.activeTransitionId,
     aspectRatio: scene.aspectRatio,
     gridSnapEnabled: scene.gridSnapEnabled,
     groundGridEnabled: scene.groundGridEnabled,
@@ -1387,10 +1393,7 @@ function applyHistorySnapshot(scene: Scene3DState, snapshot: Scene3DHistorySnaps
   const restored = normalizeScene({
     ...scene,
     ...snapshot,
-    selectedObjectId: scene.selectedObjectId,
-    activeViewMode: scene.activeViewMode,
     transformMode: scene.transformMode,
-    activeTransitionId: scene.activeTransitionId,
     undoStack: scene.undoStack,
     redoStack: scene.redoStack
   });
@@ -1466,6 +1469,11 @@ function objectListKey(kind: ObjectKind) {
 function objectByKind(scene: Scene3DState, kind: ObjectKind, id?: string) {
   if (!id) return null;
   return (scene.objects as any)[objectListKey(kind)].find((item: any) => item.id === id) || null;
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]'));
 }
 
 function removeDeletedObjectReferences(scene: Scene3DState, kind: ObjectKind, deletingId: string): Scene3DState {
@@ -2606,6 +2614,26 @@ export default function Scene3DNode({
               <ImagePlus className="h-3.5 w-3.5" />
               {cardCapturing ? '截图中' : '截图'}
             </button>
+            <label
+              className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/15 bg-black/70 px-3 text-[11px] font-semibold text-zinc-100 shadow-xl backdrop-blur-md hover:bg-white/15"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <span className="text-zinc-400">画幅</span>
+              <select
+                value={scene.aspectRatio}
+                onChange={(event) => {
+                  event.stopPropagation();
+                  applySceneChange({ aspectRatio: event.target.value }, { label: '修改画幅比例' });
+                }}
+                className="h-6 rounded border border-white/10 bg-black/40 px-1.5 text-[11px] text-white outline-none"
+              >
+                {SCENE_ASPECT_RATIOS.map((ratio) => (
+                  <option key={ratio} value={ratio} className="bg-zinc-950">
+                    {ratio}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           {lastCapture?.mediaUrl && (
@@ -2712,8 +2740,7 @@ function DirectorStage({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (isEditableKeyboardTarget(event.target)) return;
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       if (!mod && (key === 'delete' || key === 'backspace')) {
@@ -2736,7 +2763,7 @@ function DirectorStage({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [scene.undoStack, scene.redoStack, scene.selectedObjectId, selected]);
+  }, [scene.undoStack, scene.redoStack, scene.selectedObjectId, selected, deleteSelected, undoSceneChange, redoSceneChange]);
 
   const updateObject = (kind: ObjectKind, id: string, patch: any) => {
     onPatch((current) => {
@@ -2830,7 +2857,7 @@ function DirectorStage({
     }, { label: '添加灯光' });
   };
 
-  const deleteSelected = () => {
+  function deleteSelected() {
     if (!selected || !scene.selectedObjectId) return;
     const selectedObject = objectByKind(scene, selected, scene.selectedObjectId);
     if (!selectedObject) return;
@@ -2858,7 +2885,7 @@ function DirectorStage({
       return removeDeletedObjectReferences(nextScene, deletingKind, deletingId);
     }, { label: deleteLabel });
     onError('');
-  };
+  }
 
   const capture = async () => {
     try {
@@ -3075,7 +3102,7 @@ function SceneViewport({
           onDoubleClick={(event: ThreeEvent<MouseEvent>) => {
             if (isClean) return;
             event.stopPropagation();
-            onPatch({ selectedObjectId: undefined, activeViewMode: 'director' }, { history: false });
+            onPatch({ selectedObjectId: undefined }, { history: false });
           }}
         >
           <planeGeometry args={[40, 40]} />
@@ -3095,7 +3122,7 @@ function SceneViewport({
       )}
       <group onPointerMissed={(event) => {
         if (isClean || event.detail < 2) return;
-        onPatch({ selectedObjectId: undefined, activeViewMode: 'director' }, { history: false });
+        onPatch({ selectedObjectId: undefined }, { history: false });
       }}>
         {scene.objects.characters.filter((item) => item.visible).map((character) => {
           const display = previewLocked && previewCharacterId === character.id && previewSample
@@ -3136,7 +3163,6 @@ function SceneViewport({
                 selected={!isClean && scene.selectedObjectId === character.id}
                 onSelect={() => !isClean && onPatch({
                   selectedObjectId: character.id,
-                  activeViewMode: 'director',
                   activeTransitionId: scene.poseTransitions.find((item) => item.characterId === character.id)?.id
                 }, { history: false })}
               />
@@ -3158,7 +3184,7 @@ function SceneViewport({
               onDragging={onDragging}
               onUpdateObject={onUpdateObject}
             >
-              <PropModel prop={prop} selected={!isClean && scene.selectedObjectId === prop.id} showLabel={!isClean} onSelect={() => !isClean && onPatch({ selectedObjectId: prop.id, activeViewMode: 'director' }, { history: false })} />
+              <PropModel prop={prop} selected={!isClean && scene.selectedObjectId === prop.id} showLabel={!isClean} onSelect={() => !isClean && onPatch({ selectedObjectId: prop.id }, { history: false })} />
             </Transformable>
           );
         })}
@@ -3195,7 +3221,7 @@ function SceneViewport({
             onDragging={onDragging}
             onUpdateObject={onUpdateObject}
           >
-            <LightRig light={light} selected={scene.selectedObjectId === light.id} onSelect={() => onPatch({ selectedObjectId: light.id, activeViewMode: 'director' }, { history: false })} />
+            <LightRig light={light} selected={scene.selectedObjectId === light.id} onSelect={() => onPatch({ selectedObjectId: light.id }, { history: false })} />
           </Transformable>
         ))}
       </group>
@@ -3315,9 +3341,6 @@ function Transformable({
           draggingRef.current = false;
           onDragging(false);
           sync();
-        }}
-        onObjectChange={() => {
-          if (draggingRef.current && transformMode !== 'scale') sync();
         }}
       />
     </>
@@ -3680,7 +3703,6 @@ function ObjectPanel({
             locked={item.locked}
             onSelect={() => onPatch({
               selectedObjectId: item.id,
-              activeViewMode: 'director',
               activeTransitionId: scene.poseTransitions.find((transition) => transition.characterId === item.id)?.id
             }, { history: false })}
             onRename={(name) => onUpdateObject('character', item.id, { name })}
@@ -3697,7 +3719,7 @@ function ObjectPanel({
             active={scene.selectedObjectId === item.id}
             visible={item.visible}
             locked={item.locked}
-            onSelect={() => onPatch({ selectedObjectId: item.id, activeViewMode: 'director' }, { history: false })}
+            onSelect={() => onPatch({ selectedObjectId: item.id }, { history: false })}
             onRename={(name) => onUpdateObject('prop', item.id, { name })}
             onToggleVisible={() => onUpdateObject('prop', item.id, { visible: !item.visible })}
             onToggleLocked={() => onUpdateObject('prop', item.id, { locked: !item.locked })}
@@ -3712,7 +3734,7 @@ function ObjectPanel({
             active={scene.selectedObjectId === item.id}
             visible={item.visible}
             locked={item.locked}
-            onSelect={() => onPatch({ selectedObjectId: item.id, activeViewMode: 'director' }, { history: false })}
+            onSelect={() => onPatch({ selectedObjectId: item.id }, { history: false })}
             onRename={(name) => onUpdateObject('light', item.id, { name })}
             onToggleVisible={() => onUpdateObject('light', item.id, { visible: !item.visible })}
             onToggleLocked={() => onUpdateObject('light', item.id, { locked: !item.locked })}
