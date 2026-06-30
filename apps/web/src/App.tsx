@@ -24,14 +24,16 @@ const TeamManagementPage = lazy(() => import('./components/TeamManagementPage'))
 const HistoryPage = lazy(() => import('./components/HistoryPage'));
 const NewsPage = lazy(() => import('./components/NewsPage'));
 const DashboardPage = lazy(() => import('./components/DashboardPage').then((module) => ({ default: module.DashboardPage })));
+const Scene3DNodePreviewPage = lazy(() => import('./components/Scene3DNodePreviewPage'));
 const MAX_SHOWCASE_VIDEO_BYTES = 1024 * 1024 * 1024;
 
-type AppView = 'home' | 'dashboard' | 'pipeline' | 'news' | 'developer' | 'team' | 'history' | 'admin';
+type AppView = 'home' | 'dashboard' | 'pipeline' | 'scene3dPreview' | 'news' | 'developer' | 'team' | 'history' | 'admin';
 
 const VIEW_PATHS: Record<AppView, string> = {
   home: '/',
   dashboard: '/dashboard',
   pipeline: '/pipeline',
+  scene3dPreview: '/dev/scene3d-node-preview',
   news: '/news',
   developer: '/developer',
   team: '/team',
@@ -167,7 +169,9 @@ export default function App() {
   useEffect(() => {
     const nextPath = currentView === 'pipeline'
       ? pipelineUrl(activePipelineProjectId)
-      : VIEW_PATHS[currentView];
+      : currentView === 'scene3dPreview'
+        ? `${VIEW_PATHS[currentView]}${window.location.search}`
+        : VIEW_PATHS[currentView];
     const nextHash = currentView === 'developer' && window.location.hash === '#developer-models' ? window.location.hash : '';
     const nextUrl = `${nextPath}${nextHash}`;
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -772,6 +776,14 @@ export default function App() {
                 onNavigateHistory={checkAuthAndGoToHistory}
                 onNavigateAdmin={checkAuthAndGoToAdmin}
               />
+            </Suspense>
+          </div>
+        )}
+
+        {currentView === 'scene3dPreview' && (
+          <div className="fixed inset-0 z-40 bg-[#030303] overflow-hidden">
+            <Suspense fallback={<RouteLoading />}>
+              <Scene3DNodePreviewPage />
             </Suspense>
           </div>
         )}

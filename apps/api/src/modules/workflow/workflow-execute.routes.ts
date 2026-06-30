@@ -10,7 +10,7 @@ import { HttpError, sendApiError } from "../../shared/http";
 import { requireAuth, type RequestUser } from "../auth/auth.shared";
 import { writeAuditLog } from "../audit/audit.service";
 import { canReadMediaAsset, protectedMediaUrl, resolveLocalUploadPath, saveGeneratedToLocalFile } from "../media/media.service";
-import { callTextProvider } from "../custom-ai/provider-client";
+import { callTextProvider, type ProviderAttachment } from "../custom-ai/provider-client";
 import { resolveCustomApiRuntimeConfig } from "../custom-api-configs/custom-api-configs.service";
 import { validateWorkflowCapabilityExecution } from "../model-capabilities/model-capabilities.service";
 import { ensureProjectMember } from "../production-assets/production-assets.shared";
@@ -88,6 +88,83 @@ const scene3dVec3Schema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   z: z.number().finite()
+});
+
+const scene3dPoseReferenceViewSchema = z.enum(["front", "side", "back"]);
+const scene3dPoseJointKeySchema = z.enum([
+  "pelvis",
+  "chest",
+  "neck",
+  "head",
+  "leftUpperArm",
+  "leftLowerArm",
+  "rightUpperArm",
+  "rightLowerArm",
+  "leftHand",
+  "rightHand",
+  "leftUpperLeg",
+  "leftLowerLeg",
+  "rightUpperLeg",
+  "rightLowerLeg",
+  "leftFoot",
+  "rightFoot"
+]);
+const scene3dRigPoseSchema = z.object(Object.fromEntries(
+  scene3dPoseJointKeySchema.options.map((key) => [key, scene3dVec3Schema])
+) as Record<z.infer<typeof scene3dPoseJointKeySchema>, typeof scene3dVec3Schema>);
+const scene3dBonePoseSchema = z.object({
+  space: z.enum(["mixamo-local", "scene3d-local"]).default("mixamo-local"),
+  bones: z.record(z.string(), scene3dVec3Schema)
+});
+const scene3dPoseFoundationHintSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  label: z.string().trim().min(1).max(120),
+  confidence: z.number().finite().min(0).max(1),
+  reason: z.string().trim().min(1).max(400),
+  rootOffset: scene3dVec3Schema,
+  bonePose: scene3dBonePoseSchema.optional()
+});
+const scene3dPoseLandmarkPointSchema = z.object({
+  x: z.number().finite().min(-1.5).max(1.5),
+  y: z.number().finite().min(-1.5).max(1.5),
+  visible: z.number().finite().min(0).max(1).optional(),
+  depth: z.number().finite().min(-1.5).max(1.5).optional()
+});
+const scene3dPoseLandmarkKeySchema = z.enum([
+  "nose",
+  "leftEye",
+  "rightEye",
+  "leftEar",
+  "rightEar",
+  "leftShoulder",
+  "rightShoulder",
+  "leftElbow",
+  "rightElbow",
+  "leftWrist",
+  "rightWrist",
+  "leftHip",
+  "rightHip",
+  "leftKnee",
+  "rightKnee",
+  "leftAnkle",
+  "rightAnkle",
+  "leftToe",
+  "rightToe"
+]);
+const scene3dPoseContactSchema = z.object({
+  point: z.enum(["leftFoot", "rightFoot", "leftHand", "rightHand", "leftKnee", "rightKnee", "hip"]),
+  type: z.enum(["ground", "prop", "body", "unknown"]),
+  confidence: z.number().finite().min(0).max(1)
+});
+const scene3dPoseLandmarksSchema = z.object({
+  version: z.literal(1),
+  sourceViews: z.array(scene3dPoseReferenceViewSchema).min(1).max(3),
+  coordinateSpace: z.literal("image-normalized"),
+  points: z.partialRecord(scene3dPoseLandmarkKeySchema, scene3dPoseLandmarkPointSchema),
+  bodyFacing: z.number().finite().min(-180).max(180).default(0),
+  torsoLean: scene3dVec3Schema.optional(),
+  contacts: z.array(scene3dPoseContactSchema).max(8).default([]),
+  confidence: z.number().finite().min(0).max(1)
 });
 
 const scene3dLightSchema = z.object({
@@ -398,133 +475,196 @@ const scene3dDirectorPlanSchema = z.object({
 type Scene3DDirectorRequest = z.infer<typeof scene3dDirectorRequestSchema>;
 type Scene3DDirectorPlan = z.infer<typeof scene3dDirectorPlanSchema>;
 
-const scene3dRigRotationSchema = z.object({
-  pitch: z.number().finite().min(-180).max(180),
-  yaw: z.number().finite().min(-180).max(180),
-  roll: z.number().finite().min(-180).max(180)
-});
-
-const scene3dRigPoseSchema = z.object({
-  torso: z.object({
-    root: scene3dRigRotationSchema,
-    chest: scene3dRigRotationSchema,
-    pelvis: scene3dRigRotationSchema
-  }),
-  head: z.object({
-    neck: scene3dRigRotationSchema,
-    head: scene3dRigRotationSchema
-  }),
-  arms: z.object({
-    leftUpperArm: scene3dRigRotationSchema,
-    leftLowerArm: scene3dRigRotationSchema,
-    rightUpperArm: scene3dRigRotationSchema,
-    rightLowerArm: scene3dRigRotationSchema
-  }),
-  hands: z.object({
-    leftHand: scene3dRigRotationSchema,
-    rightHand: scene3dRigRotationSchema,
-    leftFingers: z.number().finite().min(0).max(100),
-    rightFingers: z.number().finite().min(0).max(100)
-  }),
-  legs: z.object({
-    leftUpperLeg: scene3dRigRotationSchema,
-    leftLowerLeg: scene3dRigRotationSchema,
-    rightUpperLeg: scene3dRigRotationSchema,
-    rightLowerLeg: scene3dRigRotationSchema
-  }),
-  feet: z.object({
-    leftFoot: scene3dRigRotationSchema,
-    rightFoot: scene3dRigRotationSchema
-  })
-});
-
-const scene3dActionClipTypeSchema = z.enum(["idle", "walk", "run", "turn", "sit", "wave", "custom"]);
-
 const scene3dMotionRefineRequestSchema = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
   nodeId: z.string().min(1),
-  actionPlanId: z.string().min(1),
-  targetId: z.string().min(1),
-  targetName: z.string().trim().max(120).optional(),
-  startKeyframeId: z.string().min(1),
-  endKeyframeId: z.string().min(1),
-  startTimeSec: z.number().finite().min(0),
-  endTimeSec: z.number().finite().min(0),
+  transitionId: z.string().min(1),
+  selectedCharacterId: z.string().min(1),
+  actionPrompt: z.string().trim().min(1).max(4000),
   durationSec: z.number().finite().min(0.5).max(120),
-  motionPrompt: z.string().trim().min(4).max(4000),
-  clipType: scene3dActionClipTypeSchema.default("custom"),
-  sceneContext: z.unknown().optional()
-}).refine((request) => request.endTimeSec > request.startTimeSec, {
-  message: "endTimeSec must be greater than startTimeSec",
-  path: ["endTimeSec"]
+  curve: z.enum(["linear", "ease_in", "ease_out", "ease_in_out"]),
+  startTransform: z.unknown(),
+  endTransform: z.unknown(),
+  startPose: z.unknown(),
+  endPose: z.unknown(),
+  startFingerPose: z.unknown().optional(),
+  endFingerPose: z.unknown().optional(),
+  currentCharacterTransform: z.unknown().optional(),
+  constraints: z.unknown().optional(),
+  cameras: z.array(z.unknown()).max(8).default([]),
+  props: z.array(z.unknown()).max(16).default([]),
+  activeCameraId: z.string().max(120).optional(),
+  activeViewMode: z.enum(["director", "camera"]).default("director"),
+  coordinateSystemDescription: z.string().trim().max(1200),
+  viewportScreenshotAssetId: z.string().trim().max(160).optional(),
+  referenceImageAssetId: z.string().trim().max(160).optional()
+}).refine((request) => Boolean(request.workflowId || request.projectId), {
+  message: "workflowId or projectId is required",
+  path: ["workflowId"]
 });
 
-const scene3dBoneKeyframeSchema = z.object({
-  id: z.string().trim().min(1).max(100),
-  targetId: z.string().trim().min(1).max(120),
-  label: z.string().trim().min(1).max(140),
-  timeSec: z.number().finite().min(0),
-  pose: scene3dRigPoseSchema,
-  source: z.enum(["ai", "manual", "imported"]).default("ai"),
-  actionClipId: z.string().trim().max(100).optional(),
-  createdAt: z.string().trim().optional(),
-  updatedAt: z.string().trim().optional()
-});
+const scene3dMotionContactHintSchema = z.enum([
+  "leftFoot",
+  "rightFoot",
+  "leftHand",
+  "rightHand",
+  "head",
+  "shoulder",
+  "hip",
+  "feet",
+  "hands"
+]);
 
-const scene3dActionClipSchema = z.object({
-  id: z.string().trim().min(1).max(100),
-  type: scene3dActionClipTypeSchema,
-  label: z.string().trim().min(1).max(140),
-  targetId: z.string().trim().min(1).max(120),
-  startSec: z.number().finite().min(0),
-  endSec: z.number().finite().min(0),
-  motionPrompt: z.string().trim().min(1).max(1600),
-  boneKeyframeIds: z.array(z.string().trim().min(1).max(100)).min(1).max(80),
-  source: z.enum(["ai", "manual", "imported"]).default("ai"),
-  createdAt: z.string().trim().optional(),
-  updatedAt: z.string().trim().optional()
-}).refine((clip) => clip.endSec > clip.startSec, {
-  message: "endSec must be greater than startSec",
-  path: ["endSec"]
-});
-
-const scene3dMotionDraftSchema = z.object({
-  id: z.string().trim().min(1).max(100),
-  summary: z.string().trim().min(1).max(1200),
-  targetId: z.string().trim().min(1).max(120),
-  targetName: z.string().trim().max(120).nullable().optional(),
-  startKeyframeId: z.string().trim().min(1).max(120),
-  endKeyframeId: z.string().trim().min(1).max(120),
-  motionPrompt: z.string().trim().min(1).max(4000),
-  boneKeyframes: z.array(scene3dBoneKeyframeSchema).min(1).max(80),
-  actionClip: scene3dActionClipSchema,
+const scene3dMotionIntentSchema = z.object({
+  version: z.literal(1),
+  intent: z.string().trim().min(1).max(1200),
+  durationSec: z.number().finite().min(0.5).max(120),
+  generatedMotionPrompt: z.string().trim().min(1).max(4000),
+  direction: scene3dVec3Schema,
+  distance: z.number().finite().min(0).max(5),
+  turnDeg: z.number().finite().min(-360).max(360),
+  roll: z.number().finite().min(0).max(1),
+  crouch: z.number().finite().min(0).max(1),
+  verticalLift: z.number().finite().min(0).max(2),
+  bodyLean: scene3dVec3Schema,
+  armSwing: z.number().finite().min(0).max(1),
+  rhythm: z.enum(["slow", "normal", "fast", "impact", "perform"]),
+  contacts: z.array(scene3dMotionContactHintSchema).max(12),
+  lookAt: z.enum(["none", "camera", "object", "point"]),
+  targetObjectId: z.string().trim().max(120).optional(),
   warnings: z.array(z.string().trim().min(1).max(300)).max(24),
-  createdAt: z.string().trim().optional()
-});
+  confidence: z.number().finite().min(0).max(1)
+}).strict();
 
 type Scene3DMotionRefineRequest = z.infer<typeof scene3dMotionRefineRequestSchema>;
-type Scene3DMotionDraft = z.infer<typeof scene3dMotionDraftSchema>;
+type Scene3DMotionIntent = z.infer<typeof scene3dMotionIntentSchema>;
 
-const scene3dReusableAssetKindSchema = z.enum(["actionClip", "cameraMove", "directorTemplate"]);
+const scene3dPoseReferenceImageSchema = z.object({
+  view: scene3dPoseReferenceViewSchema,
+  assetId: z.string().trim().min(1).max(160),
+  fileName: z.string().trim().max(240).optional(),
+  mimeType: z.string().trim().max(120).optional()
+});
+
+const scene3dPoseReferenceSolveRequestSchema = z.object({
+  workflowId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
+  nodeId: z.string().min(1),
+  selectedCharacterId: z.string().min(1),
+  referenceImages: z.array(scene3dPoseReferenceImageSchema).min(1).max(3),
+  currentPose: scene3dRigPoseSchema,
+  currentBonePose: scene3dBonePoseSchema.optional(),
+  currentFingerPose: z.unknown().optional(),
+  currentToePose: z.unknown().optional(),
+  currentRootOffset: scene3dVec3Schema.optional(),
+  foundationPoseHint: scene3dPoseFoundationHintSchema.optional(),
+  currentCharacterTransform: z.unknown().optional(),
+  sceneContext: z.unknown().optional(),
+  coordinateSystemDescription: z.string().trim().max(1200),
+  jointAxisProfile: z.unknown()
+}).refine((request) => Boolean(request.workflowId || request.projectId), {
+  message: "workflowId or projectId is required",
+  path: ["workflowId"]
+});
+
+const scene3dPoseReferenceSolveResultSchema = z.object({
+  version: z.literal(1),
+  summary: z.string().trim().min(1).max(1200),
+  rigPose: scene3dRigPoseSchema,
+  bonePose: scene3dBonePoseSchema.optional(),
+  poseLandmarks: scene3dPoseLandmarksSchema.optional(),
+  foundationHint: scene3dPoseFoundationHintSchema.optional(),
+  rootOffset: scene3dVec3Schema.optional(),
+  confidence: z.number().finite().min(0).max(1),
+  warnings: z.array(z.string().trim().min(1).max(300)).max(24),
+  appliedViews: z.array(scene3dPoseReferenceViewSchema).min(1).max(3)
+}).strict();
+
+type Scene3DPoseReferenceSolveRequest = z.infer<typeof scene3dPoseReferenceSolveRequestSchema>;
+type Scene3DPoseReferenceSolveResult = z.infer<typeof scene3dPoseReferenceSolveResultSchema>;
+
+function coerceScene3DNumber(value: any, fallback: number, min: number, max: number) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.max(min, Math.min(max, numberValue));
+}
+
+function coerceScene3DVec3(value: any, fallback = { x: 0, y: 0, z: 0 }) {
+  return {
+    x: coerceScene3DNumber(value?.x, fallback.x, -10000, 10000),
+    y: coerceScene3DNumber(value?.y, fallback.y, -10000, 10000),
+    z: coerceScene3DNumber(value?.z, fallback.z, -10000, 10000)
+  };
+}
+
+function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineRequest) {
+  const rhythmRaw = String(value?.rhythm || "").toLowerCase();
+  const rhythm = rhythmRaw === "slow"
+    ? "slow"
+    : rhythmRaw === "fast" || rhythmRaw === "quick" || rhythmRaw === "run"
+      ? "fast"
+      : rhythmRaw === "impact" || rhythmRaw === "hit"
+        ? "impact"
+        : rhythmRaw === "perform" || rhythmRaw === "dance"
+          ? "perform"
+          : "normal";
+  const lookAtRaw = String(value?.lookAt || "").toLowerCase();
+  const lookAt = lookAtRaw === "camera" || lookAtRaw === "object" || lookAtRaw === "point" ? lookAtRaw : "none";
+  const allowedContacts = new Set(scene3dMotionContactHintSchema.options);
+  const contacts = Array.isArray(value?.contacts)
+    ? value.contacts.map((item: any) => String(item)).filter((item: string) => allowedContacts.has(item as any)).slice(0, 12)
+    : [];
+  return {
+    version: 1 as const,
+    intent: typeof value?.intent === "string" && value.intent.trim() ? value.intent.trim() : request.actionPrompt,
+    durationSec: request.durationSec,
+    generatedMotionPrompt: typeof value?.generatedMotionPrompt === "string" && value.generatedMotionPrompt.trim()
+      ? value.generatedMotionPrompt.trim()
+      : request.actionPrompt,
+    direction: coerceScene3DVec3(value?.direction),
+    distance: coerceScene3DNumber(value?.distance, 0, 0, 5),
+    turnDeg: coerceScene3DNumber(value?.turnDeg ?? value?.turn, 0, -360, 360),
+    roll: coerceScene3DNumber(value?.roll, 0, 0, 1),
+    crouch: coerceScene3DNumber(value?.crouch, 0, 0, 1),
+    verticalLift: coerceScene3DNumber(value?.verticalLift, 0, 0, 2),
+    bodyLean: coerceScene3DVec3(value?.bodyLean),
+    armSwing: coerceScene3DNumber(value?.armSwing, 0, 0, 1),
+    rhythm,
+    contacts,
+    lookAt,
+    targetObjectId: typeof value?.targetObjectId === "string" && value.targetObjectId.trim() ? value.targetObjectId.trim() : undefined,
+    warnings: Array.isArray(value?.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 24) : [],
+    confidence: coerceScene3DNumber(value?.confidence, 0.5, 0, 1)
+  };
+}
+
+const scene3dReusableAssetKindSchema = z.enum(["actionClip", "cameraMove", "directorTemplate", "posePresetMemory"]);
 const scene3dReusableAssetSourceType: Record<z.infer<typeof scene3dReusableAssetKindSchema>, string> = {
   actionClip: "scene3d_action_clip",
   cameraMove: "scene3d_camera_move",
-  directorTemplate: "scene3d_director_template"
+  directorTemplate: "scene3d_director_template",
+  posePresetMemory: "scene3d_pose_preset_memory"
 };
 const scene3dReusableAssetSourceTypes = Object.values(scene3dReusableAssetSourceType);
 
 const scene3dReusableAssetSaveSchema = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).optional(),
   nodeId: z.string().min(1),
   projectId: z.string().min(1),
   kind: scene3dReusableAssetKindSchema,
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(1000).optional(),
-  payload: z.record(z.string(), z.any())
+  payload: z.record(z.string(), z.any()),
+  sceneContext: z.unknown().optional()
+}).refine((request) => Boolean(request.workflowId || request.sceneContext), {
+  message: "workflowId or sceneContext is required",
+  path: ["workflowId"]
 });
 
 const scene3dReusableAssetListSchema = z.object({
   projectId: z.string().min(1),
+  nodeId: z.string().min(1).optional(),
   kind: scene3dReusableAssetKindSchema.optional(),
   query: z.string().trim().max(120).optional()
 });
@@ -536,8 +676,11 @@ const WORKFLOW_MEDIA_URL_MAX_LENGTH = Number(process.env.WORKFLOW_MEDIA_URL_MAX_
 const IMAGE_GENERATION_TIMEOUT_MS = Number(process.env.IMAGE_GENERATION_TIMEOUT_MS || 180000);
 const SCENE3D_IMPORT_TIMEOUT_MS = Number(process.env.SCENE3D_IMPORT_TIMEOUT_MS || 90000);
 const SCENE3D_IMPORT_MAX_IMAGE_BYTES = Number(process.env.SCENE3D_IMPORT_MAX_IMAGE_BYTES || 8 * 1024 * 1024);
+const SCENE3D_MOTION_REFINE_MAX_IMAGE_BYTES = Number(process.env.SCENE3D_MOTION_REFINE_MAX_IMAGE_BYTES || 3 * 1024 * 1024);
+const SCENE3D_POSE_REFERENCE_MAX_IMAGE_BYTES = Number(process.env.SCENE3D_POSE_REFERENCE_MAX_IMAGE_BYTES || 4 * 1024 * 1024);
 const SCENE3D_DIRECTOR_TIMEOUT_MS = Number(process.env.SCENE3D_DIRECTOR_TIMEOUT_MS || 90000);
 const SCENE3D_MOTION_REFINE_TIMEOUT_MS = Number(process.env.SCENE3D_MOTION_REFINE_TIMEOUT_MS || 90000);
+const SCENE3D_POSE_REFERENCE_TIMEOUT_MS = Number(process.env.SCENE3D_POSE_REFERENCE_TIMEOUT_MS || 90000);
 const SENSITIVE_WORKFLOW_INPUT_KEYS = /(^|[_-])?(api[_-]?key|custom[_-]?key|authorization|bearer|token|secret|password|headers?)($|[_-])?/i;
 const REDACTED_WORKFLOW_SECRET = "[REDACTED]";
 
@@ -669,7 +812,10 @@ function summarizeWorkflowError(error: any) {
     name: error?.name || null,
     message: getWorkflowErrorMessage(error),
     code: error?.code || null,
+    providerCode: error?.details?.code || null,
+    providerMessage: error?.details?.message || null,
     status: error?.response?.status || null,
+    httpStatus: error?.status || null,
     url: error?.config?.url || error?.request?._currentUrl || null
   };
 }
@@ -779,68 +925,86 @@ function parseScene3DMotionRefineRequest(body: unknown): Scene3DMotionRefineRequ
   return validation.data;
 }
 
-function parseScene3DMotionDraftJson(raw: string, request: Scene3DMotionRefineRequest): Scene3DMotionDraft {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonMarkdown(raw));
-  } catch (error: any) {
-    throw new HttpError(502, "Scene3D motion refinement model returned invalid JSON.", "SCENE3D_MOTION_REFINE_INVALID_JSON", {
-      parseError: error?.message || "Invalid JSON"
-    });
-  }
-
-  const validation = scene3dMotionDraftSchema.safeParse(parsed);
+function parseScene3DPoseReferenceSolveRequest(body: unknown): Scene3DPoseReferenceSolveRequest {
+  const validation = scene3dPoseReferenceSolveRequestSchema.safeParse(body || {});
   if (!validation.success) {
-    throw new HttpError(502, "Scene3D motion refinement output failed schema validation.", "SCENE3D_MOTION_REFINE_SCHEMA_INVALID", {
+    throw new HttpError(400, "Invalid Scene3D pose reference solve request.", "SCENE3D_POSE_REFERENCE_REQUEST_INVALID", {
       issues: validation.error.issues.map((issue) => ({
         path: issue.path.join("."),
         message: issue.message
       }))
     });
   }
-  const draft = validation.data;
-  const clipIds = new Set(draft.actionClip.boneKeyframeIds);
-  const boneIds = new Set(draft.boneKeyframes.map((keyframe) => keyframe.id));
+  return validation.data;
+}
+
+function parseScene3DMotionIntentJson(raw: string, request: Scene3DMotionRefineRequest): Scene3DMotionIntent {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonMarkdown(raw));
+  } catch (error: any) {
+    throw new HttpError(502, "Scene3D motion intent model returned invalid JSON.", "SCENE3D_MOTION_REFINE_INVALID_JSON", {
+      parseError: error?.message || "Invalid JSON"
+    });
+  }
+
+  const coerced = coerceScene3DMotionIntent(parsed, request);
+  const validation = scene3dMotionIntentSchema.safeParse(coerced);
+  if (!validation.success) {
+    throw new HttpError(502, "Scene3D motion intent output failed schema validation.", "SCENE3D_MOTION_REFINE_SCHEMA_INVALID", {
+      issues: validation.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message
+      }))
+    });
+  }
+  const intent = validation.data;
   const issues: Array<{ path: string; message: string }> = [];
-  if (draft.targetId !== request.targetId) issues.push({ path: "targetId", message: "targetId does not match request targetId" });
-  if (draft.startKeyframeId !== request.startKeyframeId) issues.push({ path: "startKeyframeId", message: "startKeyframeId does not match request" });
-  if (draft.endKeyframeId !== request.endKeyframeId) issues.push({ path: "endKeyframeId", message: "endKeyframeId does not match request" });
-  if (draft.actionClip.targetId !== request.targetId) issues.push({ path: "actionClip.targetId", message: "actionClip targetId does not match request targetId" });
-  if (draft.actionClip.startSec < request.startTimeSec || draft.actionClip.endSec > request.endTimeSec) {
-    issues.push({ path: "actionClip", message: "actionClip time range must stay inside selected keyframes" });
+  const objectIds = new Set<string>();
+  for (const item of request.props as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
+  for (const item of request.cameras as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
+
+  if (Math.abs(intent.durationSec - request.durationSec) > 0.001) {
+    issues.push({ path: "durationSec", message: "durationSec must match request durationSec" });
   }
-  for (const [index, keyframe] of draft.boneKeyframes.entries()) {
-    if (keyframe.targetId !== request.targetId) issues.push({ path: `boneKeyframes.${index}.targetId`, message: "bone keyframe targetId does not match request targetId" });
-    if (keyframe.timeSec < request.startTimeSec || keyframe.timeSec > request.endTimeSec || keyframe.timeSec > request.durationSec) {
-      issues.push({ path: `boneKeyframes.${index}.timeSec`, message: "bone keyframe timeSec is outside selected range or duration" });
-    }
-    if (keyframe.actionClipId && keyframe.actionClipId !== draft.actionClip.id) {
-      issues.push({ path: `boneKeyframes.${index}.actionClipId`, message: "bone keyframe actionClipId does not match actionClip.id" });
-    }
+  if (intent.targetObjectId && !objectIds.has(intent.targetObjectId)) {
+    issues.push({ path: "targetObjectId", message: "targetObjectId does not exist in the compact Scene3D context" });
   }
-  for (const id of clipIds) {
-    if (!boneIds.has(id)) issues.push({ path: "actionClip.boneKeyframeIds", message: `unknown boneKeyframeId ${id}` });
-  }
+
   if (issues.length) {
-    throw new HttpError(502, "Scene3D motion refinement output failed semantic validation.", "SCENE3D_MOTION_REFINE_SEMANTIC_INVALID", { issues });
+    throw new HttpError(502, "Scene3D motion intent output failed semantic validation.", "SCENE3D_MOTION_REFINE_SEMANTIC_INVALID", { issues });
   }
-  return {
-    ...draft,
-    boneKeyframes: draft.boneKeyframes.map((keyframe) => ({
-      ...keyframe,
-      source: "ai" as const,
-      actionClipId: keyframe.actionClipId || draft.actionClip.id,
-      createdAt: keyframe.createdAt || new Date().toISOString(),
-      updatedAt: keyframe.updatedAt || new Date().toISOString()
-    })),
-    actionClip: {
-      ...draft.actionClip,
-      source: "ai" as const,
-      createdAt: draft.actionClip.createdAt || new Date().toISOString(),
-      updatedAt: draft.actionClip.updatedAt || new Date().toISOString()
-    },
-    createdAt: draft.createdAt || new Date().toISOString()
-  };
+  return intent;
+}
+
+function parseScene3DPoseReferenceJson(raw: string, request: Scene3DPoseReferenceSolveRequest): Scene3DPoseReferenceSolveResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonMarkdown(raw));
+  } catch (error: any) {
+    throw new HttpError(502, "Scene3D pose reference model returned invalid JSON.", "SCENE3D_POSE_REFERENCE_INVALID_JSON", {
+      parseError: error?.message || "Invalid JSON"
+    });
+  }
+
+  const validation = scene3dPoseReferenceSolveResultSchema.safeParse(parsed);
+  if (!validation.success) {
+    throw new HttpError(502, "Scene3D pose reference output failed schema validation.", "SCENE3D_POSE_REFERENCE_SCHEMA_INVALID", {
+      issues: validation.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message
+      }))
+    });
+  }
+  const result = validation.data;
+  const requestedViews = new Set(request.referenceImages.map((image) => image.view));
+  const invalidViews = result.appliedViews.filter((view) => !requestedViews.has(view));
+  if (invalidViews.length) {
+    throw new HttpError(502, "Scene3D pose reference output failed semantic validation.", "SCENE3D_POSE_REFERENCE_SEMANTIC_INVALID", {
+      issues: invalidViews.map((view) => ({ path: "appliedViews", message: `applied view was not provided: ${view}` }))
+    });
+  }
+  return result;
 }
 
 function parseScene3DReusableAssetSave(body: unknown) {
@@ -853,8 +1017,20 @@ function parseScene3DReusableAssetSave(body: unknown) {
   return validation.data;
 }
 
+function firstScene3DQueryString(value: unknown) {
+  if (Array.isArray(value)) return firstScene3DQueryString(value[0]);
+  if (typeof value === "string") return value;
+  return undefined;
+}
+
 function parseScene3DReusableAssetList(query: unknown) {
-  const validation = scene3dReusableAssetListSchema.safeParse(query || {});
+  const rawQuery = (query && typeof query === "object" ? query : {}) as Record<string, unknown>;
+  const validation = scene3dReusableAssetListSchema.safeParse({
+    projectId: firstScene3DQueryString(rawQuery.projectId),
+    nodeId: firstScene3DQueryString(rawQuery.nodeId),
+    kind: firstScene3DQueryString(rawQuery.kind),
+    query: firstScene3DQueryString(rawQuery.query)
+  });
   if (!validation.success) {
     throw new HttpError(400, "Invalid Scene3D reusable asset list request.", "SCENE3D_ASSET_LIST_INVALID", {
       issues: validation.error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }))
@@ -877,6 +1053,11 @@ function validateScene3DReusableAssetPayload(kind: Scene3DReusableAssetKind, pay
   if (kind === "directorTemplate") {
     if (!payload.actionPlan || typeof payload.actionPlan !== "object") issues.push({ path: "payload.actionPlan", message: "actionPlan payload is required" });
     if (!Array.isArray(payload.keyframes) || payload.keyframes.length < 1) issues.push({ path: "payload.keyframes", message: "keyframes are required" });
+  }
+  if (kind === "posePresetMemory") {
+    if (typeof payload.presetId !== "string" || !payload.presetId.trim()) issues.push({ path: "payload.presetId", message: "presetId is required" });
+    if (!payload.rigPose || typeof payload.rigPose !== "object") issues.push({ path: "payload.rigPose", message: "rigPose payload is required" });
+    if (!payload.characterModel || typeof payload.characterModel !== "object") issues.push({ path: "payload.characterModel", message: "characterModel payload is required" });
   }
   if (issues.length) throw new HttpError(400, "Scene3D reusable asset payload is invalid.", "SCENE3D_ASSET_PAYLOAD_INVALID", { issues });
 }
@@ -1170,120 +1351,218 @@ function scene3dDirectorUserPrompt(input: { request: Scene3DDirectorRequest; nod
 function scene3dMotionRefineSystemPrompt() {
   return [
     "You are a professional 3D character animation blocking assistant for a node-based film previs tool.",
-    "Generate editable intermediate bone keyframes only. Do not generate video, assets, URLs, fake progress, or natural-language-only output.",
+    "Generate a lightweight MotionIntent only. Do not generate video, assets, URLs, fake progress, final animation clips, transform keyframes, bone keyframes, contact keyframes, or constraints.",
     "Return JSON only. Do not return Markdown, comments, prose outside JSON, or trailing commas.",
-    "Angles are degrees. All joint rotation pitch/yaw/roll values must be between -180 and 180.",
-    "Use the requested targetId and selected start/end keyframe ids exactly. Do not invent character ids.",
-    "Generated bone keyframe timeSec values must stay between the selected startTimeSec and endTimeSec.",
-    "Include enough in-between bone keyframes to preview the action smoothly, usually 3 to 8 for a short action.",
+    "The local Scene3D compiler will generate positions, rotations, bone poses, contacts, and final animation samples.",
+    "Start and end poses/transforms are hard constraints owned by the caller. Infer only the in-between motion semantics.",
+    "This is not a template classification task. Do not restrict the solution to predefined actions; solve the general motion implied by the prompt.",
+    "For unusual or underspecified actions, derive plausible universal body mechanics: direction, distance, rotation, roll, crouch, lift, lean, arm swing, contact hints, look target, and rhythm.",
+    "Use normalized scalar strengths from 0 to 1 unless a field specifies degrees or world units.",
+    "Direction is a horizontal world-space vector where X is left/right and Z is depth. Keep Y at 0 unless the intent truly needs vertical direction.",
     "The JSON object must exactly match this TypeScript shape:",
     `{
-  "id": "motion_draft_1",
-  "summary": "string",
-  "targetId": "requested targetId",
-  "targetName": "string or null",
-  "startKeyframeId": "requested start keyframe id",
-  "endKeyframeId": "requested end keyframe id",
-  "motionPrompt": "string",
-  "boneKeyframes": [{
-    "id": "bone_1",
-    "targetId": "requested targetId",
-    "label": "string",
-    "timeSec": 1.25,
-    "pose": {
-      "torso": {
-        "root": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "chest": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "pelvis": { "pitch": 0, "yaw": 0, "roll": 0 }
-      },
-      "head": {
-        "neck": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "head": { "pitch": 0, "yaw": 0, "roll": 0 }
-      },
-      "arms": {
-        "leftUpperArm": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "leftLowerArm": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "rightUpperArm": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "rightLowerArm": { "pitch": 0, "yaw": 0, "roll": 0 }
-      },
-      "hands": {
-        "leftHand": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "rightHand": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "leftFingers": 0,
-        "rightFingers": 0
-      },
-      "legs": {
-        "leftUpperLeg": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "leftLowerLeg": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "rightUpperLeg": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "rightLowerLeg": { "pitch": 0, "yaw": 0, "roll": 0 }
-      },
-      "feet": {
-        "leftFoot": { "pitch": 0, "yaw": 0, "roll": 0 },
-        "rightFoot": { "pitch": 0, "yaw": 0, "roll": 0 }
-      }
-    },
-    "source": "ai",
-    "actionClipId": "clip_1"
-  }],
-  "actionClip": {
-    "id": "clip_1",
-    "type": "idle | walk | run | turn | sit | wave | custom",
-    "label": "string",
-    "targetId": "requested targetId",
-    "startSec": 0,
-    "endSec": 2,
-    "motionPrompt": "string",
-    "boneKeyframeIds": ["bone_1"],
-    "source": "ai"
-  },
-  "warnings": ["string"]
+  "version": 1,
+  "intent": "string",
+  "durationSec": 2,
+  "generatedMotionPrompt": "string",
+  "direction": { "x": 1, "y": 0, "z": 0 },
+  "distance": 0.4,
+  "turnDeg": 90,
+  "roll": 0,
+  "crouch": 0.2,
+  "verticalLift": 0,
+  "bodyLean": { "x": 0.2, "y": 0, "z": 0 },
+  "armSwing": 0.4,
+  "rhythm": "slow | normal | fast | impact | perform",
+  "contacts": ["leftFoot", "rightFoot"],
+  "lookAt": "none | camera | object | point",
+  "targetObjectId": "existing nearby object id when relevant",
+  "warnings": ["string"],
+  "confidence": 0.8
 }`
   ].join("\n");
 }
 
 function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequest; node: any }) {
-  const sceneContext = input.request.sceneContext || input.node?.scene3dState || {};
   return [
-    `Target character id: ${input.request.targetId}.`,
-    `Target character name: ${input.request.targetName || "not specified"}.`,
-    `Selected keyframe range: ${input.request.startKeyframeId} at ${input.request.startTimeSec}s to ${input.request.endKeyframeId} at ${input.request.endTimeSec}s.`,
-    `Full timeline duration: ${input.request.durationSec}s.`,
-    `Requested action clip type: ${input.request.clipType}.`,
-    `Motion prompt: ${input.request.motionPrompt}`,
-    "Current Scene3D motion context JSON follows. Use the provided start/end poses and existing rigPose/poseParams as constraints:",
-    compactJson(sceneContext, 18000),
+    `Node id: ${input.request.nodeId}.`,
+    `Transition id: ${input.request.transitionId}.`,
+    `Selected character id: ${input.request.selectedCharacterId}.`,
+    `Duration: ${input.request.durationSec}s.`,
+    `Curve: ${input.request.curve}.`,
+    `Active view mode: ${input.request.activeViewMode}.`,
+    `Active camera id: ${input.request.activeCameraId || "not specified"}.`,
+    `Coordinate system: ${input.request.coordinateSystemDescription}`,
+    `Action prompt: ${input.request.actionPrompt}`,
+    "Hard start/end summary from Scene3D state:",
+    compactJson({
+      startTransform: input.request.startTransform,
+      endTransform: input.request.endTransform,
+      startPose: input.request.startPose,
+      endPose: input.request.endPose
+    }, 5000),
+    "Compact local context:",
+    compactJson({
+      currentCharacterTransform: input.request.currentCharacterTransform,
+      constraints: input.request.constraints,
+      cameras: input.request.cameras,
+      props: input.request.props,
+      viewportScreenshotAssetId: input.request.viewportScreenshotAssetId || null,
+      referenceImageAssetId: input.request.referenceImageAssetId || null
+    }, 5000),
     "Motion rules:",
-    "- Preserve character identity, body scale, and continuity between the selected start and end keyframes.",
-    "- Generate only bone-level pose data for the requested target character.",
-    "- Include torso, head, arms, hands, legs, and feet in every pose.",
-    "- Keep feet and weight shifts plausible for the requested action.",
-    "- If the prompt is underspecified, add a warning and choose a conservative readable motion."
+    "- Do not return keyframes or bone rotations.",
+    "- Convert the action prompt into compact universal motion parameters only.",
+    "- Never fail just because the action does not match a known template.",
+    "- If the action includes stepping, reaching, falling, rolling, jumping, looking, dodging, or recovering, express that through direction/distance/turnDeg/roll/crouch/verticalLift/bodyLean/armSwing/rhythm/contacts/lookAt.",
+    "- If the prompt is underspecified, add warnings and choose conservative readable motion."
+  ].join("\n");
+}
+
+function scene3dPoseReferenceSystemPrompt() {
+  return [
+    "You are a professional 3D character pose estimation adapter for a node-based film previs tool.",
+    "Read the attached character pose reference image(s), estimate normalized human body landmarks first, then provide a conservative local rig pose.",
+    "Return JSON only. Do not return Markdown, comments, prose outside JSON, or trailing commas.",
+    "Do not invent a different skeleton. Use exactly the requested standard human rig joints.",
+    "Rotations are degrees in local XYZ order. Keep values inside the provided joint ranges.",
+    "poseLandmarks is the primary contract: use image-normalized coordinates where x=-1 is image left, x=1 is image right, y=-1 is top, y=1 is bottom, and optional depth is -1 toward camera / 1 away from camera.",
+    "The frontend will deterministically compile poseLandmarks into the final RunningHub/Mixamo-compatible pose space, so landmarks must be spatially consistent even when the rigPose is conservative.",
+    "If a limb is occluded or uncertain, infer conservatively from the available views and add a warning.",
+    "Do not generate animation, motion clips, video, fake progress, or asset URLs.",
+    "Use foundationHint if a provided foundationPoseHint is the right starting baseline; otherwise return the closest baseline with a low confidence and warning.",
+    "The JSON object must exactly match this TypeScript shape, with every rigPose joint present:",
+    `{
+  "version": 1,
+  "summary": "string",
+  "poseLandmarks": {
+    "version": 1,
+    "sourceViews": ["front"],
+    "coordinateSpace": "image-normalized",
+    "points": {
+      "nose": { "x": 0, "y": -0.8, "visible": 1, "depth": 0 },
+      "leftShoulder": { "x": -0.25, "y": -0.35, "visible": 1, "depth": 0 },
+      "rightShoulder": { "x": 0.25, "y": -0.35, "visible": 1, "depth": 0 },
+      "leftElbow": { "x": -0.45, "y": 0, "visible": 1, "depth": 0 },
+      "rightElbow": { "x": 0.45, "y": 0, "visible": 1, "depth": 0 },
+      "leftWrist": { "x": -0.5, "y": 0.35, "visible": 1, "depth": 0 },
+      "rightWrist": { "x": 0.5, "y": 0.35, "visible": 1, "depth": 0 },
+      "leftHip": { "x": -0.18, "y": 0.25, "visible": 1, "depth": 0 },
+      "rightHip": { "x": 0.18, "y": 0.25, "visible": 1, "depth": 0 },
+      "leftKnee": { "x": -0.2, "y": 0.65, "visible": 1, "depth": 0 },
+      "rightKnee": { "x": 0.2, "y": 0.65, "visible": 1, "depth": 0 },
+      "leftAnkle": { "x": -0.2, "y": 0.95, "visible": 1, "depth": 0 },
+      "rightAnkle": { "x": 0.2, "y": 0.95, "visible": 1, "depth": 0 }
+    },
+    "bodyFacing": 0,
+    "torsoLean": { "x": 0, "y": 0, "z": 0 },
+    "contacts": [{ "point": "leftFoot", "type": "ground", "confidence": 0.7 }],
+    "confidence": 0.75
+  },
+  "foundationHint": {
+    "id": "stand",
+    "label": "standing",
+    "confidence": 0.75,
+    "reason": "string",
+    "rootOffset": { "x": 0, "y": 0, "z": 0 }
+  },
+  "rigPose": {
+    "pelvis": { "x": 0, "y": 0, "z": 0 },
+    "chest": { "x": 0, "y": 0, "z": 0 },
+    "neck": { "x": 0, "y": 0, "z": 0 },
+    "head": { "x": 0, "y": 0, "z": 0 },
+    "leftUpperArm": { "x": 0, "y": 0, "z": 0 },
+    "leftLowerArm": { "x": 0, "y": 0, "z": 0 },
+    "leftHand": { "x": 0, "y": 0, "z": 0 },
+    "rightUpperArm": { "x": 0, "y": 0, "z": 0 },
+    "rightLowerArm": { "x": 0, "y": 0, "z": 0 },
+    "rightHand": { "x": 0, "y": 0, "z": 0 },
+    "leftUpperLeg": { "x": 0, "y": 0, "z": 0 },
+    "leftLowerLeg": { "x": 0, "y": 0, "z": 0 },
+    "leftFoot": { "x": 0, "y": 0, "z": 0 },
+    "rightUpperLeg": { "x": 0, "y": 0, "z": 0 },
+    "rightLowerLeg": { "x": 0, "y": 0, "z": 0 },
+    "rightFoot": { "x": 0, "y": 0, "z": 0 }
+  },
+  "rootOffset": { "x": 0, "y": 0, "z": 0 },
+  "confidence": 0.75,
+  "warnings": ["string"],
+  "appliedViews": ["front"]
+}`
+  ].join("\n");
+}
+
+function scene3dPoseReferenceUserPrompt(input: { request: Scene3DPoseReferenceSolveRequest; node: any }) {
+  return [
+    `Node id: ${input.request.nodeId}.`,
+    `Selected character id: ${input.request.selectedCharacterId}.`,
+    `Reference views: ${input.request.referenceImages.map((image) => `${image.view}:${image.assetId}`).join(", ")}.`,
+    `Coordinate system: ${input.request.coordinateSystemDescription}`,
+    "Current character transform:",
+    compactJson(input.request.currentCharacterTransform || {}, 1500),
+    "Current rig pose baseline:",
+    compactJson(input.request.currentPose, 4000),
+    "Foundation pose baseline hint:",
+    compactJson(input.request.foundationPoseHint || {}, 5000),
+    "Current detailed bone pose, if available:",
+    compactJson(input.request.currentBonePose || {}, 5000),
+    "Joint axis profile and semantic meanings:",
+    compactJson(input.request.jointAxisProfile, 9000),
+    "Solve rules:",
+    "- Estimate the static pose only, not an action transition.",
+    "- First solve poseLandmarks from the image: shoulders, elbows, wrists, hips, knees, ankles, head/nose, optional toes and contacts.",
+    "- Then provide a conservative rigPose. The frontend will prefer poseLandmarks for deterministic spatial compilation and use rigPose as fallback.",
+    "- The final rigPose must include all 16 standard joints.",
+    "- Keep the returned foundationHint aligned with the provided foundationPoseHint unless the image clearly contradicts it.",
+    "- Use front view for left/right spread and shoulder/hip alignment.",
+    "- Use side view for forward/back depth, bends, and body lean.",
+    "- Use back view for torso twist and occlusion correction.",
+    "- If only one view is provided, solve the visible axes and infer hidden axes conservatively.",
+    "- Use warnings for occlusion, missing views, ambiguity, or non-human reference issues.",
+    "- appliedViews must contain only views actually provided in this request."
   ].join("\n");
 }
 
 function validateScene3DMotionRequestAgainstContext(request: Scene3DMotionRefineRequest, node: any) {
-  const sceneContext = (request.sceneContext && typeof request.sceneContext === "object") ? request.sceneContext as any : node?.scene3dState;
+  const sceneContext = node?.scene3dState;
   const characters = Array.isArray(sceneContext?.characters)
     ? sceneContext.characters
     : Array.isArray(sceneContext?.objects?.characters)
       ? sceneContext.objects.characters
       : [];
-  const keyframes = Array.isArray(sceneContext?.keyframes)
-    ? sceneContext.keyframes
-    : Array.isArray(sceneContext?.actionPlans)
-      ? (sceneContext.actionPlans.find((plan: any) => plan?.id === request.actionPlanId)?.keyframes || [])
-      : [];
-  const targetExists = characters.some((character: any) => character?.id === request.targetId);
-  const startExists = keyframes.some((keyframe: any) => keyframe?.id === request.startKeyframeId);
-  const endExists = keyframes.some((keyframe: any) => keyframe?.id === request.endKeyframeId);
+  const targetExists = characters.some((character: any) => character?.id === request.selectedCharacterId);
   const issues: Array<{ path: string; message: string }> = [];
-  if (!targetExists) issues.push({ path: "targetId", message: "targetId does not exist in Scene3D context" });
-  if (!startExists) issues.push({ path: "startKeyframeId", message: "startKeyframeId does not exist in Scene3D context" });
-  if (!endExists) issues.push({ path: "endKeyframeId", message: "endKeyframeId does not exist in Scene3D context" });
-  if (request.endTimeSec > request.durationSec) issues.push({ path: "endTimeSec", message: "endTimeSec exceeds durationSec" });
+  const transitions = Array.isArray(sceneContext?.poseTransitions) ? sceneContext.poseTransitions : [];
+  const transition = transitions.find((item: any) => item?.id === request.transitionId);
+  if (!targetExists) issues.push({ path: "selectedCharacterId", message: "selectedCharacterId does not exist in Scene3D context" });
+  if (transitions.length && !transition) issues.push({ path: "transitionId", message: "transitionId does not exist in Scene3D context" });
+  if (transition && transition.characterId !== request.selectedCharacterId) {
+    issues.push({ path: "transitionId", message: "transition does not belong to selectedCharacterId" });
+  }
+  if (!request.startTransform || !request.endTransform) issues.push({ path: "startTransform", message: "startTransform and endTransform are required" });
+  if (!request.startPose || !request.endPose) issues.push({ path: "startPose", message: "startPose and endPose are required" });
   if (issues.length) {
     throw new HttpError(400, "Scene3D motion refinement context is invalid.", "SCENE3D_MOTION_REFINE_CONTEXT_INVALID", { issues });
+  }
+}
+
+function validateScene3DPoseReferenceRequestAgainstContext(request: Scene3DPoseReferenceSolveRequest, node: any) {
+  const sceneContext = node?.scene3dState;
+  const characters = Array.isArray(sceneContext?.characters)
+    ? sceneContext.characters
+    : Array.isArray(sceneContext?.objects?.characters)
+      ? sceneContext.objects.characters
+      : [];
+  const targetExists = characters.some((character: any) => character?.id === request.selectedCharacterId);
+  const issues: Array<{ path: string; message: string }> = [];
+  if (!targetExists) issues.push({ path: "selectedCharacterId", message: "selectedCharacterId does not exist in Scene3D context" });
+  const seenViews = new Set<string>();
+  for (const reference of request.referenceImages) {
+    if (seenViews.has(reference.view)) issues.push({ path: "referenceImages", message: `duplicate reference view: ${reference.view}` });
+    seenViews.add(reference.view);
+  }
+  if (issues.length) {
+    throw new HttpError(400, "Scene3D pose reference context is invalid.", "SCENE3D_POSE_REFERENCE_CONTEXT_INVALID", { issues });
   }
 }
 
@@ -1299,9 +1578,21 @@ function scene3dImportUserPrompt(input: { mode: "new_scene" | "merge"; reference
   ].join("\n");
 }
 
-async function assertScene3DWorkflowNode(input: { workflowId: string; nodeId: string; requestUser: RequestUser }) {
+function assertScene3DNodeShape(node: any, nodeId: string) {
+  if (!node || node.id !== nodeId) throw new HttpError(404, "Scene3D node was not found in this workflow.", "SCENE3D_NODE_NOT_FOUND");
+  const type = String(node.type || "");
+  if (type !== "scene3d" && type !== "3D导演台") {
+    throw new HttpError(400, "Selected node is not a Scene3D director node.", "SCENE3D_NODE_TYPE_INVALID", { nodeType: type || null });
+  }
+}
+
+async function assertScene3DWorkflowNode(input: { workflowId?: string; projectId?: string; nodeId: string; requestUser: RequestUser; fallbackNode?: any }) {
+  if (input.projectId) await ensureProjectMember(input.projectId, input.requestUser);
+  const workflowName = input.projectId ? `canvas-state:${input.requestUser.id}:${input.projectId}` : undefined;
   const workflow = await prisma.workflow.findFirst({
-    where: { id: input.workflowId, ownerId: input.requestUser.id },
+    where: input.workflowId
+      ? { id: input.workflowId, ownerId: input.requestUser.id }
+      : { name: workflowName, ownerId: input.requestUser.id },
     include: {
       versions: {
         where: { version: 1 },
@@ -1309,18 +1600,20 @@ async function assertScene3DWorkflowNode(input: { workflowId: string; nodeId: st
       }
     }
   });
-  if (!workflow) throw new HttpError(404, "Workflow not found.", "WORKFLOW_NOT_FOUND");
+  if (!workflow) {
+    if (input.fallbackNode) {
+      assertScene3DNodeShape(input.fallbackNode, input.nodeId);
+      return { workflow: null, node: input.fallbackNode };
+    }
+    throw new HttpError(404, "Workflow not found.", "WORKFLOW_NOT_FOUND");
+  }
   const canvas = workflow.versions?.[0]?.reactFlowJson as any;
   const nodes = [
     ...(Array.isArray(canvas?.nodes) ? canvas.nodes : []),
     ...(Array.isArray(canvas?.shotNodes) ? canvas.shotNodes : [])
   ];
-  const node = nodes.find((item: any) => item?.id === input.nodeId);
-  if (!node) throw new HttpError(404, "Scene3D node was not found in this workflow.", "SCENE3D_NODE_NOT_FOUND");
-  const type = String(node.type || "");
-  if (type !== "scene3d" && type !== "3D导演台") {
-    throw new HttpError(400, "Selected node is not a Scene3D director node.", "SCENE3D_NODE_TYPE_INVALID", { nodeType: type || null });
-  }
+  const node = nodes.find((item: any) => item?.id === input.nodeId) || input.fallbackNode;
+  assertScene3DNodeShape(node, input.nodeId);
   return { workflow, node };
 }
 
@@ -1358,6 +1651,139 @@ async function resolveScene3DImportImage(input: { imageAssetId: string; requestU
     mimeType,
     referenceUrl: protectedMediaUrl(asset.id)
   };
+}
+
+function scene3DTextRuntimeSupportsImageAttachments(textCapabilities: any) {
+  if (!textCapabilities?.controls?.attachments) return false;
+  const prefixes = Array.isArray(textCapabilities.supportedAttachmentMimePrefixes)
+    ? textCapabilities.supportedAttachmentMimePrefixes
+    : [];
+  return prefixes.length === 0 || prefixes.some((prefix: string) => {
+    const value = String(prefix || "").toLowerCase();
+    return value === "image" || value === "image/" || value.startsWith("image/");
+  });
+}
+
+function scene3DImageMimeSupported(mimeType: string, supportedPrefixes: any[]) {
+  const mime = String(mimeType || "").toLowerCase();
+  if (!mime.startsWith("image/")) return false;
+  if (!Array.isArray(supportedPrefixes) || supportedPrefixes.length === 0) return true;
+  return supportedPrefixes.some((prefix: string) => {
+    const value = String(prefix || "").toLowerCase();
+    return value === "image" || value === "image/" || mime === value || (value.endsWith("/") && mime.startsWith(value));
+  });
+}
+
+async function resolveScene3DMotionAttachment(input: {
+  request: Scene3DMotionRefineRequest;
+  requestUser: RequestUser;
+  textCapabilities: any;
+}): Promise<ProviderAttachment[]> {
+  if (!scene3DTextRuntimeSupportsImageAttachments(input.textCapabilities)) return [];
+  const assetId = input.request.viewportScreenshotAssetId || input.request.referenceImageAssetId;
+  if (!assetId) return [];
+  const maxCount = input.textCapabilities?.limits?.maxAttachmentCount;
+  if (Number.isFinite(Number(maxCount)) && Number(maxCount) < 1) return [];
+  const asset = await prisma.mediaAsset.findUnique({ where: { id: assetId } });
+  if (!asset || !canReadMediaAsset(input.requestUser, asset)) {
+    throw new HttpError(404, "Scene3D motion reference image not found or not accessible.", "MEDIA_ASSET_NOT_ACCESSIBLE", { assetId });
+  }
+  const mimeType = asset.mimeType || "";
+  const supportedPrefixes = Array.isArray(input.textCapabilities?.supportedAttachmentMimePrefixes)
+    ? input.textCapabilities.supportedAttachmentMimePrefixes
+    : ["image/"];
+  if (!scene3DImageMimeSupported(mimeType, supportedPrefixes)) {
+    throw new HttpError(400, "Scene3D motion reference must be an image supported by the selected text model.", "SCENE3D_MOTION_REFINE_IMAGE_UNSUPPORTED", { assetId, mimeType });
+  }
+  const filePath = resolveMediaAssetPath(asset);
+  let bytes: Buffer;
+  try {
+    bytes = await fs.readFile(filePath);
+  } catch (error: any) {
+    throw new HttpError(404, "Scene3D motion reference image could not be read from storage.", "MEDIA_ASSET_FILE_UNREADABLE", {
+      assetId,
+      reason: error?.code || error?.message || "unknown"
+    });
+  }
+  const modelLimit = Number(input.textCapabilities?.limits?.maxAttachmentBytes || input.textCapabilities?.limits?.maxTotalAttachmentBytes || 0);
+  const maxBytes = Math.min(
+    SCENE3D_MOTION_REFINE_MAX_IMAGE_BYTES,
+    Number.isFinite(modelLimit) && modelLimit > 0 ? modelLimit : SCENE3D_MOTION_REFINE_MAX_IMAGE_BYTES
+  );
+  if (bytes.length > maxBytes) {
+    throw new HttpError(413, "Scene3D motion reference image is too large for the selected text model.", "SCENE3D_MOTION_REFINE_IMAGE_TOO_LARGE", {
+      assetId,
+      maxBytes,
+      bytes: bytes.length
+    });
+  }
+  return [{
+    mimeType,
+    data: bytes.toString("base64"),
+    name: asset.originalName || asset.title || "scene3d-motion-reference"
+  }];
+}
+
+async function resolveScene3DPoseReferenceAttachments(input: {
+  request: Scene3DPoseReferenceSolveRequest;
+  requestUser: RequestUser;
+  textCapabilities: any;
+}): Promise<ProviderAttachment[]> {
+  if (!scene3DTextRuntimeSupportsImageAttachments(input.textCapabilities)) {
+    throw new HttpError(400, "Selected Scene3D pose reference model does not support image attachments.", "SCENE3D_POSE_REFERENCE_MODEL_NO_IMAGE_INPUT");
+  }
+  const maxCount = Number(input.textCapabilities?.limits?.maxAttachmentCount || input.request.referenceImages.length);
+  if (Number.isFinite(maxCount) && maxCount > 0 && input.request.referenceImages.length > maxCount) {
+    throw new HttpError(400, "Too many Scene3D pose reference images for the selected model.", "SCENE3D_POSE_REFERENCE_TOO_MANY_IMAGES", {
+      maxCount,
+      count: input.request.referenceImages.length
+    });
+  }
+  const supportedPrefixes = Array.isArray(input.textCapabilities?.supportedAttachmentMimePrefixes)
+    ? input.textCapabilities.supportedAttachmentMimePrefixes
+    : ["image/"];
+  const modelLimit = Number(input.textCapabilities?.limits?.maxAttachmentBytes || input.textCapabilities?.limits?.maxTotalAttachmentBytes || 0);
+  const maxBytes = Math.min(
+    SCENE3D_POSE_REFERENCE_MAX_IMAGE_BYTES,
+    Number.isFinite(modelLimit) && modelLimit > 0 ? modelLimit : SCENE3D_POSE_REFERENCE_MAX_IMAGE_BYTES
+  );
+  const attachments: ProviderAttachment[] = [];
+  for (const reference of input.request.referenceImages) {
+    const asset = await prisma.mediaAsset.findUnique({ where: { id: reference.assetId } });
+    if (!asset || !canReadMediaAsset(input.requestUser, asset)) {
+      throw new HttpError(404, "Scene3D pose reference image not found or not accessible.", "MEDIA_ASSET_NOT_ACCESSIBLE", { assetId: reference.assetId });
+    }
+    const mimeType = asset.mimeType || reference.mimeType || "";
+    if (!scene3DImageMimeSupported(mimeType, supportedPrefixes)) {
+      throw new HttpError(400, "Scene3D pose reference must be an image supported by the selected model.", "SCENE3D_POSE_REFERENCE_IMAGE_UNSUPPORTED", {
+        assetId: reference.assetId,
+        mimeType
+      });
+    }
+    const filePath = resolveMediaAssetPath(asset);
+    let bytes: Buffer;
+    try {
+      bytes = await fs.readFile(filePath);
+    } catch (error: any) {
+      throw new HttpError(404, "Scene3D pose reference image could not be read from storage.", "MEDIA_ASSET_FILE_UNREADABLE", {
+        assetId: reference.assetId,
+        reason: error?.code || error?.message || "unknown"
+      });
+    }
+    if (bytes.length > maxBytes) {
+      throw new HttpError(413, "Scene3D pose reference image is too large for the selected model.", "SCENE3D_POSE_REFERENCE_IMAGE_TOO_LARGE", {
+        assetId: reference.assetId,
+        maxBytes,
+        bytes: bytes.length
+      });
+    }
+    attachments.push({
+      mimeType,
+      data: bytes.toString("base64"),
+      name: `${reference.view}-${asset.originalName || asset.title || reference.fileName || "pose-reference"}`
+    });
+  }
+  return attachments;
 }
 
 async function selectScene3DTextRuntime(input: { requestUser: RequestUser; req: express.Request; source?: string }) {
@@ -1541,54 +1967,95 @@ async function callScene3DMotionRefineModel(input: {
   const systemPrompt = scene3dMotionRefineSystemPrompt();
   const userPrompt = scene3dMotionRefineUserPrompt({ request: input.request, node: input.node });
   const runtime = await selectScene3DTextRuntime({ requestUser: input.requestUser, req: input.req, source: "scene3d-motion-refine" });
-  if (runtime) {
-    try {
-      const response = await callTextProvider({
-        baseUrl: runtime.customUrl,
-        apiKey: runtime.customKey,
-        modelName: runtime.customModel,
-        systemPrompt,
-        userPrompt,
-        timeoutMs: SCENE3D_MOTION_REFINE_TIMEOUT_MS,
-        maxOutputTokens: 8192,
-        maxPromptChars: 24000,
-        isRealtimeSpeed: false,
-        temperature: 0.25,
-        capabilities: runtime.textCapabilities
-      });
-      return response.text;
-    } catch (error: any) {
-      throw new HttpError(502, "Scene3D motion refinement AI provider request failed.", "SCENE3D_MOTION_REFINE_PROVIDER_FAILED", {
-        provider: "custom",
-        configId: runtime.configId,
-        error: summarizeWorkflowError(error)
-      });
-    }
+  if (!runtime) {
+    throw new HttpError(503, "No Scene3D motion refinement text model is configured in the model center.", "SCENE3D_MOTION_REFINE_AI_NOT_CONFIGURED");
   }
 
-  if (!process.env.GEMINI_API_KEY) {
-    throw new HttpError(503, "No Scene3D motion refinement AI provider is configured.", "SCENE3D_MOTION_REFINE_AI_NOT_CONFIGURED");
-  }
-  const ai = input.getAI();
+  const attachments = await resolveScene3DMotionAttachment({
+    request: input.request,
+    requestUser: input.requestUser,
+    textCapabilities: runtime.textCapabilities
+  });
+  const callProvider = (retryAttachments: ProviderAttachment[], retryLabel: "primary" | "text-only-retry") => callTextProvider({
+    baseUrl: runtime.customUrl,
+    apiKey: runtime.customKey,
+    modelName: runtime.customModel,
+    systemPrompt,
+    userPrompt,
+    attachments: retryAttachments,
+    timeoutMs: SCENE3D_MOTION_REFINE_TIMEOUT_MS,
+    maxOutputTokens: retryLabel === "primary" ? 1200 : 900,
+    maxPromptChars: retryLabel === "primary" ? 12000 : 9000,
+    isRealtimeSpeed: false,
+    temperature: retryLabel === "primary" ? 0.25 : 0.15,
+    capabilities: runtime.textCapabilities
+  });
   try {
-    const response = await ai.models.generateContent({
-      model: process.env.SCENE3D_MOTION_REFINE_GEMINI_MODEL || process.env.SCENE3D_DIRECTOR_GEMINI_MODEL || process.env.SCENE3D_IMPORT_GEMINI_MODEL || "gemini-1.5-flash",
-      contents: [{
-        role: "user",
-        parts: [{ text: userPrompt }]
-      }],
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: "application/json",
-        temperature: 0.25,
-        maxOutputTokens: 8192
-      }
-    } as any);
-    return String((response as any).text || "").trim();
+    const response = await callProvider(attachments, "primary");
+    return response.text;
   } catch (error: any) {
+    if (attachments.length > 0 || error?.status === 502 || error?.message === "Provider returned empty text.") {
+      try {
+        const retryResponse = await callProvider([], "text-only-retry");
+        return retryResponse.text;
+      } catch (retryError: any) {
+        throw new HttpError(502, "Scene3D motion refinement AI provider request failed.", "SCENE3D_MOTION_REFINE_PROVIDER_FAILED", {
+          provider: "custom",
+          configId: runtime.configId,
+          attachments: attachments.length,
+          retry: "text-only",
+          error: summarizeWorkflowError(retryError),
+          firstError: summarizeWorkflowError(error)
+        });
+      }
+    }
     throw new HttpError(502, "Scene3D motion refinement AI provider request failed.", "SCENE3D_MOTION_REFINE_PROVIDER_FAILED", {
-      provider: "gemini",
-      model: process.env.SCENE3D_MOTION_REFINE_GEMINI_MODEL || process.env.SCENE3D_DIRECTOR_GEMINI_MODEL || process.env.SCENE3D_IMPORT_GEMINI_MODEL || "gemini-1.5-flash",
+      provider: "custom",
+      configId: runtime.configId,
+      attachments: attachments.length,
+      error: summarizeWorkflowError(error)
+    });
+  }
+}
+
+async function callScene3DPoseReferenceModel(input: {
+  requestUser: RequestUser;
+  req: express.Request;
+  request: Scene3DPoseReferenceSolveRequest;
+  node: any;
+}) {
+  const systemPrompt = scene3dPoseReferenceSystemPrompt();
+  const userPrompt = scene3dPoseReferenceUserPrompt({ request: input.request, node: input.node });
+  const runtime = await selectScene3DTextRuntime({ requestUser: input.requestUser, req: input.req, source: "scene3d-pose-reference" });
+  if (!runtime) {
+    throw new HttpError(503, "No Scene3D pose reference text model is configured in the model center.", "SCENE3D_POSE_REFERENCE_AI_NOT_CONFIGURED");
+  }
+  const attachments = await resolveScene3DPoseReferenceAttachments({
+    request: input.request,
+    requestUser: input.requestUser,
+    textCapabilities: runtime.textCapabilities
+  });
+  try {
+    const response = await callTextProvider({
+      baseUrl: runtime.customUrl,
+      apiKey: runtime.customKey,
+      modelName: runtime.customModel,
+      systemPrompt,
+      userPrompt,
+      attachments,
+      timeoutMs: SCENE3D_POSE_REFERENCE_TIMEOUT_MS,
+      maxOutputTokens: 3600,
+      maxPromptChars: 16000,
+      isRealtimeSpeed: false,
+      temperature: 0.1,
+      capabilities: runtime.textCapabilities
+    });
+    return response.text;
+  } catch (error: any) {
+    throw new HttpError(502, "Scene3D pose reference AI provider request failed.", "SCENE3D_POSE_REFERENCE_PROVIDER_FAILED", {
+      provider: "custom",
+      configId: runtime.configId,
+      attachments: attachments.length,
       error: summarizeWorkflowError(error)
     });
   }
@@ -1643,7 +2110,7 @@ async function planScene3DDirector(req: express.Request, options: RegisterWorkfl
 async function refineScene3DMotion(req: express.Request, options: RegisterWorkflowExecuteRoutesOptions) {
   const requestUser = await requireAuth(req);
   const body = parseScene3DMotionRefineRequest(req.body);
-  const { node } = await assertScene3DWorkflowNode({ workflowId: body.workflowId, nodeId: body.nodeId, requestUser });
+  const { node } = await assertScene3DWorkflowNode({ workflowId: body.workflowId, projectId: body.projectId, nodeId: body.nodeId, requestUser });
   validateScene3DMotionRequestAgainstContext(body, node);
   const rawText = await callScene3DMotionRefineModel({
     requestUser,
@@ -1653,47 +2120,121 @@ async function refineScene3DMotion(req: express.Request, options: RegisterWorkfl
     getAI: options.getAI
   });
   if (!rawText.trim()) {
-    throw new HttpError(502, "Scene3D motion refinement model returned empty output.", "SCENE3D_MOTION_REFINE_EMPTY_OUTPUT");
+    throw new HttpError(502, "Scene3D motion intent model returned empty output.", "SCENE3D_MOTION_REFINE_EMPTY_OUTPUT");
   }
-  return parseScene3DMotionDraftJson(rawText, body);
+  return parseScene3DMotionIntentJson(rawText, body);
+}
+
+async function solveScene3DPoseReference(req: express.Request) {
+  const requestUser = await requireAuth(req);
+  const body = parseScene3DPoseReferenceSolveRequest(req.body);
+  const fallbackNode = body.sceneContext
+    ? { id: body.nodeId, type: "scene3d", scene3dState: body.sceneContext }
+    : undefined;
+  const { node } = await assertScene3DWorkflowNode({ workflowId: body.workflowId, projectId: body.projectId, nodeId: body.nodeId, requestUser, fallbackNode });
+  validateScene3DPoseReferenceRequestAgainstContext(body, node);
+  const rawText = await callScene3DPoseReferenceModel({
+    requestUser,
+    req,
+    request: body,
+    node
+  });
+  if (!rawText.trim()) {
+    throw new HttpError(502, "Scene3D pose reference model returned empty output.", "SCENE3D_POSE_REFERENCE_EMPTY_OUTPUT");
+  }
+  return parseScene3DPoseReferenceJson(rawText, body);
 }
 
 async function saveScene3DReusableAsset(req: express.Request) {
   const requestUser = await requireAuth(req);
   const body = parseScene3DReusableAssetSave(req.body);
   await ensureProjectMember(body.projectId, requestUser);
-  await assertScene3DWorkflowNode({ workflowId: body.workflowId, nodeId: body.nodeId, requestUser });
+  const fallbackNode = body.sceneContext
+    ? { id: body.nodeId, type: "scene3d", scene3dState: body.sceneContext }
+    : undefined;
+  await assertScene3DWorkflowNode({ workflowId: body.workflowId, projectId: body.projectId, nodeId: body.nodeId, requestUser, fallbackNode });
   validateScene3DReusableAssetPayload(body.kind, body.payload);
   const sourceType = scene3dReusableAssetSourceType[body.kind];
-  const asset = await prisma.productionAsset.create({
-    data: {
-      projectId: body.projectId,
-      stage: ProductionStage.SHOT_04,
-      scope: ProductionAssetScope.PERSONAL,
-      reviewStatus: ProductionAssetReviewStatus.UNREVIEWED,
-      creatorId: requestUser.id,
-      originalName: body.name,
-      displayName: body.name,
-      description: body.description || null,
-      mimeType: "application/json",
-      sourceType,
-      sourceId: body.nodeId,
-      sourcePayload: {
-        version: 1,
-        kind: body.kind,
-        ...body.payload
+  const sourcePayload = {
+    version: 1,
+    kind: body.kind,
+    ...body.payload
+  };
+  const metadata = {
+    scene3d: true,
+    kind: body.kind,
+    workflowId: body.workflowId,
+    nodeId: body.nodeId
+  };
+  let asset: any;
+  let auditAction: AuditAction = AuditAction.CREATE;
+
+  if (body.kind === "posePresetMemory") {
+    const existingAssets = await prisma.productionAsset.findMany({
+      where: {
+        projectId: body.projectId,
+        stage: ProductionStage.SHOT_04,
+        sourceType,
+        sourceId: body.nodeId,
+        deletedAt: null,
+        archivedAt: null
       },
-      metadata: {
-        scene3d: true,
-        kind: body.kind,
-        workflowId: body.workflowId,
-        nodeId: body.nodeId
+      orderBy: { updatedAt: "desc" },
+      take: 100
+    });
+    const samePresetAssets = existingAssets.filter((item: any) => {
+      const payload = item.sourcePayload || {};
+      return typeof payload?.presetId === "string" && payload.presetId === body.payload.presetId;
+    });
+    const existing = samePresetAssets.find((item: any) => item.scope === ProductionAssetScope.TEAM) || samePresetAssets[0];
+    if (existing) {
+      asset = await prisma.productionAsset.update({
+        where: { id: existing.id },
+        data: {
+          scope: ProductionAssetScope.TEAM,
+          reviewStatus: ProductionAssetReviewStatus.APPROVED,
+          creatorId: requestUser.id,
+          originalName: body.name,
+          displayName: body.name,
+          description: body.description || null,
+          mimeType: "application/json",
+          sourcePayload,
+          metadata
+        }
+      });
+      const duplicateIds = samePresetAssets.map((item: any) => item.id).filter((id: string) => id !== existing.id);
+      if (duplicateIds.length) {
+        await prisma.productionAsset.updateMany({
+          where: { id: { in: duplicateIds } },
+          data: { archivedAt: new Date() }
+        });
       }
+      auditAction = AuditAction.UPDATE;
     }
-  });
+  }
+
+  if (!asset) {
+    asset = await prisma.productionAsset.create({
+      data: {
+        projectId: body.projectId,
+        stage: ProductionStage.SHOT_04,
+        scope: body.kind === "posePresetMemory" ? ProductionAssetScope.TEAM : ProductionAssetScope.PERSONAL,
+        reviewStatus: body.kind === "posePresetMemory" ? ProductionAssetReviewStatus.APPROVED : ProductionAssetReviewStatus.UNREVIEWED,
+        creatorId: requestUser.id,
+        originalName: body.name,
+        displayName: body.name,
+        description: body.description || null,
+        mimeType: "application/json",
+        sourceType,
+        sourceId: body.nodeId,
+        sourcePayload,
+        metadata
+      }
+    });
+  }
   await writeAuditLog({
     actor: requestUser,
-    action: AuditAction.CREATE,
+    action: auditAction,
     entityType: "Scene3DReusableAsset",
     entityId: asset.id,
     req,
@@ -1707,15 +2248,18 @@ async function listScene3DReusableAssets(req: express.Request) {
   const query = parseScene3DReusableAssetList(req.query);
   await ensureProjectMember(query.projectId, requestUser);
   const sourceTypes = query.kind ? [scene3dReusableAssetSourceType[query.kind]] : scene3dReusableAssetSourceTypes;
+  const sharedPosePresetMemory = query.kind === "posePresetMemory";
   const assets = await prisma.productionAsset.findMany({
     where: {
       projectId: query.projectId,
-      scope: ProductionAssetScope.PERSONAL,
-      creatorId: requestUser.id,
+      ...(sharedPosePresetMemory
+        ? { scope: ProductionAssetScope.TEAM, reviewStatus: ProductionAssetReviewStatus.APPROVED }
+        : { scope: ProductionAssetScope.PERSONAL, creatorId: requestUser.id }),
       deletedAt: null,
       archivedAt: null,
       stage: ProductionStage.SHOT_04,
       sourceType: { in: sourceTypes },
+      ...(query.nodeId ? { sourceId: query.nodeId } : {}),
       ...(query.query ? {
         OR: [
           { originalName: { contains: query.query, mode: "insensitive" as const } },
@@ -2273,29 +2817,58 @@ export function registerWorkflowExecuteRoutes(app: express.Express, options: Reg
 
   app.post("/api/workflow/scene3d/refine-motion", async (req, res) => {
     try {
-      const motionDraft = await refineScene3DMotion(req, options);
+      const motionIntent = await refineScene3DMotion(req, options);
       const requestUser = await requireAuth(req);
       await writeAuditLog({
         actor: requestUser,
         action: "EXECUTE",
-        entityType: "Scene3DMotionRefine",
+        entityType: "Scene3DMotionIntent",
         entityId: req.body?.nodeId || undefined,
         req,
         afterJson: {
           workflowId: req.body?.workflowId || null,
+          projectId: req.body?.projectId || null,
           nodeId: req.body?.nodeId || null,
-          actionPlanId: req.body?.actionPlanId || null,
-          targetId: motionDraft.targetId,
-          startKeyframeId: motionDraft.startKeyframeId,
-          endKeyframeId: motionDraft.endKeyframeId,
-          boneKeyframeCount: motionDraft.boneKeyframes.length,
-          actionClipType: motionDraft.actionClip.type,
-          warningCount: motionDraft.warnings.length
+          transitionId: req.body?.transitionId || null,
+          selectedCharacterId: req.body?.selectedCharacterId || null,
+          actionIntent: motionIntent.intent,
+          rhythm: motionIntent.rhythm,
+          distance: motionIntent.distance,
+          turnDeg: motionIntent.turnDeg,
+          confidence: motionIntent.confidence,
+          warningCount: motionIntent.warnings.length
         }
       });
-      res.json({ motionDraft });
+      res.json({ motionIntent });
     } catch (error: any) {
       sendApiError(res, error, "Scene3D motion refinement failed.");
+    }
+  });
+
+  app.post("/api/workflow/scene3d/solve-pose-reference", async (req, res) => {
+    try {
+      const pose = await solveScene3DPoseReference(req);
+      const requestUser = await requireAuth(req);
+      await writeAuditLog({
+        actor: requestUser,
+        action: "EXECUTE",
+        entityType: "Scene3DPoseReference",
+        entityId: req.body?.nodeId || undefined,
+        req,
+        afterJson: {
+          workflowId: req.body?.workflowId || null,
+          projectId: req.body?.projectId || null,
+          nodeId: req.body?.nodeId || null,
+          selectedCharacterId: req.body?.selectedCharacterId || null,
+          referenceImageCount: Array.isArray(req.body?.referenceImages) ? req.body.referenceImages.length : 0,
+          appliedViews: pose.appliedViews,
+          confidence: pose.confidence,
+          warningCount: pose.warnings.length
+        }
+      });
+      res.json({ pose });
+    } catch (error: any) {
+      sendApiError(res, error, "Scene3D pose reference solve failed.");
     }
   });
 

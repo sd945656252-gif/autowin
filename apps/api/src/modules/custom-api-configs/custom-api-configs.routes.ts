@@ -113,9 +113,7 @@ export function registerCustomApiConfigRoutes(app: express.Express) {
       await assertSafeOutboundUrl(String(baseUrl).trim(), "baseUrl");
       const requestedCanonicalModelId = String(req.body?.canonicalModelId || "").trim();
       let binding: { canonicalModelId: string | null; activeCapabilityRevisionId: string | null; profile: any };
-      if (normalized.capability === "TEXT_GENERATOR") {
-        binding = { canonicalModelId: null, activeCapabilityRevisionId: null, profile: null };
-      } else if (requestedCanonicalModelId) {
+      if (requestedCanonicalModelId) {
         const profile = await findCapabilityProfileForModel({ provider: normalizedProvider, canonicalModelId: requestedCanonicalModelId, capability: normalized.capability });
         if (!profile) {
           throw new HttpError(400, "Selected capability template does not match this model capability.", "MODEL_CAPABILITY_TEMPLATE_MISMATCH", {
@@ -207,9 +205,7 @@ export function registerCustomApiConfigRoutes(app: express.Express) {
         ? String(req.body.canonicalModelId || "").trim()
         : existing.canonicalModelId;
       let binding: { canonicalModelId: string | null; activeCapabilityRevisionId: string | null; profile: any };
-      if (nextCapability === "TEXT_GENERATOR") {
-        binding = { canonicalModelId: null, activeCapabilityRevisionId: null, profile: null };
-      } else if (requestedCanonicalModelId) {
+      if (requestedCanonicalModelId) {
         const profile = await findCapabilityProfileForModel({ provider: nextProvider, canonicalModelId: requestedCanonicalModelId, capability: nextCapability });
         if (!profile) {
           throw new HttpError(400, "Selected capability template does not match this model capability.", "MODEL_CAPABILITY_TEMPLATE_MISMATCH", {

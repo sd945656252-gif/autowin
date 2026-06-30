@@ -48,6 +48,68 @@ function serializeCanvasState(state: WorkflowCanvasSyncState): string {
   return JSON.stringify(state);
 }
 
+function compactScene3DCapture(capture: any) {
+  if (!capture || typeof capture !== 'object') return capture;
+  return {
+    id: capture.id,
+    name: capture.name,
+    mediaUrl: capture.mediaUrl,
+    mediaAssetId: capture.mediaAssetId,
+    cameraId: capture.cameraId,
+    aspectRatio: capture.aspectRatio,
+    createdAt: capture.createdAt
+  };
+}
+
+function compactScene3DStateForRemoteSave(scene: any) {
+  if (!scene || typeof scene !== 'object') return scene;
+  const captures = Array.isArray(scene.captures)
+    ? scene.captures.slice(-3).map(compactScene3DCapture)
+    : [];
+  const objects = scene.objects && typeof scene.objects === 'object'
+    ? {
+        ...scene.objects,
+        cameras: Array.isArray(scene.objects.cameras)
+          ? scene.objects.cameras.map((camera: any) => ({
+              ...camera,
+              captures: Array.isArray(camera?.captures)
+                ? camera.captures.slice(-3).map(compactScene3DCapture)
+                : []
+            }))
+          : scene.objects.cameras
+      }
+    : scene.objects;
+  return {
+    ...scene,
+    objects,
+    captures,
+    undoStack: [],
+    redoStack: []
+  };
+}
+
+function compactScene3DNodeForRemoteSave(node: CanvasNode): CanvasNode {
+  if (!node.scene3dState && !node.scene3dCaptures?.length) return node;
+  const scene3dCaptures = Array.isArray(node.scene3dCaptures)
+    ? node.scene3dCaptures.slice(-3).map(compactScene3DCapture)
+    : node.scene3dCaptures;
+  return {
+    ...node,
+    scene3dState: compactScene3DStateForRemoteSave(node.scene3dState),
+    scene3dCaptures
+  };
+}
+
+function compactCanvasStateForRemoteSave(state: WorkflowCanvasSyncState): CanvasState {
+  return {
+    ...state,
+    nodes: state.nodes.map(compactScene3DNodeForRemoteSave),
+    shotNodes: state.shotNodes.map(compactScene3DNodeForRemoteSave),
+    shots: state.shots,
+    apiConfigs: []
+  };
+}
+
 function ensureModuleType(nodes: CanvasNode[], moduleType: '04' | '05'): CanvasNode[] {
   return nodes.map((node) => (node.moduleType ? node : { ...node, moduleType }));
 }
@@ -321,7 +383,8 @@ export function useWorkflowCanvasSync({
       }
 
       savingRef.current = true;
-      void saveCanvas({ ...state, apiConfigs: [] }, currentProjectId)
+      const remoteState = compactCanvasStateForRemoteSave(state);
+      void saveCanvas({ ...remoteState, apiConfigs: [] }, currentProjectId)
         .then(() => {
           realtimeRef.current?.saveRevision(workflowRevisionRef.current);
           lastSavedRef.current = currentState;
@@ -354,7 +417,8 @@ export function useWorkflowCanvasSync({
         const state = currentLocalStateRef.current;
         const currentState = serializeCanvasState(state);
 
-        void saveCanvas({ ...state, apiConfigs: [] }, currentProjectId)
+        const remoteState = compactCanvasStateForRemoteSave(state);
+        void saveCanvas({ ...remoteState, apiConfigs: [] }, currentProjectId)
           .then(() => {
             realtimeRef.current?.saveRevision(workflowRevisionRef.current);
             lastSavedRef.current = currentState;
@@ -427,4 +491,3 @@ export function useWorkflowCanvasSync({
     updateShotsState
   };
 }
-

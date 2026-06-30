@@ -30,6 +30,8 @@ const ALLOWED_UPLOAD_MIMES = new Set([
   "application/json",
   "model/gltf-binary",
   "model/gltf+json",
+  "application/x-fbx",
+  "model/obj",
   "application/zip",
   "application/msword",
   "application/vnd.ms-excel",
@@ -63,6 +65,8 @@ const EXTENSION_BY_MIME = new Map<string, string>([
   ["application/json", ".json"],
   ["model/gltf-binary", ".glb"],
   ["model/gltf+json", ".gltf"],
+  ["application/x-fbx", ".fbx"],
+  ["model/obj", ".obj"],
   ["application/zip", ".zip"],
   ["application/msword", ".doc"],
   ["application/vnd.ms-excel", ".xls"],
@@ -103,6 +107,8 @@ const MIME_BY_EXTENSION = new Map<string, string>([
   [".json", "application/json"],
   [".glb", "model/gltf-binary"],
   [".gltf", "model/gltf+json"],
+  [".fbx", "application/x-fbx"],
+  [".obj", "model/obj"],
   [".zip", "application/zip"]
 ]);
 
@@ -171,6 +177,14 @@ export function hasValidMagicNumber(buffer: Buffer, mimeType: string) {
   if (mime === "model/gltf+json") {
     const sample = buffer.subarray(0, Math.min(buffer.length, 256)).toString("utf8").trimStart();
     return !buffer.includes(0x00) && sample.startsWith("{");
+  }
+  if (mime === "application/x-fbx") {
+    const sample = buffer.subarray(0, Math.min(buffer.length, 64)).toString("utf8");
+    return sample.startsWith("Kaydara FBX Binary") || sample.includes("FBXHeaderExtension");
+  }
+  if (mime === "model/obj") {
+    const sample = buffer.subarray(0, Math.min(buffer.length, 512)).toString("utf8").trimStart();
+    return !buffer.includes(0x00) && (/^(#|o\s|g\s|v\s|vn\s|vt\s|f\s|mtllib\s|usemtl\s)/m).test(sample);
   }
   if (mime === "application/zip") return buffer[0] === 0x50 && buffer[1] === 0x4b;
   if (mime.includes("openxmlformats-officedocument")) return buffer[0] === 0x50 && buffer[1] === 0x4b;

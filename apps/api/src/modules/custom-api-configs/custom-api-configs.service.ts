@@ -5,6 +5,7 @@ import { ModelCapability, UserRole } from "@prisma/client";
 import type express from "express";
 import { writeAuditLog } from "../audit/audit.service";
 import type { RequestUser } from "../auth/auth.shared";
+import { bindCapabilityForConfig } from "../model-capabilities/model-capabilities.service";
 
 export type CustomApiRuntimeConfigInput = {
   useCustomApi: boolean;
@@ -108,12 +109,20 @@ export async function resolveCustomApiRuntimeConfig(input: CustomApiRuntimeConfi
 
     const decryptedKey = decryptSecret(config.encryptedKey);
     if (!decryptedKey) throw new Error("API key is not configured.");
-    const capabilityProfile = config.canonicalModelId
-      ? await prisma.modelCapabilityProfile.findFirst({
-          where: { canonicalModelId: config.canonicalModelId, capability: config.capability },
-          include: { revisions: { orderBy: { revision: "desc" }, take: 20 } }
+    const fallbackBinding = config.capability === ModelCapability.TEXT_GENERATOR && (!config.canonicalModelId || !config.activeCapabilityRevisionId)
+      ? await bindCapabilityForConfig({
+          provider: config.provider,
+          capability: config.capability,
+          modelName: config.modelName
         })
       : null;
+    const capabilityCanonicalModelId = config.canonicalModelId || fallbackBinding?.canonicalModelId || null;
+    const capabilityProfile = capabilityCanonicalModelId
+      ? await prisma.modelCapabilityProfile.findFirst({
+          where: { canonicalModelId: capabilityCanonicalModelId, capability: config.capability },
+          include: { revisions: { orderBy: { revision: "desc" }, take: 20 } }
+        })
+      : fallbackBinding?.profile || null;
     const activeRevision = capabilityProfile ? activeRevisionFor(capabilityProfile) : null;
     const capabilityParams = activeRevision?.params || null;
 
