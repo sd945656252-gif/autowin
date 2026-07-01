@@ -547,6 +547,7 @@ type CameraObject = {
   rotation: Vec3;
   scale: Vec3;
   targetPosition: Vec3;
+  focusObjectId?: string;
   fov: number;
   lensType: CameraLensType;
   fisheyeStrength: number;
@@ -581,7 +582,6 @@ type Scene3DHistorySnapshot = {
   groundEnabled: boolean;
   motionPathEnabled: boolean;
   characterLabelsEnabled: boolean;
-  compositionGuideEnabled: boolean;
   sceneZoomPercent: number;
   captures: Capture[];
   poseTransitions: PoseTransition[];
@@ -602,7 +602,6 @@ type Scene3DState = {
   groundEnabled: boolean;
   motionPathEnabled: boolean;
   characterLabelsEnabled: boolean;
-  compositionGuideEnabled: boolean;
   sceneZoomPercent: number;
   captures: Capture[];
   poseTransitions: PoseTransition[];
@@ -646,6 +645,10 @@ type Scene3DRecordedVideoResult = {
 // SECTION: Node constants and option labels
 const MODEL_URL = '/models/x-bot.glb';
 const MAX_SCENE_HISTORY = 60;
+const GROUND_SNAP_SETTLE_FRAMES = 45;
+const GRID_SNAP_STEP = 0.25;
+const GRID_ROTATION_SNAP_DEG = 5;
+const GRID_SCALE_SNAP_STEP = 0.05;
 const CURVE_OPTIONS: CurveType[] = ['linear', 'ease_in', 'ease_out', 'ease_in_out', 'bullet_time', 'pulse', 'hold_then_burst'];
 const CURVE_LABELS: Record<CurveType, string> = {
   linear: '线性',
@@ -1215,36 +1218,40 @@ const LIBTV_POSE_PRESETS: LibTvPosePreset[] = [
 ];
 const POSE_PRESET_ALIASES: Record<string, string> = { standing: 'stand', t_pose: 'tpose', default: 'stand' };
 const AIRBORNE_POSE_PRESET_IDS = new Set(['roll', 'jump', 'controlled', 'controlled2', 'float1', 'float2']);
+const LIBTV_POSE_PRESETS_WITH_GROUND_MODE: LibTvPosePreset[] = LIBTV_POSE_PRESETS.map((preset) => ({
+  ...preset,
+  groundMode: AIRBORNE_POSE_PRESET_IDS.has(preset.id) ? 'airborne' : 'grounded'
+}));
 function normalizePosePresetId(presetId: string | undefined) {
   const id = presetId || 'stand';
   if (id === 'custom') return 'custom';
   const aliased = POSE_PRESET_ALIASES[id] || id;
-  return LIBTV_POSE_PRESETS.some((item) => item.id === aliased) ? aliased : 'stand';
+  return LIBTV_POSE_PRESETS_WITH_GROUND_MODE.some((item) => item.id === aliased) ? aliased : 'stand';
 }
 function posePresetGroundMode(presetId?: string): 'grounded' | 'airborne' | 'custom' {
   const normalized = normalizePosePresetId(presetId);
   if (normalized === 'custom') return 'custom';
-  const preset = LIBTV_POSE_PRESETS.find((item) => item.id === normalized);
-  return preset?.groundMode || (AIRBORNE_POSE_PRESET_IDS.has(normalized) ? 'airborne' : 'grounded');
+  return LIBTV_POSE_PRESETS_WITH_GROUND_MODE.find((item) => item.id === normalized)?.groundMode || 'grounded';
 }
 function shouldSnapPosePresetToGround(presetId?: string) {
   return posePresetGroundMode(presetId) === 'grounded';
 }
 function libTvPresetForId(presetId?: string) {
   const normalized = normalizePosePresetId(presetId);
-  return normalized === 'custom' ? undefined : LIBTV_POSE_PRESETS.find((item) => item.id === normalized);
+  return normalized === 'custom' ? undefined : LIBTV_POSE_PRESETS_WITH_GROUND_MODE.find((item) => item.id === normalized);
 }
 function libTvJointAnglesForPresetId(presetId?: string) {
   return cloneLibTvJointAngles(libTvPresetForId(presetId)?.jointAngles);
 }
-const POSE_PRESETS: Array<{ id: string; label: string; pose: StandardHumanRigPose; bonePose?: Scene3DBonePose; fingerPose: StandardHumanFingerPose; toePose: StandardHumanToePose; rootOffset?: Vec3 }> = LIBTV_POSE_PRESETS.map((preset) => ({
+const POSE_PRESETS: Array<{ id: string; label: string; pose: StandardHumanRigPose; bonePose?: Scene3DBonePose; fingerPose: StandardHumanFingerPose; toePose: StandardHumanToePose; rootOffset?: Vec3; groundMode?: 'grounded' | 'airborne' }> = LIBTV_POSE_PRESETS_WITH_GROUND_MODE.map((preset) => ({
   id: preset.id,
   label: preset.label,
   pose: preset.rigPose ? clonePose(preset.rigPose) : libTvPoseToRigPose(preset.jointAngles, preset.id),
   bonePose: cloneBonePose(preset.bonePose),
   fingerPose: cloneFingerPose(preset.fingerPose),
   toePose: cloneToePose(preset.toePose),
-  rootOffset: preset.rootOffset
+  rootOffset: preset.rootOffset,
+  groundMode: preset.groundMode
 }));
 function posePresetForId(presetId?: string) {
   return POSE_PRESETS.find((item) => item.id === normalizePosePresetId(presetId));
@@ -1355,6 +1362,91 @@ const MOTION_SEMANTIC_TYPE_LABELS: Record<MotionSemanticActionType, string> = {
   idle: '静态姿势',
   unknown: '未识别'
 };
+
+type PromptHandPreference = 'left' | 'right' | 'both' | 'none';
+type MotionPromptLexicon = {
+  family: MotionSemanticActionFamily;
+  type: MotionSemanticActionType;
+  match: RegExp;
+  priority: number;
+  reason: string;
+};
+
+const MOTION_PROMPT_LEXICON: MotionPromptLexicon[] = [
+  { family: 'push_pull', type: 'push', priority: 100, match: /推|推动|推开|前推|推东西|push/, reason: '识别到推的动作动词' },
+  { family: 'push_pull', type: 'pull', priority: 100, match: /拉|回拉|拉开|拖拽|pull|drag/, reason: '识别到拉的动作动词' },
+  { family: 'throw', type: 'throw', priority: 96, match: /投|投掷|扔|抛|甩出|throw|toss/, reason: '识别到投掷动作' },
+  { family: 'jump', type: 'jump', priority: 92, match: /跳|跃起|跳起|腾空|jump|hop|leap/, reason: '识别到跳跃或腾空' },
+  { family: 'posture', type: 'crouch', priority: 90, match: /蹲|下蹲|低重心|压低|躲避|闪避|下潜|crouch|squat|duck|evade/, reason: '识别到下蹲、低重心或躲避' },
+  { family: 'combat', type: 'block', priority: 88, match: /格挡|防守|防御|招架|block|guard|parry/, reason: '识别到防守或格挡' },
+  { family: 'combat', type: 'side_kick', priority: 86, match: /侧踢|横踢|side\s*kick/, reason: '识别到侧向踢腿' },
+  { family: 'combat', type: 'kick', priority: 84, match: /踢|踢腿|kick/, reason: '识别到踢腿动作' },
+  { family: 'combat', type: 'punch', priority: 82, match: /出拳|挥拳|拳击|拳|攻击|打击|打斗|格斗|punch|jab|strike|attack|fight|combat/, reason: '识别到格斗攻击' },
+  { family: 'crawl', type: 'crawl', priority: 78, match: /爬|爬行|匍匐|crawl|creep/, reason: '识别到爬行' },
+  { family: 'fall', type: 'fall', priority: 76, match: /摔|倒地|跌倒|倒下|绊倒|fall|collapse|knockdown/, reason: '识别到倒地或跌倒' },
+  { family: 'posture', type: 'get_up', priority: 74, match: /起身|站起|get up|stand up|rise/, reason: '识别到起身' },
+  { family: 'locomotion', type: 'dash', priority: 70, match: /冲刺|疾跑|猛冲|dash|sprint/, reason: '识别到冲刺' },
+  { family: 'locomotion', type: 'run', priority: 68, match: /跑|奔跑|跑步|run/, reason: '识别到跑步' },
+  { family: 'locomotion', type: 'walk', priority: 64, match: /走|步行|行走|迈步|walk|step/, reason: '识别到走路或迈步' },
+  { family: 'turn', type: 'turn', priority: 58, match: /转身|转向|旋转|回头|turn|rotate|spin|pivot/, reason: '识别到转身' },
+  { family: 'reach', type: 'reach', priority: 54, match: /伸手|抓|拿|指向|触碰|reach|grab|point|touch/, reason: '识别到伸手或触碰' }
+];
+
+function matchesPrompt(prompt: string, pattern: RegExp) {
+  return pattern.test(prompt.trim().toLowerCase());
+}
+
+function promptActionMatches(prompt: string) {
+  const normalized = prompt.trim().toLowerCase();
+  return MOTION_PROMPT_LEXICON
+    .filter((item) => item.match.test(normalized))
+    .sort((a, b) => b.priority - a.priority);
+}
+
+function inferPromptHand(prompt: string): PromptHandPreference {
+  const normalized = prompt.trim().toLowerCase();
+  if (/双手|两手|both hands/.test(normalized)) return 'both';
+  if (/左手|left hand|left/.test(normalized)) return 'left';
+  if (/右手|right hand|right/.test(normalized)) return 'right';
+  return 'none';
+}
+
+function handForTemplate(prompt: string): 'left' | 'right' {
+  return inferPromptHand(prompt) === 'left' ? 'left' : 'right';
+}
+
+function semanticDirectionFromPrompt(prompt: string, universal?: UniversalMotionPlan) {
+  const normalized = prompt.trim().toLowerCase();
+  if (/向左|左侧|左边|左方|left/.test(normalized)) return { label: '向左', direction: vec(-1, 0, 0) };
+  if (/向右|右侧|右边|右方|right/.test(normalized)) return { label: '向右', direction: vec(1, 0, 0) };
+  if (/向后|后退|退后|远离|back|backward|retreat/.test(normalized)) return { label: '向后', direction: vec(0, 0, 1) };
+  if (/向前|前方|前进|靠近|推进|冲向|扑向|forward|approach|lunge/.test(normalized)) return { label: '向前', direction: vec(0, 0, -1) };
+  if (universal && Math.abs(universal.turn) > 1) return { label: universal.turn < 0 ? '向左转' : '向右转', direction: vec() };
+  if (universal && (universal.direction.x || universal.direction.z)) {
+    if (Math.abs(universal.direction.x) > Math.abs(universal.direction.z)) return { label: universal.direction.x < 0 ? '向左' : '向右', direction: universal.direction };
+    return { label: universal.direction.z < 0 ? '向前' : '向后', direction: universal.direction };
+  }
+  return { label: '未指定', direction: vec() };
+}
+
+function promptSpeedLabel(prompt: string) {
+  const normalized = prompt.trim().toLowerCase();
+  if (/快速|迅速|疾速|突然|猛冲|冲刺|fast|quick|sudden|dash|sprint/.test(normalized)) return '快速';
+  if (/缓慢|慢慢|慢速|slow/.test(normalized)) return '缓慢';
+  if (/持续|保持|continuous|hold/.test(normalized)) return '持续';
+  return '常规';
+}
+
+function promptForceLabel(prompt: string) {
+  const normalized = prompt.trim().toLowerCase();
+  if (/用力|猛烈|重击|强力|heavy|strong|impact|powerful/.test(normalized)) return '强';
+  if (/轻微|轻轻|轻|small|soft|slight/.test(normalized)) return '轻';
+  return '常规';
+}
+
+function promptAllowsLargePerformance(prompt: string) {
+  return matchesPrompt(prompt, /夸张|大幅度|飞跃|翻滚|空翻|浮空|离地|卡通|exaggerated|cartoon|large|flip|roll|airborne|fly/);
+}
 
 function semanticStage(id: string, label: string, timeRatio: number, poseHint: string, rootMotionHint: string, contactHint: string): MotionSemanticStage {
   return { id, label, timeRatio, poseHint, rootMotionHint, contactHint };
@@ -2362,7 +2454,6 @@ function defaultScene(): Scene3DState {
     groundEnabled: false,
     motionPathEnabled: false,
     characterLabelsEnabled: true,
-    compositionGuideEnabled: false,
     sceneZoomPercent: 100,
     captures: [],
     poseTransitions: [],
@@ -2431,6 +2522,52 @@ function clampTransformToGround(kind: ObjectKind, transform: PoseTransform, sour
   const minY = propLocalGroundHalfHeight({ shape: (source as PropObject | undefined)?.shape || 'box', scale: transform.scale, model: (source as PropObject | undefined)?.model });
   const position = clampVecToGround(transform.position, minY);
   return position === transform.position ? transform : { ...transform, position };
+}
+
+function snapNumberToStep(value: number, step: number) {
+  if (!Number.isFinite(value) || step <= 0) return value;
+  return Number((Math.round(value / step) * step).toFixed(4));
+}
+
+function snapVec3ToStep(value: Vec3, step: number, axes: Array<keyof Vec3> = ['x', 'y', 'z']): Vec3 {
+  const next = { ...value };
+  axes.forEach((axis) => {
+    next[axis] = snapNumberToStep(next[axis], step);
+  });
+  return next;
+}
+
+function changedVec3Axes(previous: Vec3 | undefined, next: Partial<Vec3> | undefined): Array<keyof Vec3> {
+  if (!next) return [];
+  return (['x', 'y', 'z'] as Array<keyof Vec3>).filter((axis) => (
+    next[axis] !== undefined
+    && (!previous || Math.abs(Number(next[axis]) - Number(previous[axis])) > 0.0001)
+  ));
+}
+
+function gridSnapPatchForChangedAxes(kind: ObjectKind, previous: PoseTransform, patch: any) {
+  return {
+    position: patch?.position ? changedVec3Axes(previous.position, patch.position).reduce((acc, axis) => ({ ...acc, [axis]: patch.position[axis] }), {} as Partial<Vec3>) : undefined,
+    rotation: patch?.rotation ? changedVec3Axes(previous.rotation, patch.rotation).reduce((acc, axis) => ({ ...acc, [axis]: patch.rotation[axis] }), {} as Partial<Vec3>) : undefined,
+    scale: patch?.scale && kind !== 'camera' && kind !== 'light' ? changedVec3Axes(previous.scale, patch.scale).reduce((acc, axis) => ({ ...acc, [axis]: patch.scale[axis] }), {} as Partial<Vec3>) : undefined
+  };
+}
+
+function applyGridSnapToTransform(kind: ObjectKind, transform: PoseTransform, patch: any): PoseTransform {
+  const next = clonePoseTransform(transform);
+  if (patch?.position) {
+    const positionAxes = (Object.keys(patch.position) as Array<keyof Vec3>).filter((axis) => axis === 'x' || axis === 'y' || axis === 'z');
+    next.position = snapVec3ToStep(next.position, GRID_SNAP_STEP, positionAxes.length ? positionAxes : ['x', 'y', 'z']);
+  }
+  if (patch?.rotation) {
+    const rotationAxes = (Object.keys(patch.rotation) as Array<keyof Vec3>).filter((axis) => axis === 'x' || axis === 'y' || axis === 'z');
+    next.rotation = snapVec3ToStep(next.rotation, GRID_ROTATION_SNAP_DEG, rotationAxes.length ? rotationAxes : ['x', 'y', 'z']);
+  }
+  if (patch?.scale && kind !== 'camera' && kind !== 'light') {
+    const scaleAxes = (Object.keys(patch.scale) as Array<keyof Vec3>).filter((axis) => axis === 'x' || axis === 'y' || axis === 'z');
+    next.scale = snapVec3ToStep(next.scale, GRID_SCALE_SNAP_STEP, scaleAxes.length ? scaleAxes : ['x', 'y', 'z']);
+  }
+  return next;
 }
 
 function applyGroundCollision(scene: Scene3DState): Scene3DState {
@@ -2902,7 +3039,6 @@ function createHistorySnapshot(scene: Scene3DState): Scene3DHistorySnapshot {
     groundEnabled: scene.groundEnabled,
     motionPathEnabled: scene.motionPathEnabled,
     characterLabelsEnabled: scene.characterLabelsEnabled,
-    compositionGuideEnabled: scene.compositionGuideEnabled,
     sceneZoomPercent: scene.sceneZoomPercent,
     captures: scene.captures,
     poseTransitions: scene.poseTransitions,
@@ -2954,6 +3090,7 @@ function normalizeScene(value: any): Scene3DState {
         rotation: normalizeVec(camera.rotation, vec()),
         scale: normalizeVec(camera.scale, vec(1, 1, 1)),
         targetPosition: normalizeVec(camera.targetPosition, vec(0, 1, 0)),
+        focusObjectId: typeof camera.focusObjectId === 'string' ? camera.focusObjectId : undefined,
         fov: Number.isFinite(Number(camera.fov)) ? Number(camera.fov) : 45,
         lensType: normalizeCameraLensType(camera.lensType),
         fisheyeStrength: Number.isFinite(Number(camera.fisheyeStrength)) ? clampNumber(Number(camera.fisheyeStrength), 0, 1) : 0.45,
@@ -3066,7 +3203,6 @@ function normalizeScene(value: any): Scene3DState {
     groundEnabled: value.groundEnabled === true,
     motionPathEnabled: value.motionPathEnabled === true,
     characterLabelsEnabled: value.characterLabelsEnabled !== false,
-    compositionGuideEnabled: value.compositionGuideEnabled === true,
     sceneZoomPercent: Number.isFinite(Number(value.sceneZoomPercent)) && Number(value.sceneZoomPercent) > 0
       ? clampNumber(Number(value.sceneZoomPercent), 50, 500)
       : 100,
@@ -3079,6 +3215,15 @@ function normalizeScene(value: any): Scene3DState {
     undoStack: [],
     redoStack: []
   };
+  const focusableObjectIds = new Set([
+    ...scene.objects.characters.map((item) => item.id),
+    ...scene.objects.props.map((item) => item.id)
+  ]);
+  scene.objects.cameras = scene.objects.cameras.map((camera) => (
+    camera.focusObjectId && !focusableObjectIds.has(camera.focusObjectId)
+      ? { ...camera, focusObjectId: undefined }
+      : camera
+  ));
   const groundedScene = applyGroundCollision(scene);
   groundedScene.undoStack = normalizeHistoryStack(value.undoStack, groundedScene);
   groundedScene.redoStack = normalizeHistoryStack(value.redoStack, groundedScene);
@@ -3132,6 +3277,7 @@ function defaultObjectPatchLabel(kind: ObjectKind, scene: Scene3DState, id: stri
   if ('fov' in patch) return `Adjust ${name} fov`;
   if ('lensType' in patch) return `Adjust ${name} lens`;
   if ('fisheyeStrength' in patch || 'focusDistance' in patch || 'tiltShiftAmount' in patch || 'orthographicScale' in patch) return `Adjust ${name} lens parameters`;
+  if ('focusObjectId' in patch) return `Adjust ${name} focus object`;
   if ('targetPosition' in patch) return `Adjust ${name} target`;
   if ('intensity' in patch) return `Adjust ${name} intensity`;
   if ('color' in patch) return `Adjust ${name} color`;
@@ -3144,7 +3290,7 @@ function defaultObjectPatchLabel(kind: ObjectKind, scene: Scene3DState, id: stri
 
 function historyMergeKeyForObjectPatch(kind: ObjectKind, id: string, patch: any) {
   const keys = Object.keys(patch).sort();
-  const mergeableKeys = ['position', 'rotation', 'scale', 'targetPosition', 'fov', 'fisheyeStrength', 'focusDistance', 'tiltShiftAmount', 'orthographicScale', 'rigPose', 'fingerPose', 'toePose', 'intensity', 'color'];
+  const mergeableKeys = ['position', 'rotation', 'scale', 'targetPosition', 'focusObjectId', 'fov', 'fisheyeStrength', 'focusDistance', 'tiltShiftAmount', 'orthographicScale', 'rigPose', 'fingerPose', 'toePose', 'intensity', 'color'];
   if (keys.length === 1 && keys[0] === 'poseReferenceImages') return undefined;
   if (keys.length && keys.every((key) => mergeableKeys.includes(key))) {
     return `object:${kind}:${id}:${keys.join(',')}`;
@@ -3233,8 +3379,15 @@ function removeDeletedObjectReferences(scene: Scene3DState, kind: ObjectKind, de
         }
       };
     });
+  const cameras = scene.objects.cameras.map((camera) => (
+    camera.focusObjectId === deletingId ? { ...camera, focusObjectId: undefined } : camera
+  ));
   return normalizeScene({
     ...scene,
+    objects: {
+      ...scene.objects,
+      cameras
+    },
     poseTransitions,
     activeTransitionId: poseTransitions.some((transition) => transition.id === scene.activeTransitionId)
       ? scene.activeTransitionId
@@ -3828,6 +3981,270 @@ function applyTemplateOverlay(
   return pose;
 }
 
+function stageWindow(t: number, start: number, end: number, fade = 0.08) {
+  if (t <= start || t >= end) return 0;
+  const fadeIn = ramp(t, start, Math.min(end, start + fade));
+  const fadeOut = 1 - ramp(t, Math.max(start, end - fade), end);
+  return clamp01(Math.min(fadeIn, fadeOut));
+}
+
+function stageProgress(t: number, start: number, end: number) {
+  return clamp01((t - start) / Math.max(0.0001, end - start));
+}
+
+function applySemanticActionStageOverlay(
+  pose: StandardHumanRigPose,
+  transform: PoseTransform,
+  transition: PoseTransition,
+  t: number,
+  profile?: Scene3DJointAxisProfile
+) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan || semanticPlan.actionType === 'unknown' || semanticPlan.actionType === 'idle') return pose;
+  const finalize = (nextPose: StandardHumanRigPose) => profile ? clampPoseWithJointProfile(nextPose, profile) : nextPose;
+  const actionType = semanticPlan.actionType;
+  const prompt = transition.actionPrompt;
+  const handPreference = inferPromptHand(prompt);
+  const mainHand: 'left' | 'right' = handPreference === 'left' ? 'left' : 'right';
+  const bothHands = handPreference === 'both' || semanticPlan.contacts.some((item) => item.contact === 'hands');
+  const direction = transition.actionPlan.universal?.direction || vec(0, 0, -1);
+  const forceScale = semanticPlan.forceLabel === '强' ? 1.12 : semanticPlan.forceLabel === '轻' ? 0.82 : 1;
+  const speedScale = semanticPlan.speedLabel === '快速' ? 1.08 : semanticPlan.speedLabel === '缓慢' ? 0.86 : 1;
+
+  if (actionType === 'push') {
+    const prepare = stageWindow(t, 0.02, 0.32);
+    const contact = stageWindow(t, 0.24, 0.58);
+    const exert = stageWindow(t, 0.44, 0.94);
+    const drive = Math.max(contact, exert * 0.78) * forceScale;
+    transform.position.x += direction.x * 0.055 * drive;
+    transform.position.z += (direction.z || -1) * 0.055 * drive;
+    const armPatch = bothHands
+      ? {
+          leftUpperArm: { x: -22 * drive + 12 * prepare, y: -8 * drive, z: -34 * drive },
+          rightUpperArm: { x: -22 * drive + 12 * prepare, y: 8 * drive, z: 34 * drive },
+          leftLowerArm: { x: 22 * drive + 18 * prepare },
+          rightLowerArm: { x: 22 * drive + 18 * prepare },
+          leftHand: { x: -5 * drive, z: -8 * drive },
+          rightHand: { x: -5 * drive, z: 8 * drive }
+        }
+      : mainHand === 'left'
+        ? {
+            leftUpperArm: { x: -26 * drive + 12 * prepare, y: -10 * drive, z: -38 * drive },
+            leftLowerArm: { x: 22 * drive + 18 * prepare },
+            leftHand: { x: -5 * drive, z: -8 * drive }
+          }
+        : {
+            rightUpperArm: { x: -26 * drive + 12 * prepare, y: 10 * drive, z: 38 * drive },
+            rightLowerArm: { x: 22 * drive + 18 * prepare },
+            rightHand: { x: -5 * drive, z: 8 * drive }
+          };
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -5 * drive },
+      chest: { x: -11 * drive, y: direction.x * 6 * drive },
+      head: { x: -3 * drive },
+      leftUpperLeg: { x: -4 * exert },
+      rightUpperLeg: { x: -4 * exert },
+      leftLowerLeg: { x: 8 * exert },
+      rightLowerLeg: { x: 8 * exert },
+      ...armPatch
+    }));
+  }
+
+  if (actionType === 'pull') {
+    const reach = stageWindow(t, 0.02, 0.36);
+    const pull = stageWindow(t, 0.32, 0.8) * forceScale;
+    transform.position.x -= direction.x * 0.04 * pull;
+    transform.position.z -= (direction.z || -1) * 0.04 * pull;
+    return finalize(offsetPose(pose, {
+      pelvis: { x: 5 * pull },
+      chest: { x: 8 * pull - 6 * reach },
+      leftUpperArm: { x: -14 * reach + 22 * pull, z: -28 * reach - 12 * pull },
+      rightUpperArm: { x: -14 * reach + 22 * pull, z: 28 * reach + 12 * pull },
+      leftLowerArm: { x: 22 * reach + 46 * pull },
+      rightLowerArm: { x: 22 * reach + 46 * pull }
+    }));
+  }
+
+  if (actionType === 'throw') {
+    const windup = stageWindow(t, 0.02, 0.42) * forceScale;
+    const release = stageWindow(t, 0.38, 0.72) * forceScale * speedScale;
+    const follow = stageWindow(t, 0.66, 0.98);
+    transform.rotation.y += (mainHand === 'left' ? -1 : 1) * (-12 * windup + 18 * release + 6 * follow);
+    transform.position.z += 0.035 * windup - 0.08 * release;
+    const throwingArm = mainHand === 'left'
+      ? {
+          leftUpperArm: { x: 42 * windup - 48 * release + 18 * follow, y: -20 * windup - 26 * release, z: -22 * windup - 44 * release },
+          leftLowerArm: { x: 58 * windup - 24 * release + 18 * follow, y: -10 * release },
+          leftHand: { x: -8 * release, z: -12 * release }
+        }
+      : {
+          rightUpperArm: { x: 42 * windup - 48 * release + 18 * follow, y: 20 * windup + 26 * release, z: 22 * windup + 44 * release },
+          rightLowerArm: { x: 58 * windup - 24 * release + 18 * follow, y: 10 * release },
+          rightHand: { x: -8 * release, z: 12 * release }
+        };
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -4 * windup - 6 * release, y: (mainHand === 'left' ? -1 : 1) * (8 * windup - 10 * release) },
+      chest: { x: 8 * windup - 12 * release, y: (mainHand === 'left' ? -1 : 1) * (18 * windup - 24 * release) },
+      head: { y: (mainHand === 'left' ? -1 : 1) * (6 * release) },
+      leftUpperLeg: { x: -8 * release },
+      rightUpperLeg: { x: 6 * release },
+      ...throwingArm
+    }));
+  }
+
+  if (actionType === 'punch') {
+    const guard = stageWindow(t, 0.02, 0.28);
+    const strike = stageWindow(t, 0.28, 0.62) * forceScale * speedScale;
+    const recover = stageWindow(t, 0.58, 0.98);
+    transform.position.z -= 0.055 * strike;
+    transform.rotation.y += (mainHand === 'left' ? -1 : 1) * (6 * strike - 4 * guard);
+    const strikeArm = mainHand === 'left'
+      ? {
+          leftUpperArm: { x: 18 * guard - 38 * strike + 12 * recover, y: -20 * strike, z: -34 * strike - 22 * guard },
+          leftLowerArm: { x: 68 * guard - 20 * strike + 24 * recover },
+          rightUpperArm: { x: 28 * guard, z: 26 * guard },
+          rightLowerArm: { x: 68 * guard }
+        }
+      : {
+          rightUpperArm: { x: 18 * guard - 38 * strike + 12 * recover, y: 20 * strike, z: 34 * strike + 22 * guard },
+          rightLowerArm: { x: 68 * guard - 20 * strike + 24 * recover },
+          leftUpperArm: { x: 28 * guard, z: -26 * guard },
+          leftLowerArm: { x: 68 * guard }
+        };
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -5 * strike },
+      chest: { x: -8 * strike, y: (mainHand === 'left' ? -1 : 1) * 12 * strike },
+      head: { y: (mainHand === 'left' ? -1 : 1) * 5 * strike },
+      leftUpperLeg: { x: -6 * guard + 6 * strike },
+      rightUpperLeg: { x: -6 * guard - 4 * strike },
+      ...strikeArm
+    }));
+  }
+
+  if (actionType === 'block') {
+    const raise = stageProgress(t, 0.08, 0.42);
+    const hold = stageWindow(t, 0.28, 0.94);
+    transform.position.z += 0.035 * hold;
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -5 * hold },
+      chest: { x: -5 * hold, z: -5 * hold },
+      head: { x: -3 * hold },
+      leftUpperArm: { x: 34 * raise, y: -14 * raise, z: -38 * raise },
+      rightUpperArm: { x: 34 * raise, y: 14 * raise, z: 38 * raise },
+      leftLowerArm: { x: 78 * raise, y: 8 * hold },
+      rightLowerArm: { x: 78 * raise, y: -8 * hold }
+    }));
+  }
+
+  if (actionType === 'kick' || actionType === 'side_kick') {
+    const chamber = stageWindow(t, 0.08, 0.36);
+    const extend = stageWindow(t, 0.32, 0.68) * forceScale;
+    const retract = stageWindow(t, 0.62, 0.94);
+    const sideKick = actionType === 'side_kick' || /侧|横|side/.test(prompt);
+    const side = sideKick ? (semanticDirectionLabel(prompt, transition.actionPlan.universal || deriveUniversalMotionPlan(prompt, [])) === '向左' ? -1 : 1) : 1;
+    transform.rotation.z += sideKick ? -side * 5 * extend : 0;
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -7 * chamber - 5 * extend, z: sideKick ? -side * 10 * extend : 0 },
+      chest: { x: 6 * chamber + 6 * extend, z: sideKick ? side * 10 * extend : 0 },
+      leftUpperArm: { x: 14 * extend, z: -24 * extend },
+      rightUpperArm: { x: 14 * extend, z: 24 * extend },
+      leftLowerArm: { x: 34 * extend },
+      rightLowerArm: { x: 34 * extend },
+      leftUpperLeg: { x: sideKick ? 18 * chamber - 28 * retract : -34 * chamber - 46 * extend + 24 * retract, z: sideKick ? side * 48 * extend : -6 * extend },
+      leftLowerLeg: { x: sideKick ? 10 * chamber - 10 * extend : 22 * chamber - 16 * extend },
+      leftFoot: { x: sideKick ? 4 * extend : -12 * extend },
+      rightUpperLeg: { x: -8 * chamber + 10 * extend },
+      rightLowerLeg: { x: 16 * chamber + 8 * extend }
+    }));
+  }
+
+  if (actionType === 'turn') {
+    const progress = ramp(t, 0.04, 0.92);
+    const twist = Math.sin(progress * Math.PI);
+    const sign = promptTurnDegrees(transition) < 0 ? -1 : 1;
+    return finalize(offsetPose(pose, {
+      pelvis: { y: -4 * sign * twist, z: -1.5 * sign * twist },
+      chest: { y: 9 * sign * twist, z: 2.5 * sign * twist },
+      neck: { y: 5 * sign * twist },
+      head: { y: 6 * sign * twist },
+      leftUpperLeg: { z: sign > 0 ? 3 * twist : -2 * twist },
+      rightUpperLeg: { z: sign > 0 ? 2 * twist : -3 * twist },
+      leftFoot: { z: sign > 0 ? 2 * twist : -1 * twist },
+      rightFoot: { z: sign > 0 ? 1 * twist : -2 * twist }
+    }));
+  }
+
+  if (actionType === 'run' || actionType === 'dash' || actionType === 'walk') {
+    const gait = locomotionGaitConfig(actionType);
+    const drive = locomotionEnvelope(t) * forceScale * speedScale;
+    const phase = gaitPhase(actionType, t, transition.durationSec);
+    const step = Math.sin(phase * Math.PI * 2);
+    const counter = Math.sin(phase * Math.PI * 2 + Math.PI);
+    const stride = gait?.strideDeg || 18;
+    const arm = gait?.armDeg || 10;
+    const lean = gait?.leanDeg || 3;
+    const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
+    const lateral = Math.abs(direction.x) > Math.abs(direction.z) ? direction.x : 0;
+    const forward = Math.abs(direction.z) >= Math.abs(direction.x) ? (direction.z || -1) : 0;
+    const swingLift = Math.max(0, Math.cos(phase * Math.PI * 2));
+    transform.position.y += Math.abs(step) * (gait?.rootBob || 0.012) * drive;
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -lean * drive, z: step * (gait?.weightShift || 2.2) * drive },
+      chest: { x: -lean * 0.65 * drive, z: -step * (gait?.weightShift || 2.2) * 0.45 * drive },
+      head: { x: -lean * 0.18 * drive },
+      leftUpperLeg: { x: step * stride * drive * (forward ? 1 : 0.45), z: lateral ? step * stride * 0.72 * lateral * drive : 0 },
+      rightUpperLeg: { x: -step * stride * drive * (forward ? 1 : 0.45), z: lateral ? -step * stride * 0.72 * lateral * drive : 0 },
+      leftLowerLeg: { x: Math.max(0, -step) * stride * 0.85 * drive + swingLift * stride * 0.12 * drive },
+      rightLowerLeg: { x: Math.max(0, step) * stride * 0.85 * drive + Math.max(0, -Math.cos(phase * Math.PI * 2)) * stride * 0.12 * drive },
+      leftFoot: { x: -Math.max(0, -step) * 4 * drive, z: lateral ? -2 * lateral * Math.max(0, -step) * drive : 0 },
+      rightFoot: { x: -Math.max(0, step) * 4 * drive, z: lateral ? 2 * lateral * Math.max(0, step) * drive : 0 },
+      leftUpperArm: { x: -counter * arm * drive, z: (-5 - lateral * 4) * drive },
+      rightUpperArm: { x: counter * arm * drive, z: (5 - lateral * 4) * drive },
+      leftLowerArm: { x: Math.max(0, counter) * arm * 0.5 * drive },
+      rightLowerArm: { x: Math.max(0, -counter) * arm * 0.5 * drive }
+    }));
+  }
+
+  if (actionType === 'crouch') {
+    const lower = ramp(t, 0.05, 0.48);
+    const hold = stageWindow(t, 0.36, 0.98);
+    const k = Math.max(lower * 0.75, hold) * (matchesPrompt(prompt, /低重心|躲避|闪避|duck|evade/) ? 1.05 : 1);
+    transform.position.y -= 0.06 * k;
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -12 * k },
+      chest: { x: 10 * k },
+      head: { x: -4 * k },
+      leftUpperLeg: { x: -44 * k },
+      rightUpperLeg: { x: -44 * k },
+      leftLowerLeg: { x: 54 * k },
+      rightLowerLeg: { x: 54 * k },
+      leftFoot: { x: -8 * k },
+      rightFoot: { x: -8 * k }
+    }));
+  }
+
+  if (actionType === 'jump') {
+    const compress = stageWindow(t, 0.04, 0.28);
+    const airborne = stageWindow(t, 0.24, 0.72);
+    const land = stageWindow(t, 0.68, 0.98);
+    transform.position.y += 0.18 * airborne - 0.06 * compress - 0.035 * land;
+    return finalize(offsetPose(pose, {
+      pelvis: { x: -10 * compress + 4 * airborne - 6 * land },
+      chest: { x: 8 * compress - 6 * airborne + 5 * land },
+      leftUpperArm: { x: -10 * airborne + 12 * compress, z: -18 * airborne },
+      rightUpperArm: { x: -10 * airborne + 12 * compress, z: 18 * airborne },
+      leftUpperLeg: { x: -30 * compress + 12 * airborne - 18 * land },
+      rightUpperLeg: { x: -30 * compress + 12 * airborne - 18 * land },
+      leftLowerLeg: { x: 46 * compress - 16 * airborne + 32 * land },
+      rightLowerLeg: { x: 46 * compress - 16 * airborne + 32 * land },
+      leftFoot: { x: -8 * land },
+      rightFoot: { x: -8 * land }
+    }));
+  }
+
+  return pose;
+}
+
 function normalizedDirection(input: Vec3) {
   const length = Math.sqrt(input.x * input.x + input.z * input.z);
   if (length < 0.0001) return vec();
@@ -3923,9 +4340,11 @@ const MOTION_CONTACT_LABELS: Record<MotionContactHint, string> = {
 function universalMotionFootLockStrategy(plan: UniversalMotionPlan | undefined, prompt = '') {
   if (!plan) return 'none' as const;
   const families = universalMotionFamilies(plan, prompt);
+  const isLocomotion = families.includes('locomotion') && (plan.stride > 0.08 || plan.rhythm === 'walk' || plan.rhythm === 'run');
   const isDynamic = plan.verticalLift > 0.08
     || plan.roll > 0.08
     || plan.stride > 0.35
+    || isLocomotion
     || families.some((family) => ['roll', 'fall', 'get_up', 'dodge', 'crawl', 'kneel', 'stumble'].includes(family));
   return isDynamic ? 'phased' as const : 'stable' as const;
 }
@@ -3933,6 +4352,10 @@ function universalMotionFootLockStrategy(plan: UniversalMotionPlan | undefined, 
 function footLockPhaseActive(transition: PoseTransition, limb: 'left' | 'right', t: number) {
   if (!transition.constraints.footLock.enabled) return false;
   if (!transition.constraints.footLock[limb]) return false;
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (isLocomotionActionType(actionType)) {
+    return gaitFootPlantStrength(actionType, limb, t, transition.durationSec) > 0.18;
+  }
   const plan = transition.actionPlan.universal;
   if (universalMotionFootLockStrategy(plan, transition.actionPrompt) !== 'phased') return true;
   const families = universalMotionFamilies(plan, transition.actionPrompt);
@@ -3955,39 +4378,86 @@ function footLockPhaseActive(transition: PoseTransition, limb: 'left' | 'right',
 
 function deriveUniversalMotionPlan(prompt: string, templates: PoseTransitionTemplate[]): UniversalMotionPlan {
   const normalized = prompt.trim().toLowerCase();
-  const direction = vec();
-  if (/向右|右侧|右移|sidestep right|move right/.test(normalized)) direction.x += 1;
-  if (/向左|左侧|左移|sidestep left|move left/.test(normalized)) direction.x -= 1;
-  if (/前进|向前|上前|靠近|推进|扑向|冲向|move forward|forward|approach|lunge/.test(normalized)) direction.z -= 1;
-  if (/后退|退向|拉开|远离|move back|backward|retreat/.test(normalized)) direction.z += 1;
-
-  const hasStep = /迈步|走|跑|冲|靠近|远离|step|walk|run|dash|jump|approach|retreat|lunge/.test(normalized)
-    || templates.some((item) => item.id === 'step_forward' || item.id === 'step_back');
-  const isRun = /跑|冲|快速|dash|run|quick|fast/.test(normalized);
-  const isJump = /跳|跃|jump|hop|leap/.test(normalized);
+  const directionInfo = semanticDirectionFromPrompt(prompt);
+  const direction = { ...directionInfo.direction };
+  const action = inferSemanticAction(prompt, templates);
+  const speedLabel = promptSpeedLabel(prompt);
+  const forceLabel = promptForceLabel(prompt);
+  const isDash = action.type === 'dash';
+  const isRun = action.type === 'run' || isDash;
+  const isWalk = action.type === 'walk';
+  const isPushPull = action.type === 'push' || action.type === 'pull';
+  const isThrow = action.type === 'throw';
+  const isJump = action.type === 'jump';
   const isRoll = /翻滚|滚动|侧滚|前滚|roll|tumble|somersault|flip/.test(normalized);
-  const isFall = /摔|倒|跌|fall|collapse|drop|knockdown/.test(normalized);
-  const isCrouch = /蹲|压低|下沉|下蹲|crouch|squat|duck/.test(normalized);
+  const isFall = action.type === 'fall';
+  const isCrouch = action.type === 'crouch';
+  const isKick = action.type === 'kick' || action.type === 'side_kick';
+  const isCombat = action.family === 'combat';
+  const hasStep = isWalk || isRun || isDash || /迈步|靠近|远离|step|walk|run|dash|approach|retreat|lunge/.test(normalized)
+    || templates.some((item) => item.id === 'step_forward' || item.id === 'step_back');
   const isPerform = /挥|摆|舞|表演|夸张|展示|wave|swing|perform|dance/.test(normalized);
-  const isStrike = /出拳|挥拳|拳击|攻击|punch|jab|strike|attack/.test(normalized);
-  const isBlock = /格挡|防守|block|guard/.test(normalized);
-  const isKick = /踢|侧踢|kick/.test(normalized);
-  const isCombat = isStrike || isBlock || isKick || /打斗|格斗|近身|反击|蓄力|冲击|fight|combat|counter/.test(normalized);
   const turnSign = /左转|向左转|turn left/.test(normalized) ? -1 : /右转|向右转|turn right/.test(normalized) ? 1 : 0;
   const hasTurn = /转身|转向|旋转|回头|turn|rotate|spin|pivot/.test(normalized) || templates.some((item) => item.id === 'turn_to');
-  const turn = isRoll ? (turnSign || 1) * 72 : hasTurn ? (turnSign || 1) * (/半圈|180/.test(normalized) ? 36 : isCombat ? 34 : 22) : 0;
-  const stride = isRoll ? 0.32 : hasStep ? (isRun ? 0.42 : 0.26) : isCombat ? 0.18 : (direction.x || direction.z ? 0.18 : 0);
+  const turn = isRoll ? (turnSign || 1) * 60 : hasTurn ? (turnSign || 1) * (/半圈|180/.test(normalized) ? 42 : isCombat || isThrow ? 24 : 18) : 0;
+  const stride = isRoll
+    ? 0.28
+    : isDash
+      ? 0.46
+      : isRun
+        ? 0.34
+        : isWalk
+          ? 0.22
+          : isPushPull
+            ? 0.12
+            : isCombat || isThrow
+              ? 0.1
+              : direction.x || direction.z
+                ? 0.14
+                : 0;
+  const armSwing = isThrow
+    ? 0.62
+    : isPushPull
+      ? 0.42
+      : isCombat
+        ? 0.58
+        : isPerform
+          ? 0.62
+          : isRoll
+            ? 0.48
+            : hasStep
+              ? (isRun ? 0.55 : 0.35)
+              : 0.14;
+  const bodyLean = isRoll || isFall
+    ? 0.75
+    : isPushPull
+      ? 0.48
+      : isThrow
+        ? 0.42
+        : isCombat
+          ? 0.38
+          : isRun
+            ? 0.46
+            : hasStep
+              ? 0.3
+              : hasTurn
+                ? 0.18
+                : 0.08;
   const plan: Omit<UniversalMotionPlan, 'families'> = {
     direction: normalizedDirection(direction.x || direction.z ? direction : isRoll ? vec(0, 0, -1) : direction),
     stride,
     turn,
-    armSwing: Math.max(isCombat ? 0.95 : 0, isPerform ? 0.85 : 0, isRoll ? 0.62 : hasStep ? (isRun ? 0.75 : 0.45) : 0.18),
-    bodyLean: isRoll || isFall ? 1 : isCombat ? 0.85 : isRun ? 0.8 : hasStep ? 0.45 : hasTurn ? 0.22 : 0.12,
-    verticalLift: isJump ? 0.28 : isKick ? 0.1 : isRoll ? 0.08 : hasStep ? 0.05 : 0,
+    armSwing: forceLabel === '强' ? Math.min(0.85, armSwing + 0.12) : forceLabel === '轻' ? Math.max(0.08, armSwing - 0.12) : armSwing,
+    bodyLean: forceLabel === '强' ? Math.min(0.75, bodyLean + 0.08) : forceLabel === '轻' ? Math.max(0.04, bodyLean - 0.08) : bodyLean,
+    verticalLift: isJump ? (speedLabel === '快速' ? 0.28 : 0.22) : isKick ? 0.05 : isRoll ? 0.06 : 0,
     crouch: isRoll || isFall ? 0.9 : isCrouch ? 0.7 : isCombat ? 0.28 : 0,
     roll: isRoll ? 1 : 0,
-    rhythm: isCombat || isFall ? 'impact' : isRoll || isPerform ? 'perform' : isRun ? 'run' : hasStep ? 'walk' : 'subtle',
-    contacts: isCombat ? ['feet'] : undefined
+    rhythm: isCombat || isThrow || isFall ? 'impact' : isRoll || isPerform ? 'perform' : isRun ? 'run' : hasStep ? 'walk' : 'subtle',
+    contacts: action.type === 'push' || action.type === 'pull'
+      ? ['hands', 'feet']
+      : isCombat || isThrow || isWalk || isRun || isCrouch
+        ? ['feet']
+        : undefined
   };
   return {
     ...plan,
@@ -4239,7 +4709,7 @@ function clonePoseTransform(transform: PoseTransform): PoseTransform {
 }
 
 function promptAllowsExaggeratedMotion(prompt: string) {
-  return /夸张|卡通|大幅度|飞跃|翻滚|空翻|浮空|离地|exaggerated|cartoon|large|flip|roll|airborne|fly/.test(prompt.toLowerCase());
+  return promptAllowsLargePerformance(prompt);
 }
 
 function transitionAllowsAirborneMotion(transition: PoseTransition) {
@@ -4303,6 +4773,251 @@ function applyRealisticMotionGuard(
   return dampPoseOverlayToRealisticRange(basePose, pose, transition);
 }
 
+function groundedMotionActionType(transition: PoseTransition) {
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (transitionAllowsAirborneMotion(transition) || actionType === 'fall' || actionType === 'get_up') return false;
+  if (transition.actionPlan.semanticPlan?.contacts.some((item) => item.contact === 'feet')) return true;
+  return Boolean(actionType && ['walk', 'run', 'dash', 'push', 'pull', 'punch', 'block', 'throw', 'kick', 'side_kick', 'crouch', 'crawl', 'turn', 'reach'].includes(actionType));
+}
+
+function isLocomotionActionType(actionType?: MotionSemanticActionType) {
+  return actionType === 'walk' || actionType === 'run' || actionType === 'dash';
+}
+
+function isBasicMotionActionType(actionType?: MotionSemanticActionType) {
+  return actionType === 'walk'
+    || actionType === 'run'
+    || actionType === 'dash'
+    || actionType === 'turn'
+    || actionType === 'crouch'
+    || actionType === 'jump'
+    || actionType === 'idle';
+}
+
+function locomotionGaitConfig(actionType?: MotionSemanticActionType) {
+  if (actionType === 'walk') return { cadenceHz: 0.92, rootBob: 0.012, weightShift: 2.2, footPlant: 0.78, strideDeg: 17, armDeg: 9, leanDeg: 2.5 };
+  if (actionType === 'dash') return { cadenceHz: 1.9, rootBob: 0.024, weightShift: 4.2, footPlant: 0.62, strideDeg: 31, armDeg: 20, leanDeg: 8.5 };
+  if (actionType === 'run') return { cadenceHz: 1.55, rootBob: 0.02, weightShift: 3.5, footPlant: 0.68, strideDeg: 25, armDeg: 16, leanDeg: 5.5 };
+  return null;
+}
+
+function gaitPhase(actionType: MotionSemanticActionType | undefined, t: number, durationSec: number, limb?: 'left' | 'right') {
+  const config = locomotionGaitConfig(actionType);
+  if (!config) return 0;
+  return (t * Math.max(0.1, durationSec) * config.cadenceHz + (limb === 'right' ? 0.5 : 0)) % 1;
+}
+
+function gaitFootPlantStrength(actionType: MotionSemanticActionType | undefined, limb: 'left' | 'right', t: number, durationSec = 1) {
+  const config = locomotionGaitConfig(actionType);
+  if (!config) return 0;
+  const phase = gaitPhase(actionType, t, durationSec, limb);
+  if (phase < 0.08) return ramp(phase, 0, 0.08) * config.footPlant;
+  if (phase < 0.55) return config.footPlant;
+  if (phase < 0.76) return (1 - ramp(phase, 0.55, 0.76)) * config.footPlant;
+  return 0;
+}
+
+function locomotionEnvelope(t: number) {
+  return Math.min(ramp(t, 0, 0.08), 1 - ramp(t, 0.94, 1));
+}
+
+function shouldCompileBasicMotionWithSemanticLayer(transition: PoseTransition) {
+  return isBasicMotionActionType(transition.actionPlan.semanticPlan?.actionType);
+}
+
+function templateAppliesToBasicMotion(template: PoseTransitionTemplate, transition: PoseTransition) {
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (!isBasicMotionActionType(actionType)) return true;
+  if (isLocomotionActionType(actionType) && (template.id === 'step_forward' || template.id === 'step_back')) return false;
+  if (actionType === 'turn' && template.id === 'turn_to') return false;
+  return true;
+}
+
+function promptRequestsInPlaceMotion(prompt: string) {
+  return /原地|不移动|站在原地|in place|stationary|without moving/.test(prompt.trim().toLowerCase());
+}
+
+function promptLocomotionTravelDistance(transition: PoseTransition) {
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (!isLocomotionActionType(actionType) || promptRequestsInPlaceMotion(transition.actionPrompt)) return 0;
+  const duration = Math.max(0.1, transition.durationSec);
+  if (actionType === 'walk') return Math.min(2.4, duration * 0.3);
+  if (actionType === 'dash') return Math.min(5.2, duration * 0.68);
+  return Math.min(4.2, duration * 0.5);
+}
+
+function promptJumpTravelDistance(transition: PoseTransition) {
+  if (transition.actionPlan.semanticPlan?.actionType !== 'jump' || promptRequestsInPlaceMotion(transition.actionPrompt)) return 0;
+  const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec());
+  if (!direction.x && !direction.z) return 0;
+  const duration = Math.max(0.1, transition.durationSec);
+  return Math.min(1.4, duration * 0.22);
+}
+
+function transitionWithPromptLocomotionRootMotion(transition: PoseTransition) {
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (!isLocomotionActionType(actionType) || transition.keyframes.length || !transition.startTransform || !transition.endTransform) return transition;
+  const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec());
+  if (!direction.x && !direction.z) return transition;
+  const existingDistance = Math.hypot(
+    transition.endTransform.position.x - transition.startTransform.position.x,
+    transition.endTransform.position.z - transition.startTransform.position.z
+  );
+  if (existingDistance > 0.08) return transition;
+  const travelDistance = promptLocomotionTravelDistance(transition);
+  if (travelDistance <= 0) return transition;
+  return {
+    ...transition,
+    endTransform: {
+      ...transition.endTransform,
+      position: {
+        ...transition.endTransform.position,
+        x: Number((transition.startTransform.position.x + direction.x * travelDistance).toFixed(4)),
+        z: Number((transition.startTransform.position.z + direction.z * travelDistance).toFixed(4))
+      }
+    }
+  };
+}
+
+function transitionWithPromptJumpRootMotion(transition: PoseTransition) {
+  if (transition.actionPlan.semanticPlan?.actionType !== 'jump' || transition.keyframes.length || !transition.startTransform || !transition.endTransform) return transition;
+  const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec());
+  if (!direction.x && !direction.z) return transition;
+  const existingDistance = Math.hypot(
+    transition.endTransform.position.x - transition.startTransform.position.x,
+    transition.endTransform.position.z - transition.startTransform.position.z
+  );
+  if (existingDistance > 0.08) return transition;
+  const travelDistance = promptJumpTravelDistance(transition);
+  if (travelDistance <= 0) return transition;
+  return {
+    ...transition,
+    endTransform: {
+      ...transition.endTransform,
+      position: {
+        ...transition.endTransform.position,
+        x: Number((transition.startTransform.position.x + direction.x * travelDistance).toFixed(4)),
+        z: Number((transition.startTransform.position.z + direction.z * travelDistance).toFixed(4))
+      }
+    }
+  };
+}
+
+function normalizedAngleDelta(degrees: number) {
+  return ((((degrees + 180) % 360) + 360) % 360) - 180;
+}
+
+function promptTurnDegrees(transition: PoseTransition) {
+  const prompt = transition.actionPrompt.trim().toLowerCase();
+  const universalTurn = transition.actionPlan.universal?.turn || 0;
+  const sign = /向左|左转|left/.test(prompt)
+    ? -1
+    : /向右|右转|right/.test(prompt)
+      ? 1
+      : universalTurn < 0
+        ? -1
+        : 1;
+  if (/360|一圈|整圈|around/.test(prompt)) return sign * 360;
+  if (/90|直角|quarter/.test(prompt)) return sign * 90;
+  if (/45|半侧|slight/.test(prompt)) return sign * 45;
+  if (/180|转身|回身|背身|half/.test(prompt)) return sign * 180;
+  return universalTurn ? universalTurn : sign * 90;
+}
+
+function poseDeltaMagnitude(a?: StandardHumanRigPose, b?: StandardHumanRigPose) {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  return POSE_KEYS.reduce((max, key) => Math.max(max, poseJointDelta(a[key], b[key])), 0);
+}
+
+function transitionWithPromptBasicMotionEndpoints(transition: PoseTransition) {
+  let next = transitionWithPromptJumpRootMotion(transitionWithPromptLocomotionRootMotion(transition));
+  const actionType = next.actionPlan.semanticPlan?.actionType;
+  if (!isBasicMotionActionType(actionType) || next.keyframes.length) return next;
+
+  if (actionType === 'turn' && next.startTransform && next.endTransform) {
+    const yawDelta = Math.abs(normalizedAngleDelta(next.endTransform.rotation.y - next.startTransform.rotation.y));
+    if (yawDelta < 2) {
+      next = {
+        ...next,
+        endTransform: {
+          ...next.endTransform,
+          rotation: {
+            ...next.endTransform.rotation,
+            y: Number((next.startTransform.rotation.y + promptTurnDegrees(next)).toFixed(4))
+          }
+        }
+      };
+    }
+  }
+
+  if (actionType === 'crouch' && next.startPose && next.endPose && poseDeltaMagnitude(next.startPose, next.endPose) < 8) {
+    next = {
+      ...next,
+      endPose: offsetPose(next.startPose, {
+        pelvis: { x: -12 },
+        chest: { x: 10 },
+        head: { x: -4 },
+        leftUpperLeg: { x: -44 },
+        rightUpperLeg: { x: -44 },
+        leftLowerLeg: { x: 54 },
+        rightLowerLeg: { x: 54 },
+        leftFoot: { x: -8 },
+        rightFoot: { x: -8 }
+      })
+    };
+  }
+
+  return next;
+}
+
+function groundedRootLimitsForAction(actionType?: MotionSemanticActionType) {
+  if (actionType === 'crouch' || actionType === 'crawl') return { minDrop: -0.24, maxLift: 0.025 };
+  if (actionType === 'kick' || actionType === 'side_kick') return { minDrop: -0.1, maxLift: 0.05 };
+  if (actionType === 'run' || actionType === 'dash' || actionType === 'walk') return { minDrop: -0.08, maxLift: 0.035 };
+  if (actionType === 'push' || actionType === 'pull') return { minDrop: -0.09, maxLift: 0.02 };
+  return { minDrop: -0.14, maxLift: 0.04 };
+}
+
+function applyGroundedBalanceAndFooting(
+  basePose: StandardHumanRigPose,
+  pose: StandardHumanRigPose,
+  transform: PoseTransform,
+  baseTransform: PoseTransform,
+  transition: PoseTransition,
+  t: number,
+  profile?: Scene3DJointAxisProfile
+) {
+  if (!groundedMotionActionType(transition)) return pose;
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  const limits = groundedRootLimitsForAction(actionType);
+  const gait = locomotionGaitConfig(actionType);
+  let nextPose = clonePose(pose);
+  let rootDeltaY = transform.position.y - baseTransform.position.y;
+  if (gait) {
+    const wave = Math.sin(gaitPhase(actionType, t, transition.durationSec) * Math.PI * 2);
+    const footPulse = Math.abs(wave);
+    const rootBob = -footPulse * gait.rootBob;
+    rootDeltaY = clampMotionNumber(rootDeltaY + rootBob, limits.minDrop, limits.maxLift);
+    const shift = wave * gait.weightShift;
+    nextPose = offsetPose(nextPose, {
+      pelvis: { z: shift },
+      chest: { z: -shift * 0.5 },
+      head: { z: -shift * 0.18 }
+    });
+    const leftPlant = gaitFootPlantStrength(actionType, 'left', t, transition.durationSec);
+    const rightPlant = gaitFootPlantStrength(actionType, 'right', t, transition.durationSec);
+    nextPose.leftFoot = slerpRotation(nextPose.leftFoot, basePose.leftFoot, leftPlant);
+    nextPose.rightFoot = slerpRotation(nextPose.rightFoot, basePose.rightFoot, rightPlant);
+  } else {
+    rootDeltaY = clampMotionNumber(rootDeltaY, limits.minDrop, limits.maxLift);
+    const bothFeetPlant = actionType === 'push' || actionType === 'pull' || actionType === 'crouch' || actionType === 'block' ? 0.86 : 0.62;
+    nextPose.leftFoot = slerpRotation(nextPose.leftFoot, basePose.leftFoot, bothFeetPlant);
+    nextPose.rightFoot = slerpRotation(nextPose.rightFoot, basePose.rightFoot, bothFeetPlant);
+  }
+  transform.position.y = Number((baseTransform.position.y + rootDeltaY).toFixed(4));
+  return profile ? clampPoseWithJointProfile(nextPose, profile) : nextPose;
+}
+
 function motionPromptHash(input: { actionPrompt: string; durationSec: number; curve?: string; keyframes?: unknown[]; startPose?: unknown; endPose?: unknown; startTransform?: unknown; endTransform?: unknown }) {
   return JSON.stringify({
     prompt: input.actionPrompt.trim(),
@@ -4318,47 +5033,33 @@ function motionPromptHash(input: { actionPrompt: string; durationSec: number; cu
 
 function inferSemanticAction(prompt: string, templates: PoseTransitionTemplate[]): { family: MotionSemanticActionFamily; type: MotionSemanticActionType } {
   const normalized = prompt.trim().toLowerCase();
-  if (/推|推动|推开|push/.test(normalized)) return { family: 'push_pull', type: 'push' };
-  if (/拉|拖拽|pull|drag/.test(normalized)) return { family: 'push_pull', type: 'pull' };
-  if (/投|扔|抛|甩出|throw|toss/.test(normalized)) return { family: 'throw', type: 'throw' };
-  if (/拳|打|出拳|攻击|punch|attack|hit|fight/.test(normalized)) return { family: 'combat', type: 'punch' };
-  if (/格挡|防御|block|guard/.test(normalized)) return { family: 'combat', type: 'block' };
-  if (/侧踢|side\s*kick/.test(normalized)) return { family: 'combat', type: 'side_kick' };
-  if (/踢|kick/.test(normalized)) return { family: 'combat', type: 'kick' };
-  if (/跳|跃|jump|leap/.test(normalized)) return { family: 'jump', type: 'jump' };
-  if (/爬|匍匐|crawl/.test(normalized)) return { family: 'crawl', type: 'crawl' };
-  if (/摔|倒|跌|fall|collapse|drop|knockdown/.test(normalized)) return { family: 'fall', type: 'fall' };
-  if (/起身|站起|get up|stand up|rise/.test(normalized)) return { family: 'posture', type: 'get_up' };
-  if (/蹲|下蹲|躲避|crouch|squat|duck/.test(normalized)) return { family: 'posture', type: 'crouch' };
-  if (/冲刺|疾跑|奔跑|跑|dash|run|sprint/.test(normalized)) return { family: 'locomotion', type: /冲刺|dash|sprint/.test(normalized) ? 'dash' : 'run' };
-  if (/走|步行|行走|walk|step/.test(normalized) || templates.some((item) => item.id === 'step_forward' || item.id === 'step_back')) return { family: 'locomotion', type: 'walk' };
-  if (/转身|旋转|回头|turn|rotate|spin|pivot/.test(normalized) || templates.some((item) => item.id === 'turn_to')) return { family: 'turn', type: 'turn' };
-  if (/伸手|抓|指向|reach|grab|point/.test(normalized)) return { family: 'reach', type: 'reach' };
+  const matches = promptActionMatches(normalized);
+  const explicitJumpAttack = matches.some((item) => item.type === 'jump') && matches.some((item) => item.type === 'punch');
+  if (explicitJumpAttack) return { family: 'jump', type: 'jump' };
+  const explicitCrouchDodge = matches.some((item) => item.type === 'crouch') && /躲避|闪避|下潜|duck|evade/.test(normalized);
+  if (explicitCrouchDodge) return { family: 'posture', type: 'crouch' };
+  const primary = matches[0];
+  if (primary) return { family: primary.family, type: primary.type };
+  if (templates.some((item) => item.id === 'step_forward' || item.id === 'step_back')) return { family: 'locomotion', type: 'walk' };
+  if (templates.some((item) => item.id === 'turn_to')) return { family: 'turn', type: 'turn' };
   return { family: normalized ? 'unknown' : 'posture', type: normalized ? 'unknown' : 'idle' };
 }
 
 function semanticDirectionLabel(prompt: string, universal: UniversalMotionPlan) {
-  const normalized = prompt.trim().toLowerCase();
-  if (/向左|左侧|left/.test(normalized)) return '向左';
-  if (/向右|右侧|right/.test(normalized)) return '向右';
-  if (/向后|后退|back|retreat/.test(normalized)) return '向后';
-  if (/向前|前方|靠近|冲向|forward|approach|lunge/.test(normalized) || universal.direction.z < 0) return '向前';
-  if (Math.abs(universal.turn) > 1) return universal.turn < 0 ? '向左转' : '向右转';
-  return '未指定';
+  return semanticDirectionFromPrompt(prompt, universal).label;
 }
 
 function semanticContactsForAction(actionType: MotionSemanticActionType, prompt: string): MotionSemanticPlan['contacts'] {
   const normalized = prompt.trim().toLowerCase();
   const contacts: MotionSemanticPlan['contacts'] = [];
   const add = (label: string, contact: MotionContactHint, required = true) => contacts.push({ label, contact, required });
-  const hasLeftHand = /左手|left hand/.test(normalized);
-  const hasRightHand = /右手|right hand/.test(normalized);
+  const hand = inferPromptHand(prompt);
 
   if (['push', 'pull'].includes(actionType)) {
-    add(hasLeftHand ? '左手接触目标' : hasRightHand ? '右手接触目标' : '双手接触目标', hasLeftHand ? 'leftHand' : hasRightHand ? 'rightHand' : 'hands');
+    add(hand === 'left' ? '左手接触目标' : hand === 'right' ? '右手接触目标' : '双手接触目标', hand === 'left' ? 'leftHand' : hand === 'right' ? 'rightHand' : 'hands');
     add('双脚贴地支撑', 'feet');
   } else if (actionType === 'throw') {
-    add(hasLeftHand ? '左手投掷' : '右手投掷', hasLeftHand ? 'leftHand' : 'rightHand');
+    add(hand === 'left' ? '左手投掷' : hand === 'both' ? '双手投掷' : '右手投掷', hand === 'left' ? 'leftHand' : hand === 'both' ? 'hands' : 'rightHand');
     add('支撑脚贴地', 'feet');
   } else if (['punch', 'block', 'kick', 'side_kick', 'walk', 'run', 'dash', 'crouch', 'turn'].includes(actionType)) {
     add(actionType === 'kick' || actionType === 'side_kick' ? '支撑脚贴地' : '双脚贴地', 'feet');
@@ -4375,18 +5076,44 @@ function semanticContactsForAction(actionType: MotionSemanticActionType, prompt:
   return contacts.slice(0, 6);
 }
 
+function resolvePromptTargetObject(scene: Scene3DState, prompt: string, actionType: MotionSemanticActionType) {
+  const normalized = prompt.trim().toLowerCase();
+  const named = scene.objects.props.find((item) => prompt.includes(item.name))
+    || scene.objects.characters.find((item) => prompt.includes(item.name))
+    || scene.objects.cameras.find((item) => prompt.includes(item.name));
+  if (named) return named;
+  const propAliases = [
+    { match: /箱子|盒子|方块|box|cube|crate/, prop: /箱|盒|方块|box|cube|crate/i },
+    { match: /球|石头|石块|ball|stone|rock/, prop: /球|石|ball|stone|rock/i },
+    { match: /门|墙|板|door|wall|panel/, prop: /门|墙|板|door|wall|panel/i }
+  ];
+  for (const alias of propAliases) {
+    if (!alias.match.test(normalized)) continue;
+    const matched = scene.objects.props.find((item) => alias.prop.test(item.name));
+    if (matched) return matched;
+  }
+  if (['push', 'pull', 'throw', 'reach'].includes(actionType) && scene.objects.props.length) return scene.objects.props[0];
+  return null;
+}
+
 function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, universal: UniversalMotionPlan, templates: PoseTransitionTemplate[], durationSec: number, curve: CurveType = 'linear', cameraMotion?: CameraMotionConfig): MotionSemanticPlan {
   const action = inferSemanticAction(prompt, templates);
   const normalized = prompt.trim().toLowerCase();
+  const matches = promptActionMatches(prompt);
+  const secondaryTypes = matches.map((item) => item.type).filter((type) => type !== action.type);
+  const handPreference = inferPromptHand(prompt);
   const promptCamera = cameraMotionFromPrompt(prompt, durationSec, undefined, cameraMotion);
-  const targetObject = scene.objects.props.find((item) => prompt.includes(item.name))
-    || scene.objects.characters.find((item) => prompt.includes(item.name))
-    || scene.objects.cameras.find((item) => prompt.includes(item.name));
+  const targetObject = resolvePromptTargetObject(scene, prompt, action.type);
   const bodyFocus = new Set<string>();
   if (['push', 'pull'].includes(action.type)) ['双手', '躯干', '双脚'].forEach((item) => bodyFocus.add(item));
   if (action.type === 'throw') ['主手', '躯干', '支撑脚'].forEach((item) => bodyFocus.add(item));
   if (['punch', 'block'].includes(action.type)) ['上半身', '手臂', '双脚'].forEach((item) => bodyFocus.add(item));
   if (['kick', 'side_kick', 'walk', 'run', 'dash', 'jump', 'crouch', 'crawl'].includes(action.type)) ['腿部', '重心', '双脚'].forEach((item) => bodyFocus.add(item));
+  if (secondaryTypes.includes('punch') || matchesPrompt(prompt, /拳|攻击|打击/)) ['手臂', '上半身'].forEach((item) => bodyFocus.add(item));
+  if (secondaryTypes.includes('kick') || secondaryTypes.includes('side_kick')) ['踢腿', '支撑脚'].forEach((item) => bodyFocus.add(item));
+  if (handPreference === 'left') bodyFocus.add('左手');
+  if (handPreference === 'right') bodyFocus.add('右手');
+  if (handPreference === 'both') bodyFocus.add('双手');
   if (/看向|面向|look|face/.test(normalized)) bodyFocus.add('头部');
   const rootMotion = [
     universal.stride > 0 ? '前移 ' + universal.stride.toFixed(2) : '',
@@ -4397,6 +5124,7 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
   ].filter(Boolean);
   const explain = [
     '识别为“' + MOTION_SEMANTIC_TYPE_LABELS[action.type] + '”，动作族为“' + MOTION_SEMANTIC_FAMILY_LABELS[action.family] + '”。',
+    secondaryTypes.length ? '同时识别到辅助动作：' + secondaryTypes.slice(0, 3).map((type) => MOTION_SEMANTIC_TYPE_LABELS[type]).join('、') + '。' : '',
     semanticDirectionLabel(prompt, universal) + '，' + (universal.rhythm === 'run' ? '快速节奏' : universal.rhythm === 'impact' ? '冲击节奏' : '常规节奏') + '。',
     targetObject ? '识别到目标对象：' + targetObject.name + '。' : '',
     promptCamera.matched ? '提示词包含运镜：' + CAMERA_MOTION_LABELS[promptCamera.motion.type] + '。' : cameraMotion?.enabled ? '未识别提示词运镜，将使用下方运镜类型：' + CAMERA_MOTION_LABELS[cameraMotion.type] + '。' : '未识别运镜，默认不加入运镜。'
@@ -4408,8 +5136,8 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
     actionFamily: action.family,
     actionType: action.type,
     directionLabel: semanticDirectionLabel(prompt, universal),
-    speedLabel: /快速|迅速|猛|冲|fast|quick|dash|run/.test(normalized) ? '快速' : /缓慢|慢|slow/.test(normalized) ? '缓慢' : '常规',
-    forceLabel: /用力|猛烈|重|heavy|strong|impact/.test(normalized) ? '强' : /轻微|轻|small|soft/.test(normalized) ? '轻' : '常规',
+    speedLabel: promptSpeedLabel(prompt),
+    forceLabel: promptForceLabel(prompt),
     bodyFocus: Array.from(bodyFocus),
     rootMotion,
     poseStages: motionStagesForAction(action.type),
@@ -4421,7 +5149,7 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
         : undefined,
     targetObjectId: targetObject?.id,
     targetObjectName: targetObject?.name,
-    confidence: action.type === 'unknown' ? 0.35 : targetObject || templates.length || action.type !== 'idle' ? 0.78 : 0.55,
+    confidence: action.type === 'unknown' ? 0.35 : targetObject || templates.length || action.type !== 'idle' ? Math.min(0.9, 0.72 + matches.length * 0.04) : 0.55,
     explain,
     warnings: action.type === 'unknown' ? ['未识别具体动作，请补充动作动词或目标。'] : []
   };
@@ -4461,6 +5189,9 @@ function motionPipelineStatus(transition: PoseTransition | null | undefined, mot
 
 function resolveActionPlan(scene: Scene3DState, prompt: string, options?: { durationSec?: number; curve?: CurveType; cameraMotion?: CameraMotionConfig }): PoseTransitionActionPlan {
   const normalized = prompt.trim().toLowerCase();
+  const hand = handForTemplate(prompt);
+  const force = promptForceLabel(prompt);
+  const speed = promptSpeedLabel(prompt);
   const templates: PoseTransitionTemplate[] = [];
   const notes: string[] = [];
   const push = (id: ActionTemplateId, extra?: Partial<PoseTransitionTemplate>) => {
@@ -4475,21 +5206,21 @@ function resolveActionPlan(scene: Scene3DState, prompt: string, options?: { dura
   if (!normalized) {
     notes.push('未填写动作提示词，使用默认动态规划。');
   }
-  if (/look at|look|target|camera/.test(normalized)) push('look_at');
-  if (/turn|rotate|face/.test(normalized)) push('turn_to');
-  if (/raise hand|lift hand|hand up|left hand|right hand/.test(normalized)) push('raise_hand', { hand: /left/.test(normalized) ? 'left' : 'right' });
-  if (/wave/.test(normalized)) push('wave', { hand: /left/.test(normalized) ? 'left' : 'right' });
-  if (/point/.test(normalized)) push('point_at', { hand: /left/.test(normalized) ? 'left' : 'right' });
+  if (/看向|面向|look at|look|target|camera/.test(normalized)) push('look_at');
+  if (/转身|转向|旋转|面向|turn|rotate|face/.test(normalized)) push('turn_to');
+  if (/抬手|举手|raise hand|lift hand|hand up|left hand|right hand/.test(normalized)) push('raise_hand', { hand });
+  if (/挥手|wave/.test(normalized)) push('wave', { hand });
+  if (/指向|point/.test(normalized)) push('point_at', { hand });
   if (/step forward|walk forward|forward/.test(normalized)) push('step_forward');
   if (/step back|backward/.test(normalized)) push('step_back');
-  if (/sit down|sit/.test(normalized)) push('sit_down');
-  if (/stand up|stand/.test(normalized)) push('stand_up');
-  if (/pick up|grab/.test(normalized)) push('pick_up');
-  if (/put down|release/.test(normalized)) push('put_down');
-  if (/推|推动|推开|push/.test(normalized)) push('point_at', { hand: /左手|left/.test(normalized) ? 'left' : 'right', strength: /用力|猛|heavy|strong/.test(normalized) ? 1.25 : 1.05 });
-  if (/拉|拉回|拉开|pull/.test(normalized)) push('pick_up', { hand: /左手|left/.test(normalized) ? 'left' : 'right', strength: /用力|猛|heavy|strong/.test(normalized) ? 1.2 : 1 });
-  if (/扔|抛|投掷|甩出|throw|toss/.test(normalized)) push('put_down', { hand: /左手|left/.test(normalized) ? 'left' : 'right', strength: /用力|猛|heavy|strong/.test(normalized) ? 1.2 : 1 });
-  if (/出拳|挥拳|拳击|攻击|punch|jab|strike|attack/.test(normalized)) push('combat_strike', { hand: /左|left/.test(normalized) ? 'left' : 'right', strength: /快速|用力|heavy|fast|quick/.test(normalized) ? 1.15 : 1 });
+  if (/坐下|sit down|sit/.test(normalized)) push('sit_down');
+  if (/站起|起身|stand up|stand/.test(normalized)) push('stand_up');
+  if (/拿起|抓取|抓住|pick up|grab/.test(normalized)) push('pick_up', { hand });
+  if (/放下|释放|release|put down/.test(normalized)) push('put_down', { hand });
+  if (/推|推动|推开|push/.test(normalized)) push('point_at', { hand, strength: force === '强' ? 1.18 : force === '轻' ? 0.85 : 1 });
+  if (/拉|拉回|拉开|pull/.test(normalized)) push('pick_up', { hand, strength: force === '强' ? 1.15 : force === '轻' ? 0.85 : 1 });
+  if (/扔|抛|投掷|甩出|throw|toss/.test(normalized)) push('put_down', { hand, strength: force === '强' ? 1.15 : 1 });
+  if (/出拳|挥拳|拳击|攻击|punch|jab|strike|attack/.test(normalized)) push('combat_strike', { hand, strength: speed === '快速' || force === '强' ? 1.12 : 0.95 });
   if (/格挡|防守|block|guard/.test(normalized)) push('combat_block');
   if (/踢|侧踢|kick/.test(normalized)) push('kick', { label: /侧踢|side kick/.test(normalized) ? '侧踢' : TEMPLATE_LABELS.kick });
   if (/打斗|格斗|近身|fight|combat/.test(normalized)) {
@@ -4497,9 +5228,8 @@ function resolveActionPlan(scene: Scene3DState, prompt: string, options?: { dura
     push('combat_block', { strength: 0.85 });
   }
 
-  const targetObject = scene.objects.props.find((item) => prompt.includes(item.name))
-    || scene.objects.characters.find((item) => prompt.includes(item.name))
-    || scene.objects.cameras.find((item) => prompt.includes(item.name));
+  const action = inferSemanticAction(prompt, templates);
+  const targetObject = resolvePromptTargetObject(scene, prompt, action.type);
   if (targetObject) {
     templates.forEach((item) => {
       if (item.id === 'point_at' || item.id === 'pick_up' || item.id === 'put_down') item.targetObjectId = targetObject.id;
@@ -4565,11 +5295,66 @@ function contactPositionForObject(object: { position: Vec3; scale?: Vec3 } | nul
   return vec(object.position.x, object.position.y + Math.max(0.08, height * 0.5), object.position.z);
 }
 
+function cameraFocusTargetPosition(scene: Scene3DState, cameraObject?: CameraObject | null) {
+  if (!cameraObject?.focusObjectId) return null;
+  const character = scene.objects.characters.find((item) => item.id === cameraObject.focusObjectId);
+  if (character) {
+    const height = character.model.normalizedHeight || Math.max(1.2, character.scale.y || 1.7);
+    return vec(character.position.x, character.position.y + height * 0.62, character.position.z);
+  }
+  const prop = scene.objects.props.find((item) => item.id === cameraObject.focusObjectId);
+  return prop ? contactPositionForObject(prop) : null;
+}
+
+function cameraEffectiveTargetPosition(scene: Scene3DState, cameraObject?: CameraObject | null) {
+  void scene;
+  return cameraObject?.targetPosition || vec(0, 1, 0);
+}
+
+function cameraFocusPatchForObject(scene: Scene3DState, cameraObject: CameraObject, focusObjectId?: string) {
+  if (!focusObjectId) return { focusObjectId: undefined };
+  const focusTarget = cameraFocusTargetPosition(scene, { ...cameraObject, focusObjectId });
+  if (!focusTarget) return { focusObjectId: undefined };
+  const viewOffset = subtractVec3(cameraObject.position, cameraObject.targetPosition);
+  return {
+    focusObjectId,
+    targetPosition: focusTarget,
+    position: vec(
+      Number((focusTarget.x + viewOffset.x).toFixed(4)),
+      Number((focusTarget.y + viewOffset.y).toFixed(4)),
+      Number((focusTarget.z + viewOffset.z).toFixed(4))
+    )
+  };
+}
+
 function groundContactPosition(transition: PoseTransition, t: number, lateral = 0, forward = 0) {
   const start = transition.startTransform?.position || vec();
   const end = transition.endTransform?.position || start;
   const base = lerpVec3(start, end, clamp01(t));
   return vec(Number((base.x + lateral).toFixed(4)), Number(start.y.toFixed(4)), Number((base.z + forward).toFixed(4)));
+}
+
+function handContactLimbFromPrompt(prompt: string, fallback: 'left' | 'right' = 'right'): 'leftHand' | 'rightHand' {
+  return inferPromptHand(prompt) === 'left' ? 'leftHand' : fallback === 'left' ? 'leftHand' : 'rightHand';
+}
+
+function semanticTargetPosition(scene: Scene3DState, transition: PoseTransition, fallbackRatio = 0.45) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const target = findSceneObject(scene, semanticPlan?.targetObjectId);
+  if (target) return contactPositionForObject(target);
+  const base = groundContactPosition(transition, fallbackRatio, 0, -0.42);
+  return vec(base.x, base.y + 0.92, base.z);
+}
+
+function releasePositionForThrow(transition: PoseTransition) {
+  const start = transition.startTransform?.position || vec();
+  const direction = transition.actionPlan.universal?.direction || vec(0, 0, -1);
+  const forward = direction.x || direction.z ? direction : vec(0, 0, -1);
+  return vec(
+    Number((start.x + forward.x * 0.28).toFixed(4)),
+    Number((start.y + 1.22).toFixed(4)),
+    Number((start.z + forward.z * 0.72).toFixed(4))
+  );
 }
 
 function buildContactFrames(scene: Scene3DState, transition: PoseTransition, durationSec: number): AnimationContactFrame[] {
@@ -4582,22 +5367,81 @@ function buildContactFrames(scene: Scene3DState, transition: PoseTransition, dur
   const semanticPlan = transition.actionPlan.semanticPlan;
   if (semanticPlan) {
     const target = findSceneObject(scene, semanticPlan.targetObjectId);
-    const targetPosition = contactPositionForObject(target);
+    const targetPosition = target ? contactPositionForObject(target) : semanticTargetPosition(scene, transition);
+    const promptHand = inferPromptHand(transition.actionPrompt);
+    const addHandReach = (timeRatio: number, limb: 'leftHand' | 'rightHand', note: string, kind: AnimationContactFrame['kind'] = 'reach', position = targetPosition) => {
+      pushUnique({
+        timeSec: Number((durationSec * timeRatio).toFixed(3)),
+        kind,
+        targetObjectId: semanticPlan.targetObjectId,
+        limb,
+        position,
+        note
+      });
+    };
+    const addFootLock = (timeRatio: number, limb: 'leftFoot' | 'rightFoot', note: string) => {
+      const lateral = limb === 'leftFoot' ? -0.08 : 0.08;
+      pushUnique({
+        timeSec: Number((durationSec * clamp01(timeRatio)).toFixed(3)),
+        kind: 'foot_lock',
+        limb,
+        position: groundContactPosition(transition, timeRatio, lateral, 0),
+        note
+      });
+    };
     if (semanticPlan.contacts.some((item) => item.contact === 'feet')) {
-      pushUnique({ timeSec: 0, kind: 'foot_lock', limb: 'leftFoot', position: groundContactPosition(transition, 0, -0.08, 0), note: '语义计划锁定左脚贴地' });
-      pushUnique({ timeSec: 0, kind: 'foot_lock', limb: 'rightFoot', position: groundContactPosition(transition, 0, 0.08, 0), note: '语义计划锁定右脚贴地' });
-      pushUnique({ timeSec: Number(durationSec.toFixed(3)), kind: 'foot_lock', limb: 'leftFoot', position: groundContactPosition(transition, 1, -0.08, 0), note: '语义计划在结束时保持左脚贴地' });
-      pushUnique({ timeSec: Number(durationSec.toFixed(3)), kind: 'foot_lock', limb: 'rightFoot', position: groundContactPosition(transition, 1, 0.08, 0), note: '语义计划在结束时保持右脚贴地' });
+      addFootLock(0, 'leftFoot', '语义计划锁定左脚贴地');
+      addFootLock(0, 'rightFoot', '语义计划锁定右脚贴地');
+      const gait = locomotionGaitConfig(semanticPlan.actionType);
+      if (gait) {
+        const contactCount = Math.max(
+          semanticPlan.actionType === 'walk' ? 4 : 6,
+          Math.round(durationSec * gait.cadenceHz * 2)
+        );
+        for (let index = 1; index < contactCount; index += 1) {
+          const ratio = index / contactCount;
+          addFootLock(ratio, index % 2 === 0 ? 'leftFoot' : 'rightFoot', `${index % 2 === 0 ? '左脚' : '右脚'}步态落地点`);
+        }
+      } else if (semanticPlan.actionType === 'push' || semanticPlan.actionType === 'pull' || semanticPlan.actionType === 'crouch' || semanticPlan.actionType === 'block') {
+        [0.32, 0.62, 0.86].forEach((ratio) => {
+          addFootLock(ratio, 'leftFoot', '地面动作左脚稳定支撑');
+          addFootLock(ratio, 'rightFoot', '地面动作右脚稳定支撑');
+        });
+      }
+      addFootLock(1, 'leftFoot', '语义计划在结束时保持左脚贴地');
+      addFootLock(1, 'rightFoot', '语义计划在结束时保持右脚贴地');
     }
-    if (semanticPlan.contacts.some((item) => item.contact === 'hands' || item.contact === 'leftHand')) {
-      pushUnique({ timeSec: Number((durationSec * 0.45).toFixed(3)), kind: 'reach', targetObjectId: semanticPlan.targetObjectId, limb: 'leftHand', position: targetPosition, note: '语义计划要求左手接触目标' });
-    }
-    if (semanticPlan.contacts.some((item) => item.contact === 'hands' || item.contact === 'rightHand')) {
-      pushUnique({ timeSec: Number((durationSec * 0.45).toFixed(3)), kind: 'reach', targetObjectId: semanticPlan.targetObjectId, limb: 'rightHand', position: targetPosition, note: '语义计划要求右手接触目标' });
-    }
-    if (semanticPlan.actionType === 'throw') {
-      const hand = /左/.test(semanticPlan.bodyFocus.join(' ')) ? 'leftHand' : 'rightHand';
-      pushUnique({ timeSec: Number((durationSec * 0.62).toFixed(3)), kind: 'release', targetObjectId: semanticPlan.targetObjectId, limb: hand, position: targetPosition, note: '投掷动作的出手释放点' });
+    if (semanticPlan.actionType === 'push') {
+      const limbs: Array<'leftHand' | 'rightHand'> = promptHand === 'left'
+        ? ['leftHand']
+        : promptHand === 'right'
+          ? ['rightHand']
+          : ['leftHand', 'rightHand'];
+      limbs.forEach((limb) => {
+        addHandReach(0.28, limb, `${MOTION_CONTACT_LABELS[limb]}准备推向目标`, 'reach');
+        addHandReach(0.46, limb, `${MOTION_CONTACT_LABELS[limb]}接触并推动目标`, 'reach');
+        addHandReach(0.86, limb, `${MOTION_CONTACT_LABELS[limb]}保持推力`, 'reach');
+      });
+    } else if (semanticPlan.actionType === 'pull') {
+      const limb = handContactLimbFromPrompt(transition.actionPrompt);
+      const start = transition.startTransform?.position || vec();
+      const pullReleasePosition = vec(start.x, start.y + 0.82, start.z - 0.18);
+      addHandReach(0.18, limb, `${MOTION_CONTACT_LABELS[limb]}伸向目标`, 'reach');
+      addHandReach(0.36, limb, `${MOTION_CONTACT_LABELS[limb]}抓住目标`, 'grasp');
+      addHandReach(0.88, limb, `${MOTION_CONTACT_LABELS[limb]}拉回后释放目标`, 'release', pullReleasePosition);
+    } else if (semanticPlan.actionType === 'throw') {
+      const limb = handContactLimbFromPrompt(transition.actionPrompt);
+      const releasePosition = releasePositionForThrow(transition);
+      addHandReach(0, limb, `${MOTION_CONTACT_LABELS[limb]}握住投掷目标`, 'grasp', targetPosition);
+      addHandReach(0.34, limb, `${MOTION_CONTACT_LABELS[limb]}带动目标蓄力`, 'reach', targetPosition);
+      addHandReach(0.62, limb, '投掷动作的出手释放点', 'release', releasePosition);
+    } else {
+      if (semanticPlan.contacts.some((item) => item.contact === 'hands' || item.contact === 'leftHand')) {
+        addHandReach(0.45, 'leftHand', '语义计划要求左手接触目标');
+      }
+      if (semanticPlan.contacts.some((item) => item.contact === 'hands' || item.contact === 'rightHand')) {
+        addHandReach(0.45, 'rightHand', '语义计划要求右手接触目标');
+      }
     }
   }
   for (const template of transition.actionPlan.templates) {
@@ -4856,6 +5700,337 @@ function sampleCameraMotionAtTime(samples: CameraMotionSample[], timeSec: number
     }
   }
   return samples[samples.length - 1];
+}
+
+function cloneAnimationSample(sample: AnimationClipSample): AnimationClipSample {
+  return {
+    timeSec: sample.timeSec,
+    transform: clonePoseTransform(sample.transform),
+    pose: clonePose(sample.pose),
+    bonePose: cloneBonePose(sample.bonePose),
+    fingerPose: cloneFingerPose(sample.fingerPose),
+    toePose: cloneToePose(sample.toePose),
+    libTvJointAngles: cloneLibTvJointAngles(sample.libTvJointAngles)
+  };
+}
+
+function blendVec3(current: Vec3, target: Vec3, strength: number): Vec3 {
+  return lerpVec3(current, target, clamp01(strength));
+}
+
+function smoothRotationSample(previous: RigRotation, current: RigRotation, next: RigRotation, strength: number) {
+  const midpoint = slerpRotation(previous, next, 0.5);
+  return slerpRotation(current, midpoint, clamp01(strength));
+}
+
+function averageVec3(previous: Vec3, next: Vec3): Vec3 {
+  return {
+    x: (previous.x + next.x) / 2,
+    y: (previous.y + next.y) / 2,
+    z: (previous.z + next.z) / 2
+  };
+}
+
+function motionSmoothingStrength(transition: PoseTransition) {
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (actionType === 'run' || actionType === 'dash' || actionType === 'walk') return { root: 0.18, rotation: 0.22, pose: 0.08 };
+  if (actionType === 'push' || actionType === 'pull') return { root: 0.24, rotation: 0.24, pose: 0.1 };
+  if (actionType === 'throw' || actionType === 'punch' || actionType === 'kick' || actionType === 'side_kick') return { root: 0.18, rotation: 0.18, pose: 0.06 };
+  if (actionType === 'jump' || actionType === 'fall' || actionType === 'crawl') return { root: 0.16, rotation: 0.16, pose: 0.06 };
+  return { root: 0.26, rotation: 0.24, pose: 0.12 };
+}
+
+function shouldPreserveJointDuringSmoothing(transition: PoseTransition, joint: PoseJointKey, sample: AnimationClipSample) {
+  if (joint !== 'leftFoot' && joint !== 'rightFoot') return false;
+  const limb = joint === 'leftFoot' ? 'left' : 'right';
+  const t = transition.durationSec > 0 ? sample.timeSec / transition.durationSec : 0;
+  return footLockPhaseActive(transition, limb, t);
+}
+
+function smoothMotionSamples(transition: PoseTransition, samples: AnimationClipSample[]) {
+  if (samples.length <= 3) return samples;
+  const strength = motionSmoothingStrength(transition);
+  const allowsAirborne = transitionAllowsAirborneMotion(transition);
+  const smoothed = samples.map(cloneAnimationSample);
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const previous = samples[index - 1];
+    const current = samples[index];
+    const next = samples[index + 1];
+    const rootAverage = averageVec3(previous.transform.position, next.transform.position);
+    const rootStrength = strength.root;
+    smoothed[index].transform.position = {
+      ...blendVec3(current.transform.position, rootAverage, rootStrength),
+      y: allowsAirborne
+        ? blendVec3(current.transform.position, rootAverage, rootStrength * 0.45).y
+        : blendVec3(current.transform.position, rootAverage, rootStrength * 0.25).y
+    };
+    smoothed[index].transform.rotation = smoothRotationSample(previous.transform.rotation, current.transform.rotation, next.transform.rotation, strength.rotation);
+    for (const joint of POSE_KEYS) {
+      if (shouldPreserveJointDuringSmoothing(transition, joint, current)) {
+        smoothed[index].pose[joint] = { ...current.pose[joint] };
+        continue;
+      }
+      smoothed[index].pose[joint] = smoothRotationSample(previous.pose[joint], current.pose[joint], next.pose[joint], strength.pose);
+    }
+  }
+  smoothed[0] = cloneAnimationSample(samples[0]);
+  smoothed[smoothed.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return smoothed.map((sample) => ({
+    ...sample,
+    transform: {
+      position: {
+        x: Number(sample.transform.position.x.toFixed(4)),
+        y: Number(sample.transform.position.y.toFixed(4)),
+        z: Number(sample.transform.position.z.toFixed(4))
+      },
+      rotation: {
+        x: Number(sample.transform.rotation.x.toFixed(4)),
+        y: Number(sample.transform.rotation.y.toFixed(4)),
+        z: Number(sample.transform.rotation.z.toFixed(4))
+      },
+      scale: {
+        x: Number(sample.transform.scale.x.toFixed(4)),
+        y: Number(sample.transform.scale.y.toFixed(4)),
+        z: Number(sample.transform.scale.z.toFixed(4))
+      }
+    }
+  }));
+}
+
+function stabilizeGroundedMotionSamples(transition: PoseTransition, samples: AnimationClipSample[]) {
+  if (!groundedMotionActionType(transition) || samples.length <= 2) return samples;
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  const gait = locomotionGaitConfig(actionType);
+  const limits = groundedRootLimitsForAction(actionType);
+  const next = samples.map(cloneAnimationSample);
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const travel = {
+    x: last.transform.position.x - first.transform.position.x,
+    y: 0,
+    z: last.transform.position.z - first.transform.position.z
+  };
+  const travelDistance = Math.hypot(travel.x, travel.z);
+  const travelDirection = travelDistance > 0.0001
+    ? vec(travel.x / travelDistance, 0, travel.z / travelDistance)
+    : normalizedDirection(transition.actionPlan.universal?.direction || vec());
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = transition.durationSec > 0 ? clamp01(sample.timeSec / transition.durationSec) : index / (next.length - 1);
+    const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
+    sample.transform.position.y = Number((baseY + clampMotionNumber(sample.transform.position.y - baseY, limits.minDrop, limits.maxLift)).toFixed(4));
+
+    if (gait) {
+      const leftPlant = gaitFootPlantStrength(actionType, 'left', t, transition.durationSec);
+      const rightPlant = gaitFootPlantStrength(actionType, 'right', t, transition.durationSec);
+      sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, first.pose.leftFoot, leftPlant * 0.55);
+      sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, first.pose.rightFoot, rightPlant * 0.55);
+    } else if (transition.actionPlan.semanticPlan?.contacts.some((item) => item.contact === 'feet')) {
+      sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, first.pose.leftFoot, 0.42);
+      sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, first.pose.rightFoot, 0.42);
+    }
+
+    if (gait && travelDistance > 0.05 && (travelDirection.x || travelDirection.z)) {
+      const expectedX = lerp(first.transform.position.x, last.transform.position.x, t);
+      const expectedZ = lerp(first.transform.position.z, last.transform.position.z, t);
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedX, 0.18).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedZ, 0.18).toFixed(4));
+      const relativeX = sample.transform.position.x - first.transform.position.x;
+      const relativeZ = sample.transform.position.z - first.transform.position.z;
+      const projection = relativeX * travelDirection.x + relativeZ * travelDirection.z;
+      const minProjection = travelDistance * Math.max(0, t - 0.12);
+      const maxProjection = travelDistance * Math.min(1, t + 0.12);
+      const clampedProjection = clampNumber(projection, minProjection, maxProjection);
+      if (Math.abs(clampedProjection - projection) > 0.001) {
+        sample.transform.position.x = Number((sample.transform.position.x + (clampedProjection - projection) * travelDirection.x).toFixed(4));
+        sample.transform.position.z = Number((sample.transform.position.z + (clampedProjection - projection) * travelDirection.z).toFixed(4));
+      }
+    }
+  }
+
+  next[0] = cloneAnimationSample(first);
+  next[next.length - 1] = cloneAnimationSample(last);
+  return next;
+}
+
+function applyBasicMotionContinuity(transition: PoseTransition, samples: AnimationClipSample[]) {
+  if (samples.length <= 2) return samples;
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (!isBasicMotionActionType(actionType)) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const durationSec = Math.max(0.0001, transition.durationSec || last.timeSec || 1);
+  const travelDistance = Math.hypot(
+    last.transform.position.x - first.transform.position.x,
+    last.transform.position.z - first.transform.position.z
+  );
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+
+    if (isLocomotionActionType(actionType)) {
+      const expectedX = lerp(first.transform.position.x, last.transform.position.x, t);
+      const expectedZ = lerp(first.transform.position.z, last.transform.position.z, t);
+      const blendStrength = travelDistance > 0.05 ? 0.68 : 0.92;
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedX, blendStrength).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedZ, blendStrength).toFixed(4));
+      const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
+      const bob = Math.max(0, sample.transform.position.y - baseY);
+      sample.transform.position.y = Number((baseY + Math.min(bob, actionType === 'walk' ? 0.018 : 0.03)).toFixed(4));
+    }
+
+    if (actionType === 'turn') {
+      const turnT = ramp(t, 0.04, 0.94);
+      sample.transform.rotation.y = Number(lerp(first.transform.rotation.y, last.transform.rotation.y, turnT).toFixed(4));
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, lerp(first.transform.position.x, last.transform.position.x, t), 0.72).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, lerp(first.transform.position.z, last.transform.position.z, t), 0.72).toFixed(4));
+    }
+
+    if (actionType === 'jump') {
+      const baseX = lerp(first.transform.position.x, last.transform.position.x, t);
+      const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
+      const baseZ = lerp(first.transform.position.z, last.transform.position.z, t);
+      const lift = Math.max(0.18, transition.actionPlan.universal?.verticalLift || 0.2);
+      const compress = 0.045 * stageWindow(t, 0.02, 0.22);
+      const landing = 0.035 * stageWindow(t, 0.72, 0.98);
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, baseX, 0.62).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, baseZ, 0.62).toFixed(4));
+      sample.transform.position.y = Number((baseY + Math.sin(t * Math.PI) * lift - compress - landing).toFixed(4));
+    }
+  }
+
+  next[0] = cloneAnimationSample(first);
+  next[next.length - 1] = cloneAnimationSample(last);
+  return next;
+}
+
+function smoothCameraMotionSamples(samples: CameraMotionSample[] | undefined) {
+  if (!samples || samples.length <= 3) return samples;
+  const smoothed = samples.map((sample) => ({
+    ...sample,
+    position: { ...sample.position },
+    targetPosition: { ...sample.targetPosition }
+  }));
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const previous = samples[index - 1];
+    const current = samples[index];
+    const next = samples[index + 1];
+    smoothed[index] = {
+      ...current,
+      position: blendVec3(current.position, averageVec3(previous.position, next.position), 0.22),
+      targetPosition: blendVec3(current.targetPosition, averageVec3(previous.targetPosition, next.targetPosition), 0.2),
+      fov: current.fov !== undefined && previous.fov !== undefined && next.fov !== undefined
+        ? Number(lerp(current.fov, (previous.fov + next.fov) / 2, 0.18).toFixed(3))
+        : current.fov
+    };
+  }
+  smoothed[0] = { ...samples[0], position: { ...samples[0].position }, targetPosition: { ...samples[0].targetPosition } };
+  smoothed[smoothed.length - 1] = { ...samples[samples.length - 1], position: { ...samples[samples.length - 1].position }, targetPosition: { ...samples[samples.length - 1].targetPosition } };
+  return smoothed;
+}
+
+function motionQualityNeedsAutoCorrection(report: MotionQualityReport) {
+  return report.issues.some((issue) => (
+    issue.severity === 'error'
+    || issue.metric === 'speed'
+    || issue.metric === 'rotation'
+    || issue.metric === 'foot_lock'
+    || (issue.metric === 'pose' && issue.severity === 'warning')
+  ));
+}
+
+function alignSampleEndpoints(samples: AnimationClipSample[], transition: PoseTransition) {
+  if (!samples.length) return samples;
+  const next = samples.map(cloneAnimationSample);
+  if (transition.startTransform) next[0].transform = clonePoseTransform(transition.startTransform);
+  if (transition.startPose) next[0].pose = clonePose(transition.startPose);
+  if (transition.startBonePose) next[0].bonePose = cloneBonePose(transition.startBonePose);
+  if (transition.startFingerPose) next[0].fingerPose = cloneFingerPose(transition.startFingerPose);
+  if (transition.startToePose) next[0].toePose = cloneToePose(transition.startToePose);
+  if (transition.startLibTvJointAngles) next[0].libTvJointAngles = cloneLibTvJointAngles(transition.startLibTvJointAngles);
+  const last = next.length - 1;
+  if (transition.endTransform) next[last].transform = clonePoseTransform(transition.endTransform);
+  if (transition.endPose) next[last].pose = clonePose(transition.endPose);
+  if (transition.endBonePose) next[last].bonePose = cloneBonePose(transition.endBonePose);
+  if (transition.endFingerPose) next[last].fingerPose = cloneFingerPose(transition.endFingerPose);
+  if (transition.endToePose) next[last].toePose = cloneToePose(transition.endToePose);
+  if (transition.endLibTvJointAngles) next[last].libTvJointAngles = cloneLibTvJointAngles(transition.endLibTvJointAngles);
+  return next;
+}
+
+function clampNonAirborneRootMotion(samples: AnimationClipSample[], transition: PoseTransition) {
+  if (transitionAllowsAirborneMotion(transition) || samples.length <= 2) return samples;
+  const startY = transition.startTransform?.position.y ?? samples[0].transform.position.y;
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  const maxLift = actionType === 'kick' || actionType === 'side_kick' ? 0.055 : 0.045;
+  const minDrop = actionType === 'fall' ? -0.36 : actionType === 'crouch' || actionType === 'crawl' ? -0.24 : -0.16;
+  return samples.map((sample, index) => {
+    if (index === 0 || index === samples.length - 1) return cloneAnimationSample(sample);
+    const next = cloneAnimationSample(sample);
+    next.transform.position.y = Number(clampNumber(next.transform.position.y, startY + minDrop, startY + maxLift).toFixed(4));
+    return next;
+  });
+}
+
+function dampExcessivePoseDeltas(samples: AnimationClipSample[], transition: PoseTransition) {
+  if (samples.length <= 3) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  const threshold = actionType === 'throw' || actionType === 'punch' || actionType === 'kick' || actionType === 'side_kick' ? 48 : 40;
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    for (const joint of POSE_KEYS) {
+      if (shouldPreserveJointDuringSmoothing(transition, joint, samples[index])) continue;
+      const previousDelta = poseJointDelta(samples[index - 1].pose[joint], samples[index].pose[joint]);
+      const nextDelta = poseJointDelta(samples[index].pose[joint], samples[index + 1].pose[joint]);
+      if (Math.max(previousDelta, nextDelta) <= threshold) continue;
+      next[index].pose[joint] = smoothRotationSample(samples[index - 1].pose[joint], samples[index].pose[joint], samples[index + 1].pose[joint], 0.38);
+    }
+  }
+  return next;
+}
+
+function reapplyFootLockPoses(samples: AnimationClipSample[], transition: PoseTransition) {
+  if (!transition.constraints.footLock.enabled || !samples.length) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const leftRef = samples[0].pose.leftFoot;
+  const rightRef = samples[0].pose.rightFoot;
+  next.forEach((sample) => {
+    const t = transition.durationSec > 0 ? sample.timeSec / transition.durationSec : 0;
+    if (transition.constraints.footLock.left && footLockPhaseActive(transition, 'left', t)) sample.pose.leftFoot = { ...leftRef };
+    if (transition.constraints.footLock.right && footLockPhaseActive(transition, 'right', t)) sample.pose.rightFoot = { ...rightRef };
+  });
+  return next;
+}
+
+function autoCorrectMotionSamples(transition: PoseTransition, samples: AnimationClipSample[], report: MotionQualityReport) {
+  const notes: string[] = [];
+  if (!motionQualityNeedsAutoCorrection(report)) {
+    return { samples, notes };
+  }
+  let corrected = samples.map(cloneAnimationSample);
+  const hasRootIssue = report.issues.some((issue) => issue.metric === 'speed' || issue.metric === 'rotation' || issue.metric === 'endpoint');
+  const hasPoseIssue = report.issues.some((issue) => issue.metric === 'pose' || issue.metric === 'foot_lock');
+  if (hasRootIssue) {
+    corrected = stabilizeGroundedMotionSamples(transition, corrected);
+    corrected = smoothMotionSamples(transition, corrected);
+    corrected = smoothMotionSamples(transition, corrected);
+    notes.push('已根据质量检查自动平滑根节点轨迹。');
+  }
+  if (report.issues.some((issue) => issue.message.includes('离地'))) {
+    corrected = clampNonAirborneRootMotion(corrected, transition);
+    notes.push('已根据质量检查限制非跳跃动作离地幅度。');
+  }
+  if (hasPoseIssue) {
+    corrected = applyBasicMotionContinuity(transition, stabilizeGroundedMotionSamples(transition, corrected));
+    corrected = dampExcessivePoseDeltas(corrected, transition);
+    corrected = reapplyFootLockPoses(corrected, transition);
+    notes.push('已根据质量检查降低关节跳变并重应用脚部锁定。');
+  }
+  corrected = alignSampleEndpoints(applyBasicMotionContinuity(transition, stabilizeGroundedMotionSamples(transition, corrected)), transition);
+  return { samples: corrected, notes };
 }
 
 function vecDistance(a: Vec3, b: Vec3) {
@@ -5156,6 +6331,34 @@ function latestContactBefore(contacts: AnimationContactFrame[], propId: string, 
     .sort((a, b) => b.timeSec - a.timeSec)[0];
 }
 
+function semanticPropMotionTransform(base: PoseTransform, prop: PropObject, transition: PoseTransition, sample: AnimationClipSample): PoseTransform | null {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan || semanticPlan.targetObjectId !== prop.id) return null;
+  const durationSec = Math.max(0.0001, transition.animationClip?.durationSec || transition.durationSec || 1);
+  const t = clamp01(sample.timeSec / durationSec);
+  const direction = transition.actionPlan.universal?.direction || vec(0, 0, -1);
+  const forward = direction.x || direction.z ? direction : vec(0, 0, -1);
+  if (semanticPlan.actionType === 'push') {
+    const contact = ramp(t, 0.34, 0.82);
+    const hold = 1 - ramp(t, 0.86, 1);
+    const amount = 0.32 * contact * Math.max(0.35, hold);
+    return {
+      ...base,
+      position: {
+        x: Number((base.position.x + forward.x * amount).toFixed(4)),
+        y: base.position.y,
+        z: Number((base.position.z + forward.z * amount).toFixed(4))
+      },
+      rotation: {
+        x: Number((base.rotation.x + sample.transform.rotation.x * 0.05 * contact).toFixed(3)),
+        y: Number((base.rotation.y + sample.transform.rotation.y * 0.08 * contact).toFixed(3)),
+        z: base.rotation.z
+      }
+    };
+  }
+  return null;
+}
+
 function propPreviewTransform(
   prop: PropObject,
   transition: PoseTransition | null,
@@ -5165,6 +6368,8 @@ function propPreviewTransform(
   const contacts = transition?.animationClip?.contacts || [];
   if (!transition || !sample || !contacts.length) return base;
   const timeSec = sample.timeSec;
+  const semanticMotion = semanticPropMotionTransform(base, prop, transition, sample);
+  if (semanticMotion) return semanticMotion;
   const grasp = latestContactBefore(contacts, prop.id, timeSec, 'grasp');
   if (!grasp) return base;
   const release = latestContactBefore(contacts, prop.id, timeSec, 'release');
@@ -5211,15 +6416,16 @@ function buildPreviewPropTransforms(
 
 function generateTransition(scene: Scene3DState, transition: PoseTransition): PoseTransition {
   const jointProfile = jointAxisProfileForScene(scene);
-  const semanticPlan = transition.actionPlan.semanticPlan;
+  const rootMotionTransition = transitionWithPromptBasicMotionEndpoints(transition);
+  const semanticPlan = rootMotionTransition.actionPlan.semanticPlan;
   const effectiveConstraints: PoseTransitionConstraints = semanticPlan?.contacts.some((item) => item.contact === 'feet')
     ? {
-        ...transition.constraints,
+        ...rootMotionTransition.constraints,
         footLock: { enabled: true, left: true, right: true },
-        jointLimitsEnabled: transition.constraints.jointLimitsEnabled
+        jointLimitsEnabled: rootMotionTransition.constraints.jointLimitsEnabled
       }
-    : transition.constraints;
-  const effectiveTransition = effectiveConstraints === transition.constraints ? transition : { ...transition, constraints: effectiveConstraints };
+    : rootMotionTransition.constraints;
+  const effectiveTransition = effectiveConstraints === rootMotionTransition.constraints ? rootMotionTransition : { ...rootMotionTransition, constraints: effectiveConstraints };
   const warningSet = new Set(transition.actionPlan.notes);
   const { issues } = validateTransition(scene, effectiveTransition);
   if (issues.length) {
@@ -5257,9 +6463,17 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
     const transform = keyframeSample.transform;
     const baseTransform = clonePoseTransform(transform);
     let nextPose = keyframeSample.pose;
-    nextPose = applyUniversalMotionOverlay(nextPose, transform, effectiveTransition.actionPlan.universal, t, jointProfile);
-    for (const template of effectiveTransition.actionPlan.templates) nextPose = applyTemplateOverlay(nextPose, transform, template, t, jointProfile);
+    if (!shouldCompileBasicMotionWithSemanticLayer(effectiveTransition)) {
+      nextPose = applyUniversalMotionOverlay(nextPose, transform, effectiveTransition.actionPlan.universal, t, jointProfile);
+    }
+    for (const template of effectiveTransition.actionPlan.templates) {
+      if (templateAppliesToBasicMotion(template, effectiveTransition)) {
+        nextPose = applyTemplateOverlay(nextPose, transform, template, t, jointProfile);
+      }
+    }
+    nextPose = applySemanticActionStageOverlay(nextPose, transform, effectiveTransition, t, jointProfile);
     nextPose = applyRealisticMotionGuard(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition);
+    nextPose = applyGroundedBalanceAndFooting(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition, t, jointProfile);
     const targets = targetPositionForConstraint(scene, effectiveTransition, transform);
     if (effectiveTransition.constraints.headLookAt.enabled) nextPose = applyHeadLookAt(nextPose, targets.headTarget, targets.origin);
     const hasTemplateHandTarget = effectiveTransition.actionPlan.templates.some((item) => (
@@ -5328,9 +6542,18 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
   };
 
   try {
-    const cameraSamples = buildCameraMotionSamples(scene, effectiveTransition, samples);
-    const animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, samples, contactFrames, jointProfile, cameraSamples));
-    const qualityReport = inspectMotionQuality(effectiveTransition, animationClip);
+    let finalSamples = applyBasicMotionContinuity(effectiveTransition, smoothMotionSamples(effectiveTransition, stabilizeGroundedMotionSamples(effectiveTransition, samples)));
+    let cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples));
+    let animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, finalSamples, contactFrames, jointProfile, cameraSamples));
+    let qualityReport = inspectMotionQuality(effectiveTransition, animationClip);
+    if (motionQualityNeedsAutoCorrection(qualityReport)) {
+      const correction = autoCorrectMotionSamples(effectiveTransition, finalSamples, qualityReport);
+      correction.notes.forEach((note) => warningSet.add(note));
+      finalSamples = correction.samples;
+      cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples));
+      animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, finalSamples, contactFrames, jointProfile, cameraSamples));
+      qualityReport = inspectMotionQuality(effectiveTransition, animationClip);
+    }
     qualityReport.issues.forEach((issue) => {
       if (issue.severity !== 'info') warningSet.add(issue.message);
     });
@@ -5578,6 +6801,7 @@ async function captureSceneCanvas({
   const cropped = await canvasToAspectBlob(canvas, scene.aspectRatio);
   const uploaded = await uploadCanvasBlob(cropped.blob);
   const activeCamera = scene.objects.cameras.find((camera) => camera.id === scene.activeCameraId) || scene.objects.cameras[0];
+  const activeCameraTargetPosition = cameraEffectiveTargetPosition(scene, activeCamera);
   const nextCapture: Capture = {
     id: createId('cap'),
     name: '截图 ' + (scene.captures.length + 1),
@@ -5590,7 +6814,7 @@ async function captureSceneCanvas({
     cameraName: activeCamera?.name,
     fov: activeCamera?.fov || 45,
     cameraPosition: activeCamera?.position || vec(),
-    targetPosition: activeCamera?.targetPosition || vec(),
+    targetPosition: activeCameraTargetPosition,
     aspectRatio: scene.aspectRatio,
     createdAt: new Date().toISOString()
   };
@@ -6030,7 +7254,7 @@ function DirectorStage({
   const [recording, setRecording] = useState(false);
   const [captureCleanFrame, setCaptureCleanFrame] = useState(false);
   const [objectSearch, setObjectSearch] = useState('');
-  const [timelinePreviewNotice, setTimelinePreviewNotice] = useState('');
+  const [timelinePreviewExitConfirmOpen, setTimelinePreviewExitConfirmOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewState>({
     transitionId: scene.activeTransitionId,
     currentTimeSec: 0,
@@ -6046,34 +7270,21 @@ function DirectorStage({
     : activeTransitionCandidate;
   const previewLocked = Boolean(activeTransition?.animationClip && preview.transitionId === activeTransition.id && preview.enabled);
   const previewCleanFrame = Boolean(previewLocked && preview.playing);
-  const timelinePreviewNoticeTimerRef = useRef<number | null>(null);
-  const timelinePreviewClickTimerRef = useRef<number | null>(null);
 
-  useEffect(() => () => {
-    if (timelinePreviewNoticeTimerRef.current) window.clearTimeout(timelinePreviewNoticeTimerRef.current);
-    if (timelinePreviewClickTimerRef.current) window.clearTimeout(timelinePreviewClickTimerRef.current);
-  }, []);
+  useEffect(() => {
+    if (!previewCleanFrame) setTimelinePreviewExitConfirmOpen(false);
+  }, [previewCleanFrame]);
 
   const exitTimelinePreview = () => {
-    if (timelinePreviewNoticeTimerRef.current) window.clearTimeout(timelinePreviewNoticeTimerRef.current);
-    if (timelinePreviewClickTimerRef.current) window.clearTimeout(timelinePreviewClickTimerRef.current);
-    setTimelinePreviewNotice('当前正在播放时间轴，请退出预览再进行操作。');
+    setTimelinePreviewExitConfirmOpen(false);
     setPreview((current) => ({ ...current, transitionId: undefined, currentTimeSec: 0, playing: false, enabled: false }));
     onPatch({ activeTransitionId: undefined }, { history: false });
     onError('');
   };
 
-  const warnTimelinePreviewLocked = () => {
+  const askExitTimelinePreview = () => {
     if (!previewCleanFrame) return;
-    setTimelinePreviewNotice('当前正在播放时间轴，请退出预览再进行操作。');
-    if (timelinePreviewNoticeTimerRef.current) window.clearTimeout(timelinePreviewNoticeTimerRef.current);
-    timelinePreviewNoticeTimerRef.current = window.setTimeout(() => setTimelinePreviewNotice(''), 2200);
-  };
-
-  const scheduleTimelinePreviewNotice = () => {
-    if (!previewCleanFrame) return;
-    if (timelinePreviewClickTimerRef.current) window.clearTimeout(timelinePreviewClickTimerRef.current);
-    timelinePreviewClickTimerRef.current = window.setTimeout(warnTimelinePreviewLocked, 180);
+    setTimelinePreviewExitConfirmOpen(true);
   };
 
 
@@ -6229,7 +7440,25 @@ function DirectorStage({
           ...current.objects,
           [key]: (current.objects as any)[key].map((item: any) => {
             if (item.id !== id) return item;
-            const nextItem = { ...item, ...patch };
+            let nextItem = { ...item, ...patch };
+            if (current.gridSnapEnabled && (patch.position || patch.rotation || patch.scale)) {
+              const gridPatch = gridSnapPatchForChangedAxes(kind, {
+                position: item.position,
+                rotation: item.rotation,
+                scale: item.scale
+              }, patch);
+              const snappedTransform = applyGridSnapToTransform(kind, {
+                position: nextItem.position,
+                rotation: nextItem.rotation,
+                scale: nextItem.scale
+              }, gridPatch);
+              nextItem = {
+                ...nextItem,
+                position: snappedTransform.position,
+                rotation: snappedTransform.rotation,
+                scale: snappedTransform.scale
+              };
+            }
             if (!current.groundEnabled || options.skipGroundClamp) return nextItem;
             if (kind === 'prop') return clampPropToGround(nextItem);
             return nextItem;
@@ -6506,7 +7735,7 @@ function DirectorStage({
       setRecording(false);
       setCaptureCleanFrame(false);
       if (activeTransitionCandidate) {
-        setPreview((current) => ({ ...current, transitionId: activeTransitionCandidate.id, currentTimeSec: 0, playing: false, enabled: true }));
+        setPreview((current) => ({ ...current, transitionId: activeTransitionCandidate.id, currentTimeSec: 0, playing: false, enabled: false }));
       }
     }
   }
@@ -6555,10 +7784,15 @@ function DirectorStage({
                 { value: 'director', label: '导演视图' },
                 { value: 'camera', label: '机位视图' }
               ]}
-              onChange={(value) => onPatch({
-                activeViewMode: value as Scene3DState['activeViewMode'],
-                activeCameraId: scene.activeCameraId || scene.objects.cameras[0]?.id
-              }, { history: false })}
+              onChange={(value) => {
+                const activeViewMode = value as Scene3DState['activeViewMode'];
+                const firstCameraId = scene.objects.cameras[0]?.id;
+                onPatch({
+                  activeViewMode,
+                  activeCameraId: activeViewMode === 'camera' ? firstCameraId : scene.activeCameraId || firstCameraId,
+                  selectedObjectId: activeViewMode === 'camera' ? firstCameraId : scene.selectedObjectId
+                }, { history: false });
+              }}
             />
             <button type="button" onClick={onClose} className="rounded-md border border-white/10 p-1 text-zinc-300 hover:bg-white/10">
               <X className="h-4 w-4" />
@@ -6606,38 +7840,55 @@ function DirectorStage({
                 />
               </Suspense>
             </ThreeCanvas>
-            {scene.compositionGuideEnabled && !captureCleanFrame && !previewCleanFrame && <CompositionGuide />}
             {previewCleanFrame && (
               <div
                 className="absolute inset-0 z-20 cursor-not-allowed bg-transparent"
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  scheduleTimelinePreviewNotice();
+                  askExitTimelinePreview();
                 }}
                 onDoubleClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  if (timelinePreviewClickTimerRef.current) window.clearTimeout(timelinePreviewClickTimerRef.current);
-                  exitTimelinePreview();
+                  askExitTimelinePreview();
                 }}
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  warnTimelinePreviewLocked();
                 }}
                 onPointerMove={(event) => {
                   if (event.buttons !== 1) return;
                   event.preventDefault();
                   event.stopPropagation();
-                  warnTimelinePreviewLocked();
+                  askExitTimelinePreview();
                 }}
-                title={'当前正在播放时间轴，请退出预览再进行操作。'}
+                title={'当前正在播放时间轴动态'}
               />
             )}
-            {timelinePreviewNotice && (
-              <div className="pointer-events-none absolute left-1/2 top-4 z-30 max-w-[88%] -translate-x-1/2 rounded-md border border-amber-400/35 bg-black/80 px-3 py-2 text-center text-[12px] font-medium text-amber-100 shadow-lg backdrop-blur">
-                {timelinePreviewNotice}
+            {timelinePreviewExitConfirmOpen && previewCleanFrame && (
+              <div
+                className="absolute left-1/2 top-1/2 z-40 w-[min(360px,86%)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[#10131b] p-4 text-center shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="text-sm font-semibold text-zinc-100">当前正在播放时间轴动态</div>
+                <div className="mt-2 text-[12px] leading-relaxed text-zinc-400">是否要退出预览？确认后会停止播放并回到可编辑状态，取消则继续预览。</div>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTimelinePreviewExitConfirmOpen(false)}
+                    className="h-8 rounded-md border border-white/10 bg-white/5 text-[12px] font-medium text-zinc-200 hover:bg-white/10"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exitTimelinePreview}
+                    className="h-8 rounded-md border border-violet-400/40 bg-violet-500/20 text-[12px] font-medium text-violet-100 hover:bg-violet-500/30"
+                  >
+                    确认退出
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -6708,7 +7959,7 @@ function SceneViewport({
   const suppressSceneSelectUntilRef = useRef(0);
   const activeCamera = scene.objects.cameras.find((item) => item.id === scene.activeCameraId) || scene.objects.cameras[0];
   const previewTransition = scene.poseTransitions.find((item) => item.id === previewTransitionId) || null;
-  const previewCameraActive = Boolean(previewSample && previewTransition?.animationClip?.cameraSamples?.length);
+  const previewCameraActive = Boolean(previewLocked && previewSample && previewTransition?.animationClip?.cameraSamples?.length);
   const previewCharacterId = previewTransition?.characterId;
   const previewPropTransforms = useMemo(
     () => (previewLocked ? buildPreviewPropTransforms(scene, previewTransition, previewSample) : {}),
@@ -6726,12 +7977,12 @@ function SceneViewport({
 
   useEffect(() => {
     if (!activeCamera || dragging) return;
-    const previewCameraSample = previewSample && previewTransition?.animationClip?.cameraSamples?.length
+    const previewCameraSample = previewCameraActive && previewSample && previewTransition?.animationClip?.cameraSamples?.length
       ? sampleCameraMotionAtTime(previewTransition.animationClip.cameraSamples, previewSample.timeSec)
       : undefined;
     if (scene.activeViewMode !== 'camera' && !previewCameraSample) return;
     const cameraPosition = previewCameraSample?.position || activeCamera.position;
-    const cameraLookTarget = previewCameraSample?.targetPosition || activeCamera.targetPosition;
+    const cameraLookTarget = previewCameraSample?.targetPosition || cameraEffectiveTargetPosition(scene, activeCamera);
     camera.position.set(cameraPosition.x, cameraPosition.y, cameraPosition.z);
     camera.lookAt(new THREE.Vector3(cameraLookTarget.x, cameraLookTarget.y, cameraLookTarget.z));
     if ('fov' in camera) {
@@ -6742,7 +7993,7 @@ function SceneViewport({
       perspectiveCamera.filmOffset = projection.filmOffset;
       perspectiveCamera.updateProjectionMatrix();
     }
-  }, [scene.activeViewMode, activeCamera, camera, dragging, previewSample, previewTransition]);
+  }, [scene, activeCamera, camera, dragging, previewCameraActive, previewSample, previewTransition]);
   const handleTransformDragging = (nextDragging: boolean) => {
     suppressSceneSelectUntilRef.current = Date.now() + (nextDragging ? 240 : 420);
     onDragging(nextDragging);
@@ -6907,7 +8158,7 @@ function SceneViewport({
             onUpdateObject={onUpdateObject}
           >
             <CameraRig
-              cameraObject={cameraObject}
+              cameraObject={{ ...cameraObject, targetPosition: cameraEffectiveTargetPosition(scene, cameraObject) }}
               selected={scene.selectedObjectId === cameraObject.id || scene.activeCameraId === cameraObject.id}
               onSelect={() => onPatch({ selectedObjectId: cameraObject.id }, { history: false })}
             />
@@ -7082,8 +8333,11 @@ function cameraSampleForMotion(baseCamera: CameraObject | undefined, config: Cam
 function buildCameraMotionSamples(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[]): CameraMotionSample[] | undefined {
   if (!transition.cameraMotion.enabled || transition.cameraMotion.type === 'none') return undefined;
   const baseCamera = scene.objects.cameras.find((item) => item.id === scene.activeCameraId) || scene.objects.cameras[0];
+  const focusedBaseCamera = baseCamera
+    ? { ...baseCamera, targetPosition: cameraEffectiveTargetPosition(scene, baseCamera) }
+    : undefined;
   const cameraSamples = samples
-    .map((sample) => cameraSampleForMotion(baseCamera, transition.cameraMotion, sample))
+    .map((sample) => cameraSampleForMotion(focusedBaseCamera, transition.cameraMotion, sample))
     .filter((sample): sample is CameraMotionSample => Boolean(sample));
   return cameraSamples.length ? cameraSamples : undefined;
 }
@@ -7124,7 +8378,7 @@ function Transformable({
   const previousGroundEnabledRef = useRef(scene.groundEnabled);
   const previousGroundSnapKeyRef = useRef(groundSnapKey);
   const initialGroundSnapRef = useRef(false);
-  const deferredGroundSnapFramesRef = useRef(0);
+  const groundSnapSettleRef = useRef<{ frames: number; latestGroundedY: number | null }>({ frames: 0, latestGroundedY: null });
   const displayTransform = scene.groundEnabled ? clampTransformToGround(kind, objectTransform, collisionSource) : objectTransform;
   const shouldAutoSnapToGround = kind === 'character' && groundSnapEnabled;
   const [controlPivotOffset, setControlPivotOffset] = useState<Vec3>(() => vec());
@@ -7200,7 +8454,15 @@ function Transformable({
   const snapRenderedObjectToGround = (group: THREE.Group) => {
     if (!scene.groundEnabled || !shouldAutoSnapToGround) return false;
     const groundedY = getRenderedGroundY(group);
-    if (Math.abs(group.position.y - groundedY) < 0.001) return false;
+    if (!Number.isFinite(groundedY)) return false;
+    const previousGroundedY = groundSnapSettleRef.current.latestGroundedY;
+    groundSnapSettleRef.current.latestGroundedY = groundedY;
+    if (
+      Math.abs(group.position.y - groundedY) < 0.001 &&
+      (previousGroundedY === null || Math.abs(previousGroundedY - groundedY) < 0.001)
+    ) {
+      return false;
+    }
     group.position.y = Number(groundedY.toFixed(3));
     group.updateMatrixWorld(true);
     return true;
@@ -7216,6 +8478,7 @@ function Transformable({
       return true;
     }
     const groundedY = getRenderedGroundY(group);
+    if (!Number.isFinite(groundedY)) return false;
     if (group.position.y >= groundedY - 0.001) return false;
     group.position.y = Number(groundedY.toFixed(3));
     group.updateMatrixWorld(true);
@@ -7230,7 +8493,10 @@ function Transformable({
     if (!group || !scene.groundEnabled || kind !== 'character' || draggingRef.current) return;
     const shouldSnapToStandard = shouldAutoSnapToGround && (groundJustEnabled || groundSnapKeyChanged || !initialGroundSnapRef.current);
     initialGroundSnapRef.current = true;
-    if (shouldSnapToStandard) deferredGroundSnapFramesRef.current = Math.max(deferredGroundSnapFramesRef.current, 12);
+    if (shouldSnapToStandard) {
+      groundSnapSettleRef.current.latestGroundedY = null;
+      groundSnapSettleRef.current.frames = Math.max(groundSnapSettleRef.current.frames, GROUND_SNAP_SETTLE_FRAMES);
+    }
     const changed = shouldSnapToStandard
       ? snapRenderedObjectToGround(group)
       : clampRenderedObjectToGround(group);
@@ -7239,10 +8505,10 @@ function Transformable({
     onUpdateObject(kind, id, nextTransform, { history: false, skipGroundClamp: true });
   }, [displayTransform.position.x, displayTransform.position.y, displayTransform.position.z, displayTransform.rotation.x, displayTransform.rotation.y, displayTransform.rotation.z, displayTransform.scale.x, displayTransform.scale.y, displayTransform.scale.z, groundSnapKey, id, kind, scene.groundEnabled, shouldAutoSnapToGround]);
   useFrame(() => {
-    if (!scene.groundEnabled || kind !== 'character' || draggingRef.current || deferredGroundSnapFramesRef.current <= 0) return;
+    if (!scene.groundEnabled || kind !== 'character' || draggingRef.current || groundSnapSettleRef.current.frames <= 0) return;
     const group = ref.current;
     if (!group) return;
-    deferredGroundSnapFramesRef.current -= 1;
+    groundSnapSettleRef.current.frames -= 1;
     const changed = shouldAutoSnapToGround
       ? snapRenderedObjectToGround(group)
       : clampRenderedObjectToGround(group);
@@ -7317,6 +8583,9 @@ function Transformable({
         object={ref}
         mode={transformMode}
         size={controlSize}
+        translationSnap={scene.gridSnapEnabled ? GRID_SNAP_STEP : undefined}
+        rotationSnap={scene.gridSnapEnabled ? THREE.MathUtils.degToRad(GRID_ROTATION_SNAP_DEG) : undefined}
+        scaleSnap={scene.gridSnapEnabled ? GRID_SCALE_SNAP_STEP : undefined}
         onMouseDown={() => {
           onPointerDown?.();
           draggingRef.current = true;
@@ -8154,7 +9423,10 @@ function ObjectPanel({
             active={scene.selectedObjectId === item.id}
             visible={item.visible}
             locked={item.locked}
-            onSelect={() => onPatch({ selectedObjectId: item.id }, { history: false })}
+            onSelect={() => onPatch({
+              selectedObjectId: item.id,
+              ...(scene.activeViewMode === 'camera' ? { activeCameraId: item.id } : {})
+            }, { history: false })}
             onRename={(name) => onUpdateObject('camera', item.id, { name })}
             onToggleVisible={() => onUpdateObject('camera', item.id, { visible: !item.visible })}
             onToggleLocked={() => onUpdateObject('camera', item.id, { locked: !item.locked })}
@@ -8231,6 +9503,12 @@ function PropertyPanel({
   const prop = scene.objects.props.find((item) => item.id === selectedId);
   const camera = scene.objects.cameras.find((item) => item.id === selectedId);
   const light = scene.objects.lights.find((item) => item.id === selectedId);
+  const cameraFocusOptions = ['none', ...scene.objects.characters.map((item) => item.id), ...scene.objects.props.map((item) => item.id)];
+  const cameraFocusLabels: Record<string, string> = {
+    none: '无（手动目标）',
+    ...Object.fromEntries(scene.objects.characters.map((item) => [item.id, `角色：${item.name}`])),
+    ...Object.fromEntries(scene.objects.props.map((item) => [item.id, `道具：${item.name}`]))
+  };
   const characterUniformScale = character
     ? Number(((Math.abs(character.scale.x || 1) + Math.abs(character.scale.y || 1) + Math.abs(character.scale.z || 1)) / 3).toFixed(2))
     : 1;
@@ -8849,7 +10127,7 @@ function PropertyPanel({
       }, plan);
       patchTransition(transition.id, merged, { label: 'AI 生成动态' });
       onSelectTransition(transition.id);
-      onPreviewChange((current) => ({ ...current, transitionId: transition.id, currentTimeSec: 0, playing: false, enabled: true }));
+      onPreviewChange((current) => ({ ...current, transitionId: transition.id, currentTimeSec: 0, playing: false, enabled: false }));
       onError(merged.error || merged.warnings.join(' '));
     } catch (error: any) {
       const message = error?.message || 'AI 生成失败';
@@ -8867,7 +10145,7 @@ function PropertyPanel({
         error: message
       }, { label: 'AI 生成失败' });
       onSelectTransition(transition.id);
-      onPreviewChange((current) => ({ ...current, transitionId: transition.id, currentTimeSec: 0, playing: false, enabled: true }));
+      onPreviewChange((current) => ({ ...current, transitionId: transition.id, currentTimeSec: 0, playing: false, enabled: false }));
       onError(fallbackNote);
     } finally {
       setMotionGenerating(false);
@@ -9132,7 +10410,6 @@ function PropertyPanel({
           <ToggleRow label="地面网格线" checked={scene.groundGridEnabled} onChange={(groundGridEnabled) => onPatch({ groundGridEnabled }, { label: groundGridEnabled ? '显示地面网格线' : '隐藏地面网格线' })} />
           <ToggleRow label="运动轨迹线" checked={scene.motionPathEnabled} onChange={(motionPathEnabled) => onPatch({ motionPathEnabled }, { label: motionPathEnabled ? '显示运动轨迹线' : '隐藏运动轨迹线' })} />
           <ToggleRow label="角色标签" checked={scene.characterLabelsEnabled} onChange={(characterLabelsEnabled) => onPatch({ characterLabelsEnabled }, { label: characterLabelsEnabled ? '显示角色标签' : '隐藏角色标签' })} />
-          <ToggleRow label="构图参考线" checked={scene.compositionGuideEnabled} onChange={(compositionGuideEnabled) => onPatch({ compositionGuideEnabled }, { label: compositionGuideEnabled ? '显示构图参考线' : '隐藏构图参考线' })} />
           <ToggleRow label="网格吸附" checked={scene.gridSnapEnabled} onChange={(gridSnapEnabled) => onPatch({ gridSnapEnabled }, { label: gridSnapEnabled ? '开启网格吸附' : '关闭网格吸附' })} />
         </Panel>
       )}
@@ -9262,8 +10539,19 @@ function PropertyPanel({
       {camera && (
         <Panel title="机位属性" icon={<Camera />}>
           <TextField label="名称" value={camera.name} disabled={camera.locked} onChange={(name) => onUpdateObject('camera', camera.id, { name })} />
+          <SelectField
+            label="聚焦对象"
+            value={camera.focusObjectId || 'none'}
+            options={cameraFocusOptions}
+            labels={cameraFocusLabels}
+            disabled={camera.locked}
+            onChange={(focusObjectId) => {
+              const nextFocusObjectId = focusObjectId === 'none' ? undefined : focusObjectId;
+              onUpdateObject('camera', camera.id, cameraFocusPatchForObject(scene, camera, nextFocusObjectId));
+            }}
+          />
           <VectorField label="位置" value={camera.position} sliderMin={-10} sliderMax={10} sliderStep={0.01} disabled={camera.locked} onChange={(position) => updateObjectLive('camera', camera.id, { position })} onCommitStart={() => beginObjectEdit('camera', camera.id)} onCommitEnd={() => commitObjectEdit('camera', camera.id)} />
-          <VectorField label="目标" value={camera.targetPosition} sliderMin={-10} sliderMax={10} sliderStep={0.01} disabled={camera.locked} onChange={(targetPosition) => updateObjectLive('camera', camera.id, { targetPosition })} onCommitStart={() => beginObjectEdit('camera', camera.id)} onCommitEnd={() => commitObjectEdit('camera', camera.id)} />
+          <VectorField label="镜头转向" value={camera.targetPosition} sliderMin={-10} sliderMax={10} sliderStep={0.01} disabled={camera.locked} onChange={(targetPosition) => updateObjectLive('camera', camera.id, { targetPosition })} onCommitStart={() => beginObjectEdit('camera', camera.id)} onCommitEnd={() => commitObjectEdit('camera', camera.id)} />
           <SelectField label="镜头" value={camera.lensType} options={CAMERA_LENS_OPTIONS.map((item) => item.id)} labels={CAMERA_LENS_LABELS} disabled={camera.locked} onChange={(lensType) => onUpdateObject('camera', camera.id, cameraLensPatch(lensType as CameraLensType))} />
           <NumberField label="视角" value={camera.fov} min={8} max={120} step={1} disabled={camera.locked} onChange={(fov) => updateObjectLive('camera', camera.id, { fov })} onCommitStart={() => beginObjectEdit('camera', camera.id)} onCommitEnd={() => commitObjectEdit('camera', camera.id)} />
           <NumberField label="鱼眼" value={camera.fisheyeStrength} min={0} max={1} step={0.01} sliderStep={0.01} disabled={camera.locked} onChange={(fisheyeStrength) => updateObjectLive('camera', camera.id, { fisheyeStrength })} onCommitStart={() => beginObjectEdit('camera', camera.id)} onCommitEnd={() => commitObjectEdit('camera', camera.id)} />
@@ -9342,7 +10630,7 @@ function MiniTimeline({ transition, preview, onPreviewChange, recording, onRecor
         <button
           type="button"
           disabled={!transition}
-          onClick={() => onPreviewChange((state) => ({ ...state, transitionId: transition?.id, loop: !state.loop, enabled: true }))}
+          onClick={() => onPreviewChange((state) => ({ ...state, transitionId: transition?.id, loop: !state.loop }))}
           className={`h-6 rounded border px-2 text-[10px] ${preview.loop ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100' : 'border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10'} disabled:opacity-45`}
         >
           循环
@@ -9647,26 +10935,38 @@ function TimelineEndpointRow({ title, timeLabel, saved, updated, onSave, onJump,
 }
 
 function CameraMotionPanel({ value, durationSec, characterId, onChange }: { value: CameraMotionConfig; durationSec: number; characterId?: string; onChange: (value: CameraMotionConfig) => void }) {
+  const [expanded, setExpanded] = useState(false);
   const patch = (next: Partial<CameraMotionConfig>) => onChange(normalizeCameraMotion({ ...value, ...next }, durationSec, characterId));
   return (
     <div className="space-y-2 rounded-md border border-white/10 bg-black/20 p-2">
       <div className="flex items-center justify-between gap-2">
-        <div>
-          <div className="text-[10px] font-medium text-zinc-200">{'镜头运动'}</div>
-          <div className="text-[10px] text-zinc-500">{'和动态时间轴同步'}</div>
-        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-0.5 py-0.5 text-left hover:bg-white/5"
+        >
+          <span className={expanded ? 'rotate-90 shrink-0 text-[10px] text-zinc-500 transition-transform' : 'shrink-0 text-[10px] text-zinc-500 transition-transform'}>{'>'}</span>
+          <span className="min-w-0">
+            <span className="block text-[10px] font-medium text-zinc-200">{'镜头运动'}</span>
+            <span className="block truncate text-[10px] text-zinc-500">{value.enabled && value.type !== 'none' ? CAMERA_MOTION_LABELS[value.type] : '默认关闭，和动态时间轴同步'}</span>
+          </span>
+        </button>
         <button type="button" onClick={() => patch({ enabled: !value.enabled, type: !value.enabled && value.type === 'none' ? 'dolly_in' : value.type })} className={value.enabled ? 'h-6 rounded border border-emerald-400/30 bg-emerald-400/10 px-2 text-[10px] text-emerald-100' : 'h-6 rounded border border-white/10 bg-white/5 px-2 text-[10px] text-zinc-300'}>{value.enabled ? '开启' : '关闭'}</button>
       </div>
-      <SelectField label={'运镜类型'} value={value.type} options={CAMERA_MOTION_OPTIONS.map((item) => item.id)} labels={CAMERA_MOTION_LABELS} onChange={(type) => patch({ type: type as CameraMotionType, enabled: type !== 'none' })} />
-      <NumberField label={'强度'} value={value.intensity} min={0} max={1} step={0.01} sliderMin={0} sliderMax={1} sliderStep={0.01} onChange={(intensity) => patch({ intensity })} />
-      <div className="grid grid-cols-2 gap-2">
-        <NumberField label={'开始'} value={value.startTimeSec} min={0} max={durationSec} step={0.01} sliderMin={0} sliderMax={durationSec} sliderStep={0.01} onChange={(startTimeSec) => patch({ startTimeSec })} />
-        <NumberField label={'结束'} value={value.endTimeSec} min={0} max={durationSec} step={0.01} sliderMin={0} sliderMax={durationSec} sliderStep={0.01} onChange={(endTimeSec) => patch({ endTimeSec })} />
-      </div>
-      <NumberField label={'距离'} value={value.distance} min={0} max={8} step={0.05} sliderMin={0} sliderMax={8} sliderStep={0.05} onChange={(distance) => patch({ distance })} />
-      <NumberField label={'高度偏移'} value={value.heightOffset} min={-4} max={4} step={0.05} sliderMin={-4} sliderMax={4} sliderStep={0.05} onChange={(heightOffset) => patch({ heightOffset })} />
-      <NumberField label={'环绕角度'} value={value.orbitAngleDeg} min={-360} max={360} step={1} sliderMin={-360} sliderMax={360} sliderStep={1} onChange={(orbitAngleDeg) => patch({ orbitAngleDeg })} />
-      <ToggleRow label={'保持入画'} checked={value.keepCharacterInFrame} onChange={(keepCharacterInFrame) => patch({ keepCharacterInFrame })} />
+      {expanded && (
+        <div className="space-y-2">
+          <SelectField label={'运镜类型'} value={value.type} options={CAMERA_MOTION_OPTIONS.map((item) => item.id)} labels={CAMERA_MOTION_LABELS} onChange={(type) => patch({ type: type as CameraMotionType, enabled: type !== 'none' })} />
+          <NumberField label={'强度'} value={value.intensity} min={0} max={1} step={0.01} sliderMin={0} sliderMax={1} sliderStep={0.01} onChange={(intensity) => patch({ intensity })} />
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField label={'开始'} value={value.startTimeSec} min={0} max={durationSec} step={0.01} sliderMin={0} sliderMax={durationSec} sliderStep={0.01} onChange={(startTimeSec) => patch({ startTimeSec })} />
+            <NumberField label={'结束'} value={value.endTimeSec} min={0} max={durationSec} step={0.01} sliderMin={0} sliderMax={durationSec} sliderStep={0.01} onChange={(endTimeSec) => patch({ endTimeSec })} />
+          </div>
+          <NumberField label={'距离'} value={value.distance} min={0} max={8} step={0.05} sliderMin={0} sliderMax={8} sliderStep={0.05} onChange={(distance) => patch({ distance })} />
+          <NumberField label={'高度偏移'} value={value.heightOffset} min={-4} max={4} step={0.05} sliderMin={-4} sliderMax={4} sliderStep={0.05} onChange={(heightOffset) => patch({ heightOffset })} />
+          <NumberField label={'环绕角度'} value={value.orbitAngleDeg} min={-360} max={360} step={1} sliderMin={-360} sliderMax={360} sliderStep={1} onChange={(orbitAngleDeg) => patch({ orbitAngleDeg })} />
+          <ToggleRow label={'保持入画'} checked={value.keepCharacterInFrame} onChange={(keepCharacterInFrame) => patch({ keepCharacterInFrame })} />
+        </div>
+      )}
     </div>
   );
 }
@@ -10508,17 +11808,6 @@ function DeleteButton({ disabled, onClick }: { disabled?: boolean; onClick: () =
   return (
     <button type="button" disabled={disabled} onClick={onClick} className="h-8 rounded-md border border-red-500/25 bg-red-500/10 text-xs text-red-200 disabled:opacity-40">
       <Trash2 className="mr-1 inline h-3.5 w-3.5" />{'删除'}</button>
-  );
-}
-
-function CompositionGuide() {
-  return (
-    <div className="pointer-events-none absolute inset-0">
-      <div className="absolute left-1/3 top-0 h-full border-l border-white/20" />
-      <div className="absolute left-2/3 top-0 h-full border-l border-white/20" />
-      <div className="absolute left-0 top-1/3 w-full border-t border-white/20" />
-      <div className="absolute left-0 top-2/3 w-full border-t border-white/20" />
-    </div>
   );
 }
 
