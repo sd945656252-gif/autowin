@@ -93,7 +93,7 @@ export interface CanvasNode {
   original_uploaded_images?: string[];
   original_generated_media?: string;
   video_generation_mode?: 'text_to_video' | 'image_to_video' | 'first_last_frame' | 'reference_to_video' | 'video_edit' | 'all_in_one_reference' | 'needs_user_choice';
-  video_media_list?: { url: string; assetId?: string; type: 'image' | 'video' | 'audio'; name: string; duration?: string; }[];
+  video_media_list?: { url: string; assetId?: string; type: 'image' | 'video' | 'audio'; name: string; duration?: string; durationMs?: number; }[];
   imageGenerationMode?: 'auto' | 'text_to_image' | 'image_to_image' | 'image_edit';
   imageInputs?: {
     referenceImageAssetIds?: string[];

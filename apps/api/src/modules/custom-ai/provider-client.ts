@@ -51,7 +51,8 @@ export function toProviderUrl(baseUrl: string, modelName?: string, stream = fals
   const isExplicitGeminiUrl = lowerBase.includes("generatecontent") || lowerBase.includes("streamgeneratecontent");
   const isGeminiModel = lowerModel.includes("gemini");
   const hasOpenAiPath = lowerBase.includes("chat/completions");
-  const isGeminiNative = isExplicitGeminiUrl || (isGeminiModel && !hasOpenAiPath);
+  const isOpenAiCompatibleBase = /\/v\d+\/?$/.test(lowerBase) || lowerBase.includes("openai");
+  const isGeminiNative = isExplicitGeminiUrl || (isGeminiModel && !hasOpenAiPath && !isOpenAiCompatibleBase);
 
   if (isGeminiNative || hasOpenAiPath || lowerBase.includes("v1/completions")) {
     const url = stream && isGeminiNative && lowerBase.includes("generatecontent") && !lowerBase.includes("streamgeneratecontent")
@@ -72,8 +73,9 @@ function normalizeTextAdapter(capabilities?: any, baseUrl?: string, modelName?: 
   const lowerBase = String(baseUrl || "").toLowerCase();
   const lowerModel = String(modelName || "").toLowerCase();
   const hasOpenAiPath = lowerBase.includes("chat/completions");
+  const isOpenAiCompatibleBase = /\/v\d+\/?$/.test(lowerBase) || lowerBase.includes("openai");
   const isExplicitGeminiUrl = lowerBase.includes("generatecontent") || lowerBase.includes("streamgeneratecontent");
-  if (isExplicitGeminiUrl || (lowerModel.includes("gemini") && !hasOpenAiPath)) return "gemini-native";
+  if (isExplicitGeminiUrl || (lowerModel.includes("gemini") && !hasOpenAiPath && !isOpenAiCompatibleBase)) return "gemini-native";
   return "openai-chat";
 }
 

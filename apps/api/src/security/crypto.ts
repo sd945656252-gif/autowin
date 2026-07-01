@@ -3,8 +3,11 @@ import { HttpError } from "../shared/http";
 
 export function getEncryptionKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY;
-  if (!raw || Buffer.byteLength(raw, "utf8") < 32) {
-    throw new Error("ENCRYPTION_KEY must be configured with at least 32 bytes.");
+  if (!raw || Buffer.byteLength(raw, "utf8") < 31) {
+    throw new HttpError(500, "ENCRYPTION_KEY must be configured with at least 31 bytes before saving API keys.", "ENCRYPTION_KEY_TOO_SHORT", {
+      currentBytes: raw ? Buffer.byteLength(raw, "utf8") : 0,
+      requiredBytes: 31
+    });
   }
   return crypto.createHash("sha256").update(raw).digest();
 }
