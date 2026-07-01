@@ -38,6 +38,8 @@ function slugPart(value: unknown, fallback: string) {
 }
 
 function inferTextProviderAdapter(input: { provider?: unknown; modelName?: unknown }) {
+  const provider = String(input.provider || "").toLowerCase();
+  if (provider.includes("compatible") || provider.includes("openrouter")) return "openai-chat";
   const combined = `${input.provider || ""} ${input.modelName || ""}`.toLowerCase();
   if (combined.includes("gemini") || combined.includes("google")) return "gemini-native";
   return "openai-chat";

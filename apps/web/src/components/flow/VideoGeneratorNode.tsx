@@ -215,16 +215,24 @@ export default function VideoGeneratorNode({
           : '未检测到参考素材，当前按文生视频处理。';
 
   // Media helper for retrieving durations
+  const formatDurationFromMs = (durationMs: number) => {
+    const sec = Math.max(0, Math.round(durationMs / 1000));
+    const minutes = Math.floor(sec / 60);
+    const seconds = sec % 60;
+    return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+  };
+
   const getMediaDuration = (url: string, type: 'video' | 'audio'): Promise<string> => {
     return new Promise((resolve) => {
       const element = document.createElement(type);
       element.src = url;
       element.preload = 'metadata';
       element.onloadedmetadata = () => {
-        const sec = Math.round(element.duration || 0);
-        const minutes = Math.floor(sec / 60);
-        const seconds = sec % 60;
-        resolve(`${minutes}:${seconds < 10 ? '0' : ''}${seconds}`);
+        if (Number.isFinite(element.duration) && element.duration > 0) {
+          resolve(formatDurationFromMs(element.duration * 1000));
+          return;
+        }
+        resolve(type === 'video' ? '0:05' : '0:10');
       };
       element.onerror = () => {
         resolve(type === 'video' ? '0:05' : '0:10');
@@ -234,7 +242,7 @@ export default function VideoGeneratorNode({
   };
 
   // Adjust generator mode based on current uploads
-  const adjustGenerationModeAndFields = (files: { url: string; assetId?: string; type: 'image' | 'video' | 'audio'; name: string; duration?: string; }[]): { video_generation_mode: NonNullable<CanvasNode['video_generation_mode']>; videoInputs: CanvasNode['videoInputs'] } => {
+  const adjustGenerationModeAndFields = (files: NonNullable<CanvasNode['video_media_list']>): { video_generation_mode: NonNullable<CanvasNode['video_generation_mode']>; videoInputs: CanvasNode['videoInputs'] } => {
     const imgsCount = files.filter(f => f.type === 'image').length;
     const hasVOrA = files.some(f => f.type === 'video' || f.type === 'audio');
     const imageAssetIds = files.filter(f => f.type === 'image' && f.assetId).map(f => f.assetId!)
@@ -402,7 +410,7 @@ export default function VideoGeneratorNode({
             const permanentUrl = await makeUrlPermanent(data.url, 'uploaded_ref');
             let durationStr: string | undefined = undefined;
             if (fileType === 'video' || fileType === 'audio') {
-              durationStr = await getMediaDuration(permanentUrl, fileType);
+              durationStr = durationStr || await getMediaDuration(permanentUrl, fileType);
             }
 
             // Sync back to node state once ready

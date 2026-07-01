@@ -1043,6 +1043,47 @@ export default function Canvas({ activeNode, nodes, onUpdateNodes, currentUserRo
                   return [...prevNodes, childNode];
                 });
               }}
+              onCreateRecordedVideoNode={({ video, transition }) => {
+                onUpdateNodes((prevNodes) => {
+                  const sourceNode = prevNodes.find(n => n.id === node.id);
+                  if (!sourceNode || !video.mediaUrl || !video.mediaAssetId) return prevNodes;
+                  const childNode: CanvasNode = {
+                    id: `node_scene3d_recorded_video_${Date.now()}`,
+                    name: '3D导演台录制视频',
+                    type: '视频生成',
+                    x: sourceNode.x + 460,
+                    y: sourceNode.y + 560,
+                    parentId: sourceNode.id,
+                    collapsed: false,
+                    status: '已录制',
+                    prompt: transition.actionPrompt || `3D导演台时间轴录制：${transition.name}`,
+                    scene3dMotionPrompt: transition.actionPrompt || '',
+                    model: '',
+                    use_custom_api: false,
+                    generated_media: video.mediaUrl,
+                    generated_media_asset_id: video.mediaAssetId,
+                    video_generation_mode: 'video_edit',
+                    videoInputs: {
+                      sourceVideoAssetId: video.mediaAssetId
+                    },
+                    video_media_list: [{
+                      url: video.mediaUrl,
+                      assetId: video.mediaAssetId,
+                      type: 'video',
+                      name: video.name,
+                      duration: `${video.durationSec.toFixed(2)}s`,
+                      durationMs: video.durationMs
+                    }],
+                    aspect_ratio: sourceNode.aspect_ratio || '16:9',
+                    video_resolution: '720p',
+                    video_duration: Math.max(1, Math.round(video.durationSec)),
+                    generate_audio: false,
+                    negative_prompt: '',
+                    seed: -1
+                  };
+                  return [...prevNodes, childNode];
+                });
+              }}
               onCreateActionVideoNode={({ actionPlan, scene }) => {
                 onUpdateNodes((prevNodes) => {
                   const sourceNode = prevNodes.find(n => n.id === node.id);

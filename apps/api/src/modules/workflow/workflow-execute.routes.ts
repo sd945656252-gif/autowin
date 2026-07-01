@@ -482,8 +482,8 @@ const scene3dMotionRefineRequestSchema = z.object({
   transitionId: z.string().min(1),
   selectedCharacterId: z.string().min(1),
   actionPrompt: z.string().trim().min(1).max(4000),
-  durationSec: z.number().finite().min(0.5).max(120),
-  curve: z.enum(["linear", "ease_in", "ease_out", "ease_in_out"]),
+  durationSec: z.number().finite().min(0.2).max(120),
+  curve: z.enum(["linear", "ease_in", "ease_out", "ease_in_out", "bullet_time", "pulse", "hold_then_burst"]),
   startTransform: z.unknown(),
   endTransform: z.unknown(),
   startPose: z.unknown(),
@@ -492,6 +492,9 @@ const scene3dMotionRefineRequestSchema = z.object({
   endFingerPose: z.unknown().optional(),
   currentCharacterTransform: z.unknown().optional(),
   constraints: z.unknown().optional(),
+  localSemanticPlan: z.unknown().optional(),
+  localActionPlan: z.unknown().optional(),
+  availableSemanticStageTemplates: z.array(z.unknown()).max(24).default([]),
   cameras: z.array(z.unknown()).max(8).default([]),
   props: z.array(z.unknown()).max(16).default([]),
   activeCameraId: z.string().max(120).optional(),
@@ -515,11 +518,30 @@ const scene3dMotionContactHintSchema = z.enum([
   "feet",
   "hands"
 ]);
+const scene3dMotionFamilySchema = z.enum(["locomotion", "turn", "roll", "fall", "get_up", "dodge", "crawl", "kneel", "stumble", "reach", "carry", "combat"]);
+const scene3dMotionKeyframeHintSchema = z.object({
+  timeRatio: z.number().finite().min(0).max(1),
+  label: z.string().trim().min(1).max(120),
+  posePresetId: z.string().trim().max(120).optional(),
+  note: z.string().trim().max(300).optional()
+});
+const scene3dCameraMotionTypeSchema = z.enum(["none", "dolly_in", "dolly_out", "truck_left", "truck_right", "orbit", "follow_character", "low_tilt_up", "top_tilt_down", "handheld", "close_follow"]);
+const scene3dCameraMotionHintSchema = z.object({
+  enabled: z.boolean().default(false),
+  type: scene3dCameraMotionTypeSchema.default("none"),
+  intensity: z.number().finite().min(0).max(1).default(0.6),
+  startTimeSec: z.number().finite().min(0).default(0),
+  endTimeSec: z.number().finite().min(0).default(2),
+  distance: z.number().finite().min(0).max(8).default(1.2),
+  heightOffset: z.number().finite().min(-4).max(4).default(0),
+  orbitAngleDeg: z.number().finite().min(-360).max(360).default(35),
+  keepCharacterInFrame: z.boolean().default(true)
+});
 
 const scene3dMotionIntentSchema = z.object({
   version: z.literal(1),
   intent: z.string().trim().min(1).max(1200),
-  durationSec: z.number().finite().min(0.5).max(120),
+  durationSec: z.number().finite().min(0.2).max(120),
   generatedMotionPrompt: z.string().trim().min(1).max(4000),
   direction: scene3dVec3Schema,
   distance: z.number().finite().min(0).max(5),
@@ -533,6 +555,14 @@ const scene3dMotionIntentSchema = z.object({
   contacts: z.array(scene3dMotionContactHintSchema).max(12),
   lookAt: z.enum(["none", "camera", "object", "point"]),
   targetObjectId: z.string().trim().max(120).optional(),
+  motionFamilies: z.array(scene3dMotionFamilySchema).max(12).default([]),
+  keyframeHints: z.array(scene3dMotionKeyframeHintSchema).max(10).default([]),
+  contactHints: z.array(z.object({
+    timeSec: z.number().finite().min(0).optional(),
+    contact: scene3dMotionContactHintSchema,
+    note: z.string().trim().max(300).optional()
+  })).max(12).default([]),
+  cameraMotionHint: scene3dCameraMotionHintSchema.optional(),
   warnings: z.array(z.string().trim().min(1).max(300)).max(24),
   confidence: z.number().finite().min(0).max(1)
 }).strict();
@@ -615,6 +645,26 @@ function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineReque
   const contacts = Array.isArray(value?.contacts)
     ? value.contacts.map((item: any) => String(item)).filter((item: string) => allowedContacts.has(item as any)).slice(0, 12)
     : [];
+  const allowedFamilies = new Set(scene3dMotionFamilySchema.options);
+  const motionFamilies = Array.isArray(value?.motionFamilies)
+    ? value.motionFamilies.map((item: any) => String(item)).filter((item: string) => allowedFamilies.has(item as any)).slice(0, 12)
+    : [];
+  const keyframeHints = Array.isArray(value?.keyframeHints)
+    ? value.keyframeHints.map((item: any) => ({
+      timeRatio: coerceScene3DNumber(item?.timeRatio, 0.5, 0, 1),
+      label: typeof item?.label === "string" && item.label.trim() ? item.label.trim().slice(0, 120) : "动作阶段",
+      posePresetId: typeof item?.posePresetId === "string" && item.posePresetId.trim() ? item.posePresetId.trim().slice(0, 120) : undefined,
+      note: typeof item?.note === "string" && item.note.trim() ? item.note.trim().slice(0, 300) : undefined
+    })).slice(0, 10)
+    : [];
+  const contactHints = Array.isArray(value?.contactHints)
+    ? value.contactHints.map((item: any) => ({
+      timeSec: Number.isFinite(Number(item?.timeSec)) ? Math.max(0, Number(item.timeSec)) : undefined,
+      contact: allowedContacts.has(String(item?.contact) as any) ? String(item.contact) : "feet",
+      note: typeof item?.note === "string" && item.note.trim() ? item.note.trim().slice(0, 300) : undefined
+    })).slice(0, 12)
+    : [];
+  const cameraMotionValidation = scene3dCameraMotionHintSchema.safeParse(value?.cameraMotionHint);
   return {
     version: 1 as const,
     intent: typeof value?.intent === "string" && value.intent.trim() ? value.intent.trim() : request.actionPrompt,
@@ -634,17 +684,20 @@ function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineReque
     contacts,
     lookAt,
     targetObjectId: typeof value?.targetObjectId === "string" && value.targetObjectId.trim() ? value.targetObjectId.trim() : undefined,
+    motionFamilies,
+    keyframeHints,
+    contactHints,
+    cameraMotionHint: cameraMotionValidation.success ? cameraMotionValidation.data : undefined,
     warnings: Array.isArray(value?.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 24) : [],
     confidence: coerceScene3DNumber(value?.confidence, 0.5, 0, 1)
   };
 }
 
-const scene3dReusableAssetKindSchema = z.enum(["actionClip", "cameraMove", "directorTemplate", "posePresetMemory"]);
+const scene3dReusableAssetKindSchema = z.enum(["actionClip", "cameraMove", "directorTemplate"]);
 const scene3dReusableAssetSourceType: Record<z.infer<typeof scene3dReusableAssetKindSchema>, string> = {
   actionClip: "scene3d_action_clip",
   cameraMove: "scene3d_camera_move",
-  directorTemplate: "scene3d_director_template",
-  posePresetMemory: "scene3d_pose_preset_memory"
+  directorTemplate: "scene3d_director_template"
 };
 const scene3dReusableAssetSourceTypes = Object.values(scene3dReusableAssetSourceType);
 
@@ -1054,11 +1107,6 @@ function validateScene3DReusableAssetPayload(kind: Scene3DReusableAssetKind, pay
     if (!payload.actionPlan || typeof payload.actionPlan !== "object") issues.push({ path: "payload.actionPlan", message: "actionPlan payload is required" });
     if (!Array.isArray(payload.keyframes) || payload.keyframes.length < 1) issues.push({ path: "payload.keyframes", message: "keyframes are required" });
   }
-  if (kind === "posePresetMemory") {
-    if (typeof payload.presetId !== "string" || !payload.presetId.trim()) issues.push({ path: "payload.presetId", message: "presetId is required" });
-    if (!payload.rigPose || typeof payload.rigPose !== "object") issues.push({ path: "payload.rigPose", message: "rigPose payload is required" });
-    if (!payload.characterModel || typeof payload.characterModel !== "object") issues.push({ path: "payload.characterModel", message: "characterModel payload is required" });
-  }
   if (issues.length) throw new HttpError(400, "Scene3D reusable asset payload is invalid.", "SCENE3D_ASSET_PAYLOAD_INVALID", { issues });
 }
 
@@ -1355,8 +1403,10 @@ function scene3dMotionRefineSystemPrompt() {
     "Return JSON only. Do not return Markdown, comments, prose outside JSON, or trailing commas.",
     "The local Scene3D compiler will generate positions, rotations, bone poses, contacts, and final animation samples.",
     "Start and end poses/transforms are hard constraints owned by the caller. Infer only the in-between motion semantics.",
-    "This is not a template classification task. Do not restrict the solution to predefined actions; solve the general motion implied by the prompt.",
-    "For unusual or underspecified actions, derive plausible universal body mechanics: direction, distance, rotation, roll, crouch, lift, lean, arm swing, contact hints, look target, and rhythm.",
+    "Prefer localSemanticPlan and available stage templates. You may refine them, but must not invent random in-between actions or bypass the local compiler.",
+    "Default style is realistic human / 3D game character motion: readable intent, conservative body mechanics, continuous center of gravity, and grounded feet unless the prompt explicitly asks for jumping, flying, floating, rolling, or exaggerated cartoon motion.",
+    "For unusual or underspecified actions, derive conservative universal body mechanics: direction, distance, rotation, crouch, lift, lean, arm swing, contact hints, look target, and rhythm.",
+    "Keep values realistic by default: distance usually 0-1.2, turnDeg usually below 90 unless turning is explicit, roll 0 unless falling or rolling, verticalLift 0 unless jump/fly/airborne is explicit, armSwing below 0.6 for normal walk/run/push/combat.",
     "Use normalized scalar strengths from 0 to 1 unless a field specifies degrees or world units.",
     "Direction is a horizontal world-space vector where X is left/right and Z is depth. Keep Y at 0 unless the intent truly needs vertical direction.",
     "The JSON object must exactly match this TypeScript shape:",
@@ -1377,6 +1427,10 @@ function scene3dMotionRefineSystemPrompt() {
   "contacts": ["leftFoot", "rightFoot"],
   "lookAt": "none | camera | object | point",
   "targetObjectId": "existing nearby object id when relevant",
+  "motionFamilies": ["locomotion", "turn", "reach", "combat"],
+  "keyframeHints": [{ "timeRatio": 0.5, "label": "main anticipation or contact pose", "posePresetId": "optional existing preset id", "note": "why this key pose matters" }],
+  "contactHints": [{ "timeSec": 0.6, "contact": "rightFoot", "note": "right foot plants on the ground" }],
+  "cameraMotionHint": { "enabled": true, "type": "follow_character", "intensity": 0.6, "startTimeSec": 0, "endTimeSec": 2, "distance": 1.2, "heightOffset": 0, "orbitAngleDeg": 35, "keepCharacterInFrame": true },
   "warnings": ["string"],
   "confidence": 0.8
 }`
@@ -1405,6 +1459,9 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     compactJson({
       currentCharacterTransform: input.request.currentCharacterTransform,
       constraints: input.request.constraints,
+      localSemanticPlan: input.request.localSemanticPlan,
+      localActionPlan: input.request.localActionPlan,
+      availableSemanticStageTemplates: input.request.availableSemanticStageTemplates,
       cameras: input.request.cameras,
       props: input.request.props,
       viewportScreenshotAssetId: input.request.viewportScreenshotAssetId || null,
@@ -1412,13 +1469,26 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     }, 5000),
     "Motion rules:",
     "- Do not return keyframes or bone rotations.",
-    "- Convert the action prompt into compact universal motion parameters only.",
+    "- Treat localSemanticPlan as the deterministic local parser result. Preserve explicit user words from actionPrompt over your own guess.",
+    "- Use availableSemanticStageTemplates to choose or refine semantic stages. Do not invent raw joint values; describe action phases only.",
+    "- Prefer realistic human or 3D-game motion. Do not add exaggerated animation, random mid-air flips, sudden spins, drifting feet, or unrelated whole-body swings unless the user explicitly asks for 夸张, 翻滚, 飞跃, or 浮空.",
+    "- Ground actions such as walk, run, push, throw, punch, block, crouch, crawl, and turn must keep feet, knees, hands, or body contacts physically plausible. Only jump, fly, or airborne prompts should use obvious verticalLift.",
+    "- For push: use brace, contact, force, hold or recover semantics; both feet stay grounded and hands contact the target.",
+    "- For throw: use anticipation, torso twist, release, recovery; the throwing hand leads and feet stay grounded unless the prompt says jump throw.",
+    "- For walk/run: use small alternating leg steps and opposite arm swing; do not treat locomotion as dance or acrobatics.",
+    "- For combat: use guard, strike/contact, recovery with controlled amplitude; do not use random flailing.",
+    "- If localSemanticPlan says 双手推 / two-hand push, keep both hands involved. If it says right hand, left hand, feet grounded, low center, or camera motion, preserve that intent unless impossible.",
+    "- Convert the action prompt into compact universal motion parameters, optional semantic keyframe hints, optional contact hints, and optional camera motion hints only.",
+    "- Explain the physical meaning of the action through intent, motionFamilies, keyframeHints, contacts, bodyLean, crouch, lift, rhythm, and warnings.",
+    "- Keyframe hints are semantic anchors for the local compiler; they must not contain raw joint rotations or per-frame bone values.",
+    "- Camera motion hints must stay generic and deterministic: dolly, truck, orbit, follow, tilt, handheld, or close follow.",
+    "- If the prompt describes camera movement, it has priority over generic camera defaults. For examples like 环绕360°, orbit 360 degrees, or 360 orbit, set cameraMotionHint.type to orbit and orbitAngleDeg to 360.",
+    "- For combat prompts such as fight, punch, block, guard, kick, 打斗, 格斗, 出拳, 格挡, 防守, 侧踢, set motionFamilies to include combat, use rhythm impact, describe anticipation/contact/recovery keyframeHints, keep feet/contact balance explicit, and include cameraMotionHint when the prompt requests 运镜, 环绕, 推近, 跟随, or 特写.",
     "- Never fail just because the action does not match a known template.",
     "- If the action includes stepping, reaching, falling, rolling, jumping, looking, dodging, or recovering, express that through direction/distance/turnDeg/roll/crouch/verticalLift/bodyLean/armSwing/rhythm/contacts/lookAt.",
     "- If the prompt is underspecified, add warnings and choose conservative readable motion."
   ].join("\n");
 }
-
 function scene3dPoseReferenceSystemPrompt() {
   return [
     "You are a professional 3D character pose estimation adapter for a node-based film previs tool.",
@@ -2169,57 +2239,13 @@ async function saveScene3DReusableAsset(req: express.Request) {
   let asset: any;
   let auditAction: AuditAction = AuditAction.CREATE;
 
-  if (body.kind === "posePresetMemory") {
-    const existingAssets = await prisma.productionAsset.findMany({
-      where: {
-        projectId: body.projectId,
-        stage: ProductionStage.SHOT_04,
-        sourceType,
-        sourceId: body.nodeId,
-        deletedAt: null,
-        archivedAt: null
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 100
-    });
-    const samePresetAssets = existingAssets.filter((item: any) => {
-      const payload = item.sourcePayload || {};
-      return typeof payload?.presetId === "string" && payload.presetId === body.payload.presetId;
-    });
-    const existing = samePresetAssets.find((item: any) => item.scope === ProductionAssetScope.TEAM) || samePresetAssets[0];
-    if (existing) {
-      asset = await prisma.productionAsset.update({
-        where: { id: existing.id },
-        data: {
-          scope: ProductionAssetScope.TEAM,
-          reviewStatus: ProductionAssetReviewStatus.APPROVED,
-          creatorId: requestUser.id,
-          originalName: body.name,
-          displayName: body.name,
-          description: body.description || null,
-          mimeType: "application/json",
-          sourcePayload,
-          metadata
-        }
-      });
-      const duplicateIds = samePresetAssets.map((item: any) => item.id).filter((id: string) => id !== existing.id);
-      if (duplicateIds.length) {
-        await prisma.productionAsset.updateMany({
-          where: { id: { in: duplicateIds } },
-          data: { archivedAt: new Date() }
-        });
-      }
-      auditAction = AuditAction.UPDATE;
-    }
-  }
-
   if (!asset) {
     asset = await prisma.productionAsset.create({
       data: {
         projectId: body.projectId,
         stage: ProductionStage.SHOT_04,
-        scope: body.kind === "posePresetMemory" ? ProductionAssetScope.TEAM : ProductionAssetScope.PERSONAL,
-        reviewStatus: body.kind === "posePresetMemory" ? ProductionAssetReviewStatus.APPROVED : ProductionAssetReviewStatus.UNREVIEWED,
+        scope: ProductionAssetScope.PERSONAL,
+        reviewStatus: ProductionAssetReviewStatus.UNREVIEWED,
         creatorId: requestUser.id,
         originalName: body.name,
         displayName: body.name,
@@ -2248,13 +2274,11 @@ async function listScene3DReusableAssets(req: express.Request) {
   const query = parseScene3DReusableAssetList(req.query);
   await ensureProjectMember(query.projectId, requestUser);
   const sourceTypes = query.kind ? [scene3dReusableAssetSourceType[query.kind]] : scene3dReusableAssetSourceTypes;
-  const sharedPosePresetMemory = query.kind === "posePresetMemory";
   const assets = await prisma.productionAsset.findMany({
     where: {
       projectId: query.projectId,
-      ...(sharedPosePresetMemory
-        ? { scope: ProductionAssetScope.TEAM, reviewStatus: ProductionAssetReviewStatus.APPROVED }
-        : { scope: ProductionAssetScope.PERSONAL, creatorId: requestUser.id }),
+      scope: ProductionAssetScope.PERSONAL,
+      creatorId: requestUser.id,
       deletedAt: null,
       archivedAt: null,
       stage: ProductionStage.SHOT_04,

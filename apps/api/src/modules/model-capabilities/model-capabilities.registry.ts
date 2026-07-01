@@ -322,6 +322,9 @@ export function findRegistryEntry(input: { provider?: unknown; capability: Model
   if (!normalizedModel) return null;
   return CAPABILITY_REGISTRY.find((entry) => {
     if (entry.capability !== input.capability) return false;
+    if (input.capability === ModelCapability.TEXT_GENERATOR && normalizedProvider === "openaicompatible") {
+      return entry.canonicalModelId === "openai:chat-completions";
+    }
     const providerMatches = input.capability === ModelCapability.TEXT_GENERATOR
       ? (!normalizedProvider || normalizedProvider === "custom" || normalizedProvider === "openaicompatible" || normalizeProviderName(entry.provider) === normalizedProvider)
       : (!normalizedProvider || normalizeProviderName(entry.provider) === normalizedProvider);

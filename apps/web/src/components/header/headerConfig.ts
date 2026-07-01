@@ -8,13 +8,13 @@ export const PRESET_AVATARS = [
   { name: '未来机械', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80' }
 ];
 
-export const PROVIDER_PRESETS = ['OpenAI', 'Google', 'Anthropic', '火山引擎', 'Kling', 'OpenRouter'] as const;
+export const PROVIDER_PRESETS = ['OpenAI', 'OpenAI Compatible', 'Google', 'Anthropic', '火山引擎', 'Kling', 'OpenRouter'] as const;
 
 export function createDefaultApiConfig(): CustomApiConfig {
   return {
     id: `draft_${Date.now()}`,
     alias: '新自定义 API 模型',
-    provider: 'OpenAI',
+    provider: 'OpenAI Compatible',
     type: 'text',
     baseUrl: 'https://api.openai.com/v1',
     apiKey: '',
