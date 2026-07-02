@@ -503,6 +503,8 @@ const scene3dMotionRefineRequestSchema = z.object({
   motionStyleProfile: z.unknown().optional(),
   availableSemanticStageTemplates: z.array(z.unknown()).max(24).default([]),
   availableActionSkills: z.array(z.unknown()).max(24).default([]),
+  availableMotionPrimitives: z.array(z.unknown()).max(24).default([]),
+  motionPrimitiveInstruction: z.string().trim().max(1600).optional(),
   characters: z.array(z.unknown()).max(12).default([]),
   characterRigMappings: z.array(z.unknown()).max(12).default([]),
   cameras: z.array(z.unknown()).max(8).default([]),
@@ -664,6 +666,15 @@ const scene3dMotionDraftRequirementMapSchema = z.object({
   }).strict()).max(16).default([]),
   note: z.string().trim().max(300).optional()
 }).strict();
+const scene3dMotionPrimitiveHintSchema = z.object({
+  primitiveId: z.string().trim().min(1).max(80),
+  actionType: scene3dMotionSemanticActionTypeSchema,
+  phaseId: z.string().trim().max(80).optional(),
+  startSec: z.number().finite().min(0).max(120),
+  endSec: z.number().finite().min(0).max(120),
+  requirementIds: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  reason: z.string().trim().min(1).max(300)
+}).strict();
 const scene3dMotionDraftSchema = z.object({
   version: z.literal(1),
   actionIntent: z.string().trim().min(1).max(1200),
@@ -677,6 +688,7 @@ const scene3dMotionDraftSchema = z.object({
   boneKeyframes: z.array(scene3dMotionDraftBoneKeyframeSchema).max(80).default([]),
   contactFrames: z.array(scene3dMotionDraftContactFrameSchema).max(32).default([]),
   constraints: z.array(scene3dMotionDraftConstraintSchema).max(24).default([]),
+  primitiveHints: z.array(scene3dMotionPrimitiveHintSchema).max(12).default([]).optional(),
   timing: z.object({
     anticipation: z.number().finite().min(0).max(120).optional(),
     mainActionStart: z.number().finite().min(0).max(120).optional(),
@@ -1377,6 +1389,11 @@ function scene3DMotionContextIdsByType(request: Scene3DMotionRefineRequest) {
 function validateScene3DMotionDraftSemantics(draft: Scene3DMotionDraft, request: Scene3DMotionRefineRequest) {
   const issues: Array<{ path: string; message: string }> = [];
   const objectIds = scene3DMotionContextObjectIds(request);
+  const primitiveIds = new Set(
+    (request.availableMotionPrimitives as any[])
+      .map((item) => typeof item?.id === "string" ? item.id : typeof item === "string" ? item : "")
+      .filter(Boolean)
+  );
   const endpointEpsilon = 0.001;
   const isMiddleTime = (timeSec: number) => timeSec > endpointEpsilon && timeSec < request.durationSec - endpointEpsilon;
   if (Math.abs(draft.durationSec - request.durationSec) > endpointEpsilon) {
@@ -1407,6 +1424,20 @@ function validateScene3DMotionDraftSemantics(draft: Scene3DMotionDraft, request:
     }
     if (constraint.endSec !== undefined && constraint.endSec > request.durationSec + endpointEpsilon) {
       issues.push({ path: `motionDraft.constraints.${index}.endSec`, message: "constraint endSec exceeds request durationSec" });
+    }
+  }
+  for (const [index, hint] of (draft.primitiveHints || []).entries()) {
+    if (primitiveIds.size > 0 && !primitiveIds.has(hint.primitiveId)) {
+      issues.push({ path: `motionDraft.primitiveHints.${index}.primitiveId`, message: "primitiveId is not listed in availableMotionPrimitives" });
+    }
+    if (hint.endSec <= hint.startSec) {
+      issues.push({ path: `motionDraft.primitiveHints.${index}.endSec`, message: "primitiveHint endSec must be greater than startSec" });
+    }
+    if (hint.startSec < -endpointEpsilon || hint.endSec > request.durationSec + endpointEpsilon) {
+      issues.push({ path: `motionDraft.primitiveHints.${index}.endSec`, message: "primitiveHint must stay within request durationSec" });
+    }
+    if (hint.endSec - hint.startSec < 0.08) {
+      issues.push({ path: `motionDraft.primitiveHints.${index}.endSec`, message: "primitiveHint duration is too short to compile" });
     }
   }
   if (draft.timing) {
@@ -1982,7 +2013,8 @@ function scene3dMotionRefineSystemPrompt() {
     "promptRequirementGraph is the local requirement graph compiled before AI refinement. Preserve required requirements, use their ids in motionDraft.promptRequirements and promptRequirementMap, and never silently omit a local required requirement.",
     "motionStyleProfile is the caller's structured style-control contract. Its numeric fields such as timingScale, poseAmplitudeScale, rootMotionScale, armSwingScale, legStrideScale, crouchScale, verticalLiftScale, recoveryScale, contactHoldScale, and cameraIntensity must influence motionDraft phase timing, middle keyframe intent, contact hold, recovery, and camera hints. Do not treat style as notes only.",
     "negativeConstraints is the local do-not/avoid contract. Treat error severity constraints as hard constraints. Never violate no_endpoint_override, no_manual_keyframe_override, no_unmapped_actor, no_target_ignore, no_unreachable_contact, no_collision, no_penetration, no_foot_slide, no_extreme_joint_rotation, no_camera_jump, or no_prop_teleport.",
-    "Never return animationClip, samples, tracks, videoUrl, assetUrl, rawFrames, bonePose, boneRotations, jointRotations, or final rendered output. Structured intermediate planning is allowed only inside motionDraft.transformKeyframes, motionDraft.boneKeyframes, motionDraft.contactFrames, motionDraft.constraints, and interactionDraft.propMotions.transformKeyframes.",
+    "availableMotionPrimitives is the local executable action-base catalog. Prefer selecting primitiveHints such as run_forward, walk_forward, dash_forward, push_forward, reach_forward, crouch_down, jump_up, and recover_settle instead of guessing final skeletal animation.",
+    "Never return animationClip, samples, tracks, videoUrl, assetUrl, rawFrames, bonePose, boneRotations, jointRotations, or final rendered output. Structured intermediate planning is allowed only inside motionDraft.primitiveHints, motionDraft.transformKeyframes, motionDraft.boneKeyframes, motionDraft.contactFrames, motionDraft.constraints, and interactionDraft.propMotions.transformKeyframes.",
     "If the prompt mentions multiple characters, handoff/receive, chase/avoid, fight, dodge, kicking or moving props, or coordinated contact timing, return interactionDraft. Use only existing character, prop, and camera ids from compact context. For abstract point targets, set targetType point and include worldPosition. If a required actor or target is missing, add warnings instead of inventing ids.",
     "You must align the intent to one local action skill. actionType must be one of: walk, run, dash, push, pull, throw, punch, block, kick, side_kick, jump, crouch, crawl, fall, get_up, turn, reach, idle, unknown.",
     "actionFamily must be one of: locomotion, combat, push_pull, throw, jump, fall, crawl, posture, turn, reach, unknown.",
@@ -2025,7 +2057,7 @@ function scene3dMotionRefineSystemPrompt() {
     "version": 1,
     "actionIntent": "string",
     "durationSec": 2,
-    "fpsHint": 24,
+    "fpsHint": 60,
     "generatedMotionPrompt": "string",
     "promptRequirements": [{ "id": "req_1", "text": "user requirement", "category": "action | body | timing | contact | camera | style | constraint | other", "priority": "low | normal | high" }],
     "phasePlan": [{ "id": "phase_1", "label": "anticipation", "startSec": 0, "endSec": 0.4, "purpose": "why this phase exists", "keyJoints": ["chest", "rightUpperArm"], "contacts": ["leftFoot"], "requirementIds": ["req_1"] }],
@@ -2033,6 +2065,7 @@ function scene3dMotionRefineSystemPrompt() {
     "boneKeyframes": [{ "id": "bone_1", "timeSec": 0.5, "joint": "rightUpperArm", "rotation": { "x": 25, "y": 0, "z": -10 }, "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "intermediate joint plan only" }],
     "contactFrames": [{ "id": "contact_1", "timeSec": 0.5, "contact": "rightFoot", "type": "ground | prop | look | release | hold | other", "targetObjectId": "existing object id only when relevant", "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "contact event" }],
     "constraints": [{ "id": "constraint_1", "type": "head_look | hand_target | foot_lock | body_aim | grounding | prop_contact | other", "target": "target description or id", "startSec": 0.2, "endSec": 1.5, "joints": ["head"], "requirementIds": ["req_1"], "note": "constraint meaning" }],
+    "primitiveHints": [{ "primitiveId": "run_forward", "actionType": "run", "phaseId": "phase_1", "startSec": 0, "endSec": 2, "requirementIds": ["req_1"], "reason": "local executable base for running gait" }],
     "promptRequirementMap": [{ "requirementId": "req_1", "appliedTo": [{ "kind": "phase | transformKeyframe | boneKeyframe | contactFrame | constraint | camera", "id": "phase_1", "timeSec": 0.5, "joint": "rightUpperArm", "phaseId": "phase_1" }], "note": "where the requirement is applied" }],
     "timing": { "anticipation": 0.2, "mainActionStart": 0.5, "mainActionEnd": 1.5, "settle": 1.9 },
     "warnings": ["string"],
@@ -2088,6 +2121,8 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
       negativeConstraints: input.request.negativeConstraints,
       availableSemanticStageTemplates: input.request.availableSemanticStageTemplates,
       availableActionSkills: input.request.availableActionSkills,
+      availableMotionPrimitives: input.request.availableMotionPrimitives,
+      motionPrimitiveInstruction: input.request.motionPrimitiveInstruction,
       characters: input.request.characters,
       characterRigMappings: input.request.characterRigMappings,
       cameras: input.request.cameras,
@@ -2100,7 +2135,7 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     }, 5000),
     "Motion rules:",
     "- Return motionIntent plus motionDraft. Also return interactionDraft when the prompt contains multiple actors, target props, handoff/receive, chase/avoid, fighting, kicking props, prop movement, or synchronized contact timing.",
-    "- motionDraft may include only intermediate transformKeyframes, boneKeyframes, contactFrames, constraints, phasePlan, timing, and requirement mapping.",
+    "- motionDraft may include only intermediate primitiveHints, transformKeyframes, boneKeyframes, contactFrames, constraints, phasePlan, timing, and requirement mapping.",
     "- interactionDraft may include only actors, targets, interactionClips, contacts, syncMarkers, propMotions, spatialConstraints, warnings, and confidence.",
     "- interactionDraft actors must use existing character ids from compact context. The selectedCharacterId is the default primaryActorId unless the prompt clearly names another existing character.",
     "- interactionDraft targets must use existing character, prop, or camera ids. For point targets, use targetType point and include worldPosition. Never invent missing object ids.",
@@ -2110,6 +2145,7 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     "- For handoff/receive, align A release and B receive around the same timeSec and worldPosition.",
     "- For chase/avoid/dodge, describe relativePositionGoal and syncMarkers rather than inventing extra animation samples.",
     "- Do not return animationClip, samples, tracks, raw frame arrays, video URLs, fake progress, or final rendered results.",
+    "- Use availableMotionPrimitives as executable local action bases. For run/running prompts choose run_forward; for dash/sprint choose dash_forward; for walk choose walk_forward; for push choose push_forward. Add primitiveHints rather than final animation samples.",
     "- Do not put any motionDraft keyframe at 0 seconds or at durationSec. The caller's start frame and end frame are hard constraints and cannot be edited by AI.",
     "- Treat localSemanticPlan as the deterministic local parser result. Preserve explicit user words from actionPrompt over your own guess.",
     "- Treat promptRequirementGraph as the local PromptRequirementCompiler result. motionDraft.promptRequirements must preserve and cover promptRequirementGraph.requirements whenever possible, using the same requirement ids. motionDraft.promptRequirementMap must reference those ids and explain where each requirement is applied.",
@@ -2131,7 +2167,7 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     "- For turn_throw chains, describe turn/twist/windup/release/recovery in that order and keep feet grounded unless the prompt explicitly asks for a jump throw.",
     "- For low_recovery_attack chains, describe low dodge/block, rising recovery, then the final attack; do not collapse it into only crouch or only punch.",
     "- localCompilerContract.promptControl is the user's parsed control layer. Preserve its direction, speed, force, timingTags, stageTags, and bodyTags in your semantic explanation and generatedMotionPrompt.",
-    "- localCompilerContract.forbiddenOutputFields applies to top-level/final animation output. The only allowed structured intermediate keyframes are inside motionDraft.transformKeyframes, motionDraft.boneKeyframes, and motionDraft.contactFrames.",
+    "- localCompilerContract.forbiddenOutputFields applies to top-level/final animation output. The only allowed structured intermediate keyframes or action-base hints are inside motionDraft.primitiveHints, motionDraft.transformKeyframes, motionDraft.boneKeyframes, and motionDraft.contactFrames.",
     "- Use availableSemanticStageTemplates to choose or refine semantic stages. Use motionDraft to explain the executable middle planning without replacing fixed start/end/middle constraints.",
     "- Use availableActionSkills as the executable skill contract. If your interpretation conflicts with a listed skill's grounded, allowAirborne, rootLimits, or quality targets, prefer the local skill contract and add a warning instead of inventing a new motion style.",
     "- Use localCompilerContract.qualityExpectations as the acceptance criteria for generatedMotionPrompt, keyframeHints, and contactHints. For example, if it includes gait, support, hand_contact, throw_release, punch_recovery, or prop_contact_motion, your intent must describe how those expectations are satisfied.",
@@ -2161,6 +2197,7 @@ function scene3dMotionRefineCompactSystemPrompt() {
     "The caller owns fixed start/end and middle keyframes. Do not include draft keyframes at 0 seconds or at durationSec.",
     "Generate motionIntent and motionDraft only. Add interactionDraft only if the prompt explicitly needs multiple actors or prop interaction.",
     "Do not generate animationClip, samples, tracks, raw frames, video URLs, fake progress, or final rendered output.",
+    "Use availableMotionPrimitives as executable local action bases. For run choose run_forward; for push choose push_forward. Add primitiveHints instead of final animation samples.",
     "Use only existing ids from the compact context. If a target is missing, warn instead of inventing ids.",
     "Keep motionDraft concise but executable: 3-6 phasePlan items, 1-4 transformKeyframes, 4-12 boneKeyframes for key joints, and contactFrames when feet/hands/head contact matters.",
     "For walk/run/dash, include alternating feet contacts, opposite arm swing, grounded root motion, and recovery/settle.",
@@ -2199,7 +2236,7 @@ function scene3dMotionRefineCompactSystemPrompt() {
     "version": 1,
     "actionIntent": "string",
     "durationSec": 1.2,
-    "fpsHint": 24,
+    "fpsHint": 60,
     "generatedMotionPrompt": "string",
     "promptRequirements": [{ "id": "req_1", "text": "string", "category": "action", "priority": "high" }],
     "promptRequirementMap": [{ "requirementId": "req_1", "appliedTo": [{ "kind": "phase", "id": "phase_1" }], "note": "string" }],
@@ -2208,6 +2245,7 @@ function scene3dMotionRefineCompactSystemPrompt() {
     "boneKeyframes": [{ "id": "bone_1", "timeSec": 0.45, "joint": "rightUpperArm", "rotation": { "x": 25, "y": 0, "z": -12 }, "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "string" }],
     "contactFrames": [{ "id": "contact_1", "timeSec": 0.35, "contact": "rightFoot", "type": "ground", "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "string" }],
     "constraints": [{ "id": "constraint_1", "type": "grounding", "startSec": 0.05, "endSec": 1.15, "joints": ["leftFoot", "rightFoot"], "requirementIds": ["req_1"], "note": "string" }],
+    "primitiveHints": [{ "primitiveId": "run_forward", "actionType": "run", "phaseId": "phase_1", "startSec": 0, "endSec": 1.2, "requirementIds": ["req_1"], "reason": "local executable run gait base" }],
     "timing": { "anticipation": 0.12, "mainActionStart": 0.25, "mainActionEnd": 0.95, "settle": 1.1 },
     "warnings": [],
     "confidence": 0.75
@@ -2245,7 +2283,9 @@ function scene3dMotionRefineCompactUserPrompt(input: { request: Scene3DMotionRef
       middleKeyframeConstraints: input.request.middleKeyframeConstraints,
       promptRequirementGraph: input.request.promptRequirementGraph,
       motionStyleProfile: input.request.motionStyleProfile,
-      negativeConstraints: input.request.negativeConstraints
+      negativeConstraints: input.request.negativeConstraints,
+      availableMotionPrimitives: input.request.availableMotionPrimitives,
+      motionPrimitiveInstruction: input.request.motionPrimitiveInstruction
     }, 3200),
     "Compact scene objects:",
     compactJson({
@@ -2259,6 +2299,7 @@ function scene3dMotionRefineCompactUserPrompt(input: { request: Scene3DMotionRef
     "- Preserve actionType/actionFamily from compiler contract unless actionType is unknown.",
     "- Preserve promptRequirementGraph requirement ids in motionDraft.promptRequirements and promptRequirementMap.",
     "- Obey negativeConstraints and hard keyframes first.",
+    "- Choose primitiveHints from availableMotionPrimitives. For 跑步/run use run_forward; do not return samples or tracks.",
     "- Use fixedPoseSegments to plan phase/keyframe/contact timing between adjacent hard keyframes. Do not plan one blind global start-to-end motion when middle keyframes exist.",
     "- Keep all motionDraft keyframes strictly inside (0, durationSec).",
     "- For the prompt 跑步/run, return run locomotion with alternating foot contacts, arm swing boneKeyframes, grounded root motion, and recover/settle."
@@ -2270,6 +2311,7 @@ function scene3dMotionRefineUltraSystemPrompt() {
     "Return strict JSON only.",
     "You create a compact Scene3D motion plan, not final animation.",
     "Never output animationClip, samples, tracks, video, URLs, fake progress, or rendered results.",
+    "Use availableMotionPrimitives through motionDraft.primitiveHints. For run choose run_forward; for push choose push_forward.",
     "Do not modify start/end frames. All draft keyframes must be inside 0 < timeSec < durationSec.",
     "Keep the answer short. Prefer 2-4 phases, 1-3 root keyframes, 4-8 bone keyframes, and 2-4 contact frames.",
     "For run/walk/dash, include alternating foot contacts and opposite arm swing.",
@@ -2307,7 +2349,7 @@ function scene3dMotionRefineUltraSystemPrompt() {
     "version": 1,
     "actionIntent": "run forward",
     "durationSec": 1.2,
-    "fpsHint": 24,
+    "fpsHint": 60,
     "generatedMotionPrompt": "grounded run with alternating footfalls and arm swing",
     "promptRequirements": [{ "id": "req_action", "text": "run", "category": "action", "priority": "high" }],
     "promptRequirementMap": [{ "requirementId": "req_action", "appliedTo": [{ "kind": "phase", "id": "phase_stride" }], "note": "run is mapped to stride phase" }],
@@ -2316,6 +2358,7 @@ function scene3dMotionRefineUltraSystemPrompt() {
     "boneKeyframes": [{ "id": "left_arm_back", "timeSec": 0.35, "joint": "leftUpperArm", "rotation": { "x": -24, "y": 0, "z": 8 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "left arm back" }, { "id": "right_arm_forward", "timeSec": 0.35, "joint": "rightUpperArm", "rotation": { "x": 24, "y": 0, "z": -8 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "right arm forward" }, { "id": "left_leg_forward", "timeSec": 0.35, "joint": "leftUpperLeg", "rotation": { "x": 18, "y": 0, "z": 0 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "left leg forward" }, { "id": "right_leg_back", "timeSec": 0.35, "joint": "rightUpperLeg", "rotation": { "x": -18, "y": 0, "z": 0 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "right leg back" }],
     "contactFrames": [{ "id": "left_foot_plant", "timeSec": 0.3, "contact": "leftFoot", "type": "ground", "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "left foot plant" }, { "id": "right_foot_plant", "timeSec": 0.75, "contact": "rightFoot", "type": "ground", "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "right foot plant" }],
     "constraints": [{ "id": "grounded", "type": "grounding", "startSec": 0.05, "endSec": 1.15, "joints": ["leftFoot", "rightFoot"], "requirementIds": ["req_action"], "note": "keep run grounded" }],
+    "primitiveHints": [{ "primitiveId": "run_forward", "actionType": "run", "phaseId": "phase_stride", "startSec": 0, "endSec": 1.2, "requirementIds": ["req_action"], "reason": "local executable run gait base" }],
     "timing": { "anticipation": 0.12, "mainActionStart": 0.28, "mainActionEnd": 0.95, "settle": 1.08 },
     "warnings": [],
     "confidence": 0.75
@@ -2334,11 +2377,13 @@ function scene3dMotionRefineUltraUserPrompt(input: { request: Scene3DMotionRefin
     `local actionFamily: ${compilerContract.actionFamily || "unknown"}`,
     `local contacts: ${JSON.stringify(compilerContract.contacts || [])}`,
     `local sequence: ${compactJson(compilerContract.actionSequence || [], 800)}`,
+    `available primitives: ${compactJson(input.request.availableMotionPrimitives || [], 900)}`,
     `fixed pose constraints: ${compactJson(input.request.fixedPoseConstraints || [], 1200)}`,
     `fixed pose segments: ${compactJson(input.request.fixedPoseSegments || [], 1200)}`,
     `prompt requirements: ${compactJson(input.request.promptRequirementGraph || {}, 1200)}`,
     `style: ${compactJson(input.request.motionStyleProfile || {}, 700)}`,
     "Hard constraints: no endpoint override, no manual keyframe override, no foot slide, no non-jump airborne motion, no extreme joint rotation.",
+    "Primitive constraints: choose primitiveHints only from available primitives; run must use run_forward; do not output samples/tracks.",
     "Use fixed pose segments as the ordered adjacent-keyframe relationship. Plan only inside those segment windows; do not ignore or reinterpret middle keyframes.",
     "Return valid JSON now. Keep it compact."
   ].join("\n");
@@ -2540,6 +2585,25 @@ function scene3dMotionRefineLocalTimeoutFallbackJson(request: Scene3DMotionRefin
     ];
   }).slice(0, 32);
   const mappedPhaseIds = phasePlan.map((phase: any) => phase.id).slice(0, 12);
+  const primitiveId = actionType === "run"
+    ? "run_forward"
+    : actionType === "dash"
+      ? "dash_forward"
+      : actionType === "walk"
+        ? "walk_forward"
+        : actionType === "push"
+          ? "push_forward"
+          : actionType === "pull"
+            ? "pull_backward"
+            : actionType === "jump"
+              ? "jump_up"
+              : actionType === "crouch"
+                ? "crouch_down"
+                : actionType === "reach"
+                  ? "reach_forward"
+                  : actionType === "turn"
+                    ? "turn_in_place"
+                    : undefined;
   const motionDraft = {
     version: 1,
     actionIntent: prompt.slice(0, 300),
@@ -2579,6 +2643,15 @@ function scene3dMotionRefineLocalTimeoutFallbackJson(request: Scene3DMotionRefin
       { id: "contact_b", timeSec: t(0.68), contact: (contacts[1] || contacts[0] || "rightFoot") as any, type: "ground", phaseId: phasePlan[1]?.id || phasePlan[0].id, requirementIds: [reqId], note: "second stable contact" }
     ],
     constraints: [{ id: "grounded", type: "grounding", startSec: 0, endSec: durationSec, joints: ["leftFoot", "rightFoot"], requirementIds: [reqId], note: "Preserve grounded contact unless the action is airborne." }],
+    primitiveHints: primitiveId ? [{
+      primitiveId,
+      actionType,
+      phaseId: phasePlan[1]?.id || phasePlan[0]?.id,
+      startSec: 0,
+      endSec: durationSec,
+      requirementIds: [reqId],
+      reason: `Deterministic timeout fallback selects local executable primitive ${primitiveId}.`
+    }] : [],
     timing: { anticipation: end(0.12), mainActionStart: end(0.25), mainActionEnd: end(0.82), settle: end(0.92) },
     warnings,
     confidence: 0.55
