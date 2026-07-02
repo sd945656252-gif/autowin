@@ -490,11 +490,15 @@ const scene3dMotionRefineRequestSchema = z.object({
   endPose: z.unknown(),
   startFingerPose: z.unknown().optional(),
   endFingerPose: z.unknown().optional(),
+  fixedPoseConstraints: z.array(z.unknown()).max(12).default([]),
+  middleKeyframeConstraints: z.array(z.unknown()).max(10).default([]),
   currentCharacterTransform: z.unknown().optional(),
   constraints: z.unknown().optional(),
   localSemanticPlan: z.unknown().optional(),
   localActionPlan: z.unknown().optional(),
+  localCompilerContract: z.unknown().optional(),
   availableSemanticStageTemplates: z.array(z.unknown()).max(24).default([]),
+  availableActionSkills: z.array(z.unknown()).max(24).default([]),
   cameras: z.array(z.unknown()).max(8).default([]),
   props: z.array(z.unknown()).max(16).default([]),
   activeCameraId: z.string().max(120).optional(),
@@ -519,6 +523,8 @@ const scene3dMotionContactHintSchema = z.enum([
   "hands"
 ]);
 const scene3dMotionFamilySchema = z.enum(["locomotion", "turn", "roll", "fall", "get_up", "dodge", "crawl", "kneel", "stumble", "reach", "carry", "combat"]);
+const scene3dMotionSemanticActionFamilySchema = z.enum(["locomotion", "combat", "push_pull", "throw", "jump", "fall", "crawl", "posture", "turn", "reach", "unknown"]);
+const scene3dMotionSemanticActionTypeSchema = z.enum(["walk", "run", "dash", "push", "pull", "throw", "punch", "block", "kick", "side_kick", "jump", "crouch", "crawl", "fall", "get_up", "turn", "reach", "idle", "unknown"]);
 const scene3dMotionKeyframeHintSchema = z.object({
   timeRatio: z.number().finite().min(0).max(1),
   label: z.string().trim().min(1).max(120),
@@ -555,6 +561,8 @@ const scene3dMotionIntentSchema = z.object({
   contacts: z.array(scene3dMotionContactHintSchema).max(12),
   lookAt: z.enum(["none", "camera", "object", "point"]),
   targetObjectId: z.string().trim().max(120).optional(),
+  actionFamily: scene3dMotionSemanticActionFamilySchema.optional(),
+  actionType: scene3dMotionSemanticActionTypeSchema.optional(),
   motionFamilies: z.array(scene3dMotionFamilySchema).max(12).default([]),
   keyframeHints: z.array(scene3dMotionKeyframeHintSchema).max(10).default([]),
   contactHints: z.array(z.object({
@@ -628,7 +636,108 @@ function coerceScene3DVec3(value: any, fallback = { x: 0, y: 0, z: 0 }) {
   };
 }
 
+function scene3DMotionPromptAllowsAirborne(prompt: string) {
+  return /跳|跳起|跃起|飞跃|飞|浮空|离地|腾空|翻滚|空翻|jump|leap|airborne|fly|flip|roll/i.test(prompt || "");
+}
+
+function scene3DMotionRequestAllowsAirborne(request: Scene3DMotionRefineRequest) {
+  const semanticPlan: any = request.localSemanticPlan || {};
+  const compilerContract: any = request.localCompilerContract || {};
+  const actionType = String(semanticPlan.actionType || "");
+  const actionSkill = semanticPlan.actionSkill || {};
+  return Boolean(actionSkill.allowAirborne)
+    || Boolean(compilerContract.allowAirborne)
+    || actionType === "jump"
+    || scene3DMotionPromptAllowsAirborne(request.actionPrompt);
+}
+
+function scene3DLocalCompilerContract(request: Scene3DMotionRefineRequest) {
+  const contract: any = request.localCompilerContract || {};
+  const semanticPlan: any = request.localSemanticPlan || {};
+  const actionTypeRaw = String(contract.actionType || semanticPlan.actionType || "");
+  const actionFamilyRaw = String(contract.actionFamily || semanticPlan.actionFamily || "");
+  const allowedActionTypes = new Set(scene3dMotionSemanticActionTypeSchema.options);
+  const allowedActionFamilies = new Set(scene3dMotionSemanticActionFamilySchema.options);
+  const actionType = allowedActionTypes.has(actionTypeRaw as any) ? actionTypeRaw : undefined;
+  const actionFamily = allowedActionFamilies.has(actionFamilyRaw as any) ? actionFamilyRaw : undefined;
+  const contacts = Array.isArray(contract.contacts)
+    ? contract.contacts.map((item: any) => String(item)).filter((item: string) => scene3dMotionContactHintSchema.options.includes(item as any)).slice(0, 12)
+    : [];
+  const actionSequence = Array.isArray(contract.actionSequence)
+    ? contract.actionSequence.map((item: any) => ({
+      actionType: allowedActionTypes.has(String(item?.actionType) as any) ? String(item.actionType) : undefined,
+      label: typeof item?.label === "string" ? item.label.trim().slice(0, 120) : undefined,
+      startRatio: coerceScene3DNumber(item?.startRatio, 0, 0, 1),
+      endRatio: coerceScene3DNumber(item?.endRatio, 1, 0, 1),
+      sourceText: typeof item?.sourceText === "string" ? item.sourceText.trim().slice(0, 160) : undefined
+    })).filter((item: any) => item.actionType).slice(0, 10)
+    : [];
+  const actionChains = Array.isArray(contract.actionChains)
+    ? contract.actionChains.map((item: any) => ({
+      id: typeof item?.id === "string" ? item.id.trim().slice(0, 80) : undefined,
+      label: typeof item?.label === "string" ? item.label.trim().slice(0, 120) : undefined,
+      steps: Array.isArray(item?.steps)
+        ? item.steps.map((step: any) => String(step)).filter((step: string) => allowedActionTypes.has(step as any)).slice(0, 8)
+        : [],
+      description: typeof item?.description === "string" ? item.description.trim().slice(0, 260) : undefined,
+      qualityExpectationIds: Array.isArray(item?.qualityExpectationIds)
+        ? item.qualityExpectationIds.map((id: any) => String(id).trim()).filter(Boolean).slice(0, 8)
+        : []
+    })).filter((item: any) => item.id || item.label).slice(0, 6)
+    : [];
+  const poseStages = Array.isArray(contract.poseStages)
+    ? contract.poseStages.map((item: any) => ({
+      id: typeof item?.id === "string" ? item.id.trim().slice(0, 80) : undefined,
+      label: typeof item?.label === "string" ? item.label.trim().slice(0, 120) : undefined,
+      timeRatio: coerceScene3DNumber(item?.timeRatio, 0.5, 0, 1),
+      poseHint: typeof item?.poseHint === "string" ? item.poseHint.trim().slice(0, 220) : undefined,
+      rootMotionHint: typeof item?.rootMotionHint === "string" ? item.rootMotionHint.trim().slice(0, 220) : undefined,
+      contactHint: typeof item?.contactHint === "string" ? item.contactHint.trim().slice(0, 220) : undefined
+    })).filter((item: any) => item.label).slice(0, 10)
+    : [];
+  const qualityExpectations = Array.isArray(contract.qualityExpectations)
+    ? contract.qualityExpectations.map((item: any) => ({
+      id: typeof item?.id === "string" ? item.id.trim().slice(0, 80) : undefined,
+      label: typeof item?.label === "string" ? item.label.trim().slice(0, 120) : undefined,
+      metric: typeof item?.metric === "string" ? item.metric.trim().slice(0, 80) : undefined
+    })).filter((item: any) => item.id || item.label).slice(0, 16)
+    : [];
+  const promptControlRaw = contract.promptControl && typeof contract.promptControl === "object" ? contract.promptControl : {};
+  const promptControl = {
+    directionLabel: typeof promptControlRaw.directionLabel === "string" ? promptControlRaw.directionLabel.trim().slice(0, 80) : undefined,
+    speedLabel: typeof promptControlRaw.speedLabel === "string" ? promptControlRaw.speedLabel.trim().slice(0, 40) : undefined,
+    forceLabel: typeof promptControlRaw.forceLabel === "string" ? promptControlRaw.forceLabel.trim().slice(0, 40) : undefined,
+    timingTags: Array.isArray(promptControlRaw.timingTags) ? promptControlRaw.timingTags.map((item: any) => String(item).trim()).filter(Boolean).slice(0, 8) : [],
+    stageTags: Array.isArray(promptControlRaw.stageTags) ? promptControlRaw.stageTags.map((item: any) => String(item).trim()).filter(Boolean).slice(0, 10) : [],
+    bodyTags: Array.isArray(promptControlRaw.bodyTags) ? promptControlRaw.bodyTags.map((item: any) => String(item).trim()).filter(Boolean).slice(0, 12) : [],
+    speedScale: coerceScene3DNumber(promptControlRaw.speedScale, 1, 0.2, 2),
+    forceScale: coerceScene3DNumber(promptControlRaw.forceScale, 1, 0.2, 2),
+    holdScale: coerceScene3DNumber(promptControlRaw.holdScale, 1, 0.2, 2),
+    travelScale: coerceScene3DNumber(promptControlRaw.travelScale, 1, 0.2, 2)
+  };
+  const forbiddenOutputFields = Array.isArray(contract.forbiddenOutputFields)
+    ? contract.forbiddenOutputFields.map((item: any) => String(item)).filter(Boolean).slice(0, 24)
+    : ["samples", "animationClip", "transforms", "keyframes", "bonePose", "boneRotations", "jointRotations", "rawFrames", "constraints"];
+  return {
+    actionType,
+    actionFamily,
+    actionLockedByPrompt: Boolean(contract.actionLockedByPrompt),
+    actionLockReason: typeof contract.actionLockReason === "string" ? contract.actionLockReason.trim().slice(0, 300) : undefined,
+    actionSequence,
+    actionChains,
+    poseStages,
+    promptControl,
+    qualityExpectations,
+    forbiddenOutputFields,
+    contacts,
+    targetObjectId: typeof contract.targetObjectId === "string" && contract.targetObjectId.trim() ? contract.targetObjectId.trim() : undefined,
+    grounded: Boolean(contract.grounded),
+    allowAirborne: Boolean(contract.allowAirborne)
+  };
+}
+
 function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineRequest) {
+  const allowsAirborne = scene3DMotionRequestAllowsAirborne(request);
   const rhythmRaw = String(value?.rhythm || "").toLowerCase();
   const rhythm = rhythmRaw === "slow"
     ? "slow"
@@ -649,6 +758,17 @@ function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineReque
   const motionFamilies = Array.isArray(value?.motionFamilies)
     ? value.motionFamilies.map((item: any) => String(item)).filter((item: string) => allowedFamilies.has(item as any)).slice(0, 12)
     : [];
+  const allowedActionFamilies = new Set(scene3dMotionSemanticActionFamilySchema.options);
+  const compilerContract = scene3DLocalCompilerContract(request);
+  const rawActionFamily = allowedActionFamilies.has(String(value?.actionFamily) as any) ? String(value.actionFamily) : undefined;
+  const allowedActionTypes = new Set(scene3dMotionSemanticActionTypeSchema.options);
+  const rawActionType = allowedActionTypes.has(String(value?.actionType) as any) ? String(value.actionType) : undefined;
+  const actionType = compilerContract.actionType && compilerContract.actionType !== "unknown" && compilerContract.actionType !== "idle"
+    ? compilerContract.actionType
+    : rawActionType;
+  const actionFamily = compilerContract.actionFamily && compilerContract.actionFamily !== "unknown"
+    ? compilerContract.actionFamily
+    : rawActionFamily;
   const keyframeHints = Array.isArray(value?.keyframeHints)
     ? value.keyframeHints.map((item: any) => ({
       timeRatio: coerceScene3DNumber(item?.timeRatio, 0.5, 0, 1),
@@ -665,6 +785,21 @@ function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineReque
     })).slice(0, 12)
     : [];
   const cameraMotionValidation = scene3dCameraMotionHintSchema.safeParse(value?.cameraMotionHint);
+  const warnings = Array.isArray(value?.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 24) : [];
+  const forbiddenReturnedFields = compilerContract.forbiddenOutputFields.filter((field: string) => Object.prototype.hasOwnProperty.call(value || {}, field));
+  if (forbiddenReturnedFields.length) {
+    warnings.push(`AI returned forbidden raw motion fields (${forbiddenReturnedFields.join(", ")}); they were ignored. Scene3D local compiler remains the only animation executor.`);
+  }
+  if (compilerContract.actionType && rawActionType && rawActionType !== compilerContract.actionType) {
+    warnings.push(`AI actionType ${rawActionType} was aligned to local compiler actionType ${compilerContract.actionType}.`);
+  }
+  if (compilerContract.actionFamily && rawActionFamily && rawActionFamily !== compilerContract.actionFamily) {
+    warnings.push(`AI actionFamily ${rawActionFamily} was aligned to local compiler actionFamily ${compilerContract.actionFamily}.`);
+  }
+  const targetObjectId = compilerContract.targetObjectId
+    || (typeof value?.targetObjectId === "string" && value.targetObjectId.trim() ? value.targetObjectId.trim() : undefined);
+  const mergedContacts = Array.from(new Set([...compilerContract.contacts, ...contacts])).slice(0, 12);
+
   return {
     version: 1 as const,
     intent: typeof value?.intent === "string" && value.intent.trim() ? value.intent.trim() : request.actionPrompt,
@@ -675,20 +810,22 @@ function coerceScene3DMotionIntent(value: any, request: Scene3DMotionRefineReque
     direction: coerceScene3DVec3(value?.direction),
     distance: coerceScene3DNumber(value?.distance, 0, 0, 5),
     turnDeg: coerceScene3DNumber(value?.turnDeg ?? value?.turn, 0, -360, 360),
-    roll: coerceScene3DNumber(value?.roll, 0, 0, 1),
+    roll: coerceScene3DNumber(value?.roll, 0, 0, allowsAirborne ? 1 : 0.12),
     crouch: coerceScene3DNumber(value?.crouch, 0, 0, 1),
-    verticalLift: coerceScene3DNumber(value?.verticalLift, 0, 0, 2),
+    verticalLift: coerceScene3DNumber(value?.verticalLift, 0, 0, allowsAirborne ? 2 : 0.06),
     bodyLean: coerceScene3DVec3(value?.bodyLean),
     armSwing: coerceScene3DNumber(value?.armSwing, 0, 0, 1),
     rhythm,
-    contacts,
+    contacts: mergedContacts,
     lookAt,
-    targetObjectId: typeof value?.targetObjectId === "string" && value.targetObjectId.trim() ? value.targetObjectId.trim() : undefined,
+    targetObjectId,
+    actionFamily,
+    actionType,
     motionFamilies,
     keyframeHints,
     contactHints,
     cameraMotionHint: cameraMotionValidation.success ? cameraMotionValidation.data : undefined,
-    warnings: Array.isArray(value?.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 24) : [],
+    warnings: warnings.slice(0, 24),
     confidence: coerceScene3DNumber(value?.confidence, 0.5, 0, 1)
   };
 }
@@ -1402,8 +1539,19 @@ function scene3dMotionRefineSystemPrompt() {
     "Generate a lightweight MotionIntent only. Do not generate video, assets, URLs, fake progress, final animation clips, transform keyframes, bone keyframes, contact keyframes, or constraints.",
     "Return JSON only. Do not return Markdown, comments, prose outside JSON, or trailing commas.",
     "The local Scene3D compiler will generate positions, rotations, bone poses, contacts, and final animation samples.",
-    "Start and end poses/transforms are hard constraints owned by the caller. Infer only the in-between motion semantics.",
+    "Start, end, and any provided middle keyframe poses/transforms are hard constraints owned by the caller. Infer only the motion semantics between adjacent fixed poses.",
     "Prefer localSemanticPlan and available stage templates. You may refine them, but must not invent random in-between actions or bypass the local compiler.",
+    "localCompilerContract is the executable contract. If it says actionLockedByPrompt is true, actionType/actionFamily, contacts, targetObjectId, grounded/airborne limits, and quality expectations are not suggestions; preserve them.",
+    "localCompilerContract.actionSequence and poseStages are the authoritative semantic timeline. You may clarify timing notes, contact notes, camera intent, and warnings, but must not replace the local sequence with unrelated actions.",
+    "localCompilerContract.fixedPoseConstraints and middleKeyframeConstraints are mandatory pose checkpoints. Preserve their timing/order and explain the motion between them; do not replace, reorder, smooth away, or ignore middle keyframes.",
+    "localCompilerContract.actionChains are locked high-level compound-action chains such as approach-contact, turn-throw, and low-recovery-attack. Preserve their order and explain how the intent satisfies their qualityExpectationIds.",
+    "Compound chain meanings: approach_contact = move/approach first, slow near target, then hand contact and force; turn_throw = turn/twist first, then wind up, release, and recover; low_recovery_attack = crouch/dodge/block first, rise/recover balance, then strike/throw.",
+    "localCompilerContract.promptControl contains locally parsed direction, speed, force, timing, stage, and body-control words from the user prompt. Treat these as explicit user controls, not loose style suggestions.",
+    "Never return any field listed in localCompilerContract.forbiddenOutputFields. In particular, never return samples, animationClip, transforms, raw keyframes, bonePose, boneRotations, jointRotations, or constraints.",
+    "You must align the intent to one local action skill. actionType must be one of: walk, run, dash, push, pull, throw, punch, block, kick, side_kick, jump, crouch, crawl, fall, get_up, turn, reach, idle, unknown.",
+    "actionFamily must be one of: locomotion, combat, push_pull, throw, jump, fall, crawl, posture, turn, reach, unknown.",
+    "If localSemanticPlan already identifies an actionType, preserve it unless the user prompt explicitly contradicts it. User words such as 双手推, 跑步, 投掷, 蹲下, 跳起, 格挡, 出拳 are higher priority than model guesses.",
+    "Do not invent unsupported action names. For compound prompts, describe the sequence in generatedMotionPrompt/keyframeHints/contactHints, but keep actionType aligned with the dominant local action skill.",
     "Default style is realistic human / 3D game character motion: readable intent, conservative body mechanics, continuous center of gravity, and grounded feet unless the prompt explicitly asks for jumping, flying, floating, rolling, or exaggerated cartoon motion.",
     "For unusual or underspecified actions, derive conservative universal body mechanics: direction, distance, rotation, crouch, lift, lean, arm swing, contact hints, look target, and rhythm.",
     "Keep values realistic by default: distance usually 0-1.2, turnDeg usually below 90 unless turning is explicit, roll 0 unless falling or rolling, verticalLift 0 unless jump/fly/airborne is explicit, armSwing below 0.6 for normal walk/run/push/combat.",
@@ -1427,6 +1575,8 @@ function scene3dMotionRefineSystemPrompt() {
   "contacts": ["leftFoot", "rightFoot"],
   "lookAt": "none | camera | object | point",
   "targetObjectId": "existing nearby object id when relevant",
+  "actionFamily": "locomotion | combat | push_pull | throw | jump | fall | crawl | posture | turn | reach | unknown",
+  "actionType": "walk | run | dash | push | pull | throw | punch | block | kick | side_kick | jump | crouch | crawl | fall | get_up | turn | reach | idle | unknown",
   "motionFamilies": ["locomotion", "turn", "reach", "combat"],
   "keyframeHints": [{ "timeRatio": 0.5, "label": "main anticipation or contact pose", "posePresetId": "optional existing preset id", "note": "why this key pose matters" }],
   "contactHints": [{ "timeSec": 0.6, "contact": "rightFoot", "note": "right foot plants on the ground" }],
@@ -1438,6 +1588,7 @@ function scene3dMotionRefineSystemPrompt() {
 }
 
 function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequest; node: any }) {
+  const compilerContract = scene3DLocalCompilerContract(input.request);
   return [
     `Node id: ${input.request.nodeId}.`,
     `Transition id: ${input.request.transitionId}.`,
@@ -1448,6 +1599,8 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     `Active camera id: ${input.request.activeCameraId || "not specified"}.`,
     `Coordinate system: ${input.request.coordinateSystemDescription}`,
     `Action prompt: ${input.request.actionPrompt}`,
+    "Locked compound action chains from local compiler:",
+    compactJson(compilerContract.actionChains || [], 2400),
     "Hard start/end summary from Scene3D state:",
     compactJson({
       startTransform: input.request.startTransform,
@@ -1461,17 +1614,33 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
       constraints: input.request.constraints,
       localSemanticPlan: input.request.localSemanticPlan,
       localActionPlan: input.request.localActionPlan,
+      localCompilerContract: compilerContract,
       availableSemanticStageTemplates: input.request.availableSemanticStageTemplates,
+      availableActionSkills: input.request.availableActionSkills,
       cameras: input.request.cameras,
       props: input.request.props,
+      fixedPoseConstraints: input.request.fixedPoseConstraints,
+      middleKeyframeConstraints: input.request.middleKeyframeConstraints,
       viewportScreenshotAssetId: input.request.viewportScreenshotAssetId || null,
       referenceImageAssetId: input.request.referenceImageAssetId || null
     }, 5000),
     "Motion rules:",
     "- Do not return keyframes or bone rotations.",
     "- Treat localSemanticPlan as the deterministic local parser result. Preserve explicit user words from actionPrompt over your own guess.",
+    "- Treat localCompilerContract as the executable local compiler contract. If actionLockedByPrompt is true, do not change actionType/actionFamily; explain and refine only timing, contacts, camera intent, and semantic phase hints.",
+    "- localCompilerContract.actionSequence is already the local parser's ordered motion plan. Do not reorder it, replace it, or add unrelated action phases; use keyframeHints only as semantic annotations near the existing stages.",
+    "- fixedPoseConstraints and middleKeyframeConstraints are hard pose constraints equal in importance to startPose and endPose. Your intent must pass through them at their exact time ratios and describe only the motion between neighboring fixed poses.",
+    "- If middleKeyframeConstraints exist, keyframeHints should support those checkpoints instead of overwriting, smoothing away, or moving them.",
+    "- localCompilerContract.actionChains identify fixed compound-action meaning from the prompt. Mention these chains in intent/generatedMotionPrompt and keep their qualityExpectationIds satisfied.",
+    "- For approach_contact chains, describe approach/deceleration/contact/force instead of treating the prompt as only locomotion or only pushing.",
+    "- For turn_throw chains, describe turn/twist/windup/release/recovery in that order and keep feet grounded unless the prompt explicitly asks for a jump throw.",
+    "- For low_recovery_attack chains, describe low dodge/block, rising recovery, then the final attack; do not collapse it into only crouch or only punch.",
+    "- localCompilerContract.promptControl is the user's parsed control layer. Preserve its direction, speed, force, timingTags, stageTags, and bodyTags in your semantic explanation and generatedMotionPrompt.",
+    "- Never output fields listed in localCompilerContract.forbiddenOutputFields. If you think raw frames or joints are needed, add a warning instead; the local compiler will generate them.",
     "- Use availableSemanticStageTemplates to choose or refine semantic stages. Do not invent raw joint values; describe action phases only.",
-    "- Prefer realistic human or 3D-game motion. Do not add exaggerated animation, random mid-air flips, sudden spins, drifting feet, or unrelated whole-body swings unless the user explicitly asks for 夸张, 翻滚, 飞跃, or 浮空.",
+    "- Use availableActionSkills as the executable skill contract. If your interpretation conflicts with a listed skill's grounded, allowAirborne, rootLimits, or quality targets, prefer the local skill contract and add a warning instead of inventing a new motion style.",
+    "- Use localCompilerContract.qualityExpectations as the acceptance criteria for generatedMotionPrompt, keyframeHints, and contactHints. For example, if it includes gait, support, hand_contact, throw_release, punch_recovery, or prop_contact_motion, your intent must describe how those expectations are satisfied.",
+    "- Prefer realistic human or 3D-game motion. Do not add exaggerated animation, random mid-air flips, sudden spins, drifting feet, or unrelated whole-body swings unless the user explicitly asks for 夸张, 翻滚, 飞跃, 浮空, or 离地.",
     "- Ground actions such as walk, run, push, throw, punch, block, crouch, crawl, and turn must keep feet, knees, hands, or body contacts physically plausible. Only jump, fly, or airborne prompts should use obvious verticalLift.",
     "- For push: use brace, contact, force, hold or recover semantics; both feet stay grounded and hands contact the target.",
     "- For throw: use anticipation, torso twist, release, recovery; the throwing hand leads and feet stay grounded unless the prompt says jump throw.",

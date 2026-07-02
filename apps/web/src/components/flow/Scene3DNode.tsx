@@ -269,6 +269,37 @@ type MotionSemanticStage = {
   rootMotionHint: string;
   contactHint: string;
 };
+type MotionActionSequenceStep = {
+  id: string;
+  actionType: MotionSemanticActionType;
+  label: string;
+  startRatio: number;
+  endRatio: number;
+  sourceText: string;
+};
+type MotionQualityExpectation = {
+  id: string;
+  metric: MotionQualityIssue['metric'];
+  label: string;
+  description: string;
+  minValue?: number;
+  maxValue?: number;
+  required?: boolean;
+};
+type SequenceBoundaryStats = {
+  maxPoseDelta: number;
+  maxRootDelta: number;
+  maxRotationDelta: number;
+  maxVelocityRatio: number;
+  issues: Array<Omit<MotionQualityIssue, 'id'>>;
+};
+type MotionActionChain = {
+  id: 'approach_contact' | 'turn_throw' | 'low_recovery_attack';
+  label: string;
+  steps: MotionSemanticActionType[];
+  description: string;
+  qualityExpectationIds: string[];
+};
 type MotionSemanticPlan = {
   version: 1;
   source: 'local' | 'ai' | 'merged';
@@ -281,7 +312,11 @@ type MotionSemanticPlan = {
   bodyFocus: string[];
   rootMotion: string[];
   poseStages: MotionSemanticStage[];
+  actionSequence?: MotionActionSequenceStep[];
+  actionChains?: MotionActionChain[];
   contacts: Array<{ label: string; contact: MotionContactHint; required: boolean }>;
+  qualityExpectations?: MotionQualityExpectation[];
+  actionSkill?: { label: string; compileMode: 'semantic_only' | 'universal_assist'; grounded: boolean; allowAirborne: boolean; constraints: string[] };
   cameraIntent?: { label: string; type: CameraMotionType; priority: 'prompt' | 'manual'; description: string };
   targetObjectId?: string;
   targetObjectName?: string;
@@ -321,6 +356,8 @@ type MotionIntent = {
   contacts: MotionContactHint[];
   lookAt: 'none' | 'camera' | 'object' | 'point';
   targetObjectId?: string;
+  actionFamily?: MotionSemanticActionFamily;
+  actionType?: MotionSemanticActionType;
   motionFamilies?: UniversalMotionFamily[];
   keyframeHints?: MotionKeyframeHint[];
   contactHints?: Array<{ timeSec?: number; contact: MotionContactHint; note?: string }>;
@@ -348,7 +385,7 @@ type MotionRegenerateLockScope = 'none' | 'rootPosition' | 'rootRotation' | 'upp
 type MotionQualityIssue = {
   id: string;
   severity: 'error' | 'warning' | 'info';
-  metric: 'endpoint' | 'speed' | 'rotation' | 'foot_lock' | 'contact' | 'pose';
+  metric: 'endpoint' | 'speed' | 'rotation' | 'foot_lock' | 'contact' | 'pose' | 'sequence';
   message: string;
   timeSec?: number;
   value?: number;
@@ -361,10 +398,49 @@ type MotionQualityReport = {
   metrics: {
     maxStepDistance: number;
     maxRootRotationDelta: number;
+    rootVelocitySpikeRatio?: number;
+    poseVelocitySpikeRatio?: number;
+    maxPoseVelocity?: number;
     startPositionDrift: number;
     endPositionDrift: number;
     lockedFootChanges: number;
     contactCount: number;
+    motionSampleRate?: number;
+    locomotionFootPlantDrift?: number;
+    locomotionRootStepJitter?: number;
+    locomotionFootContactCount?: number;
+    locomotionFootPhaseMismatchCount?: number;
+    locomotionRootBacktrackCount?: number;
+    locomotionRootTravelDistance?: number;
+    locomotionExpectedTravelDistance?: number;
+    locomotionPaceCoverageRatio?: number;
+    locomotionSupportSwitchCount?: number;
+    locomotionSupportCoverageRatio?: number;
+    locomotionArmSwingSeparation?: number;
+    locomotionArmLegSyncScore?: number;
+    locomotionLegSeparation?: number;
+    locomotionLegSignChanges?: number;
+    semanticTimingPeakRatio?: number;
+    semanticTimingSpeedContrast?: number;
+    semanticHandReachDistance?: number;
+    semanticHandContactSuccessRatio?: number;
+    semanticTargetApproachDistance?: number;
+    semanticContactBodyDrive?: number;
+    semanticContactFootStability?: number;
+    semanticContactWindowCoverage?: number;
+    semanticPropMotionDistance?: number;
+    semanticPropDirectionAlignment?: number;
+    semanticThrowReleaseDistance?: number;
+    semanticPunchExtension?: number;
+    semanticPunchRecoveryRatio?: number;
+    sequenceBoundaryMaxPoseDelta?: number;
+    sequenceBoundaryMaxRootDelta?: number;
+    sequenceBoundaryMaxRotationDelta?: number;
+    sequenceBoundaryMaxVelocityRatio?: number;
+    sequenceBoundarySmoothnessRatio?: number;
+    motionExpectationCount?: number;
+    motionExpectationFailedCount?: number;
+    motionExpectationPassRatio?: number;
   };
 };
 type MotionPipelineStepState = 'blocked' | 'ready' | 'running' | 'done' | 'failed' | 'stale';
@@ -374,6 +450,45 @@ type PoseTransitionTemplate = {
   hand?: 'left' | 'right';
   targetObjectId?: string | null;
   strength: number;
+};
+type MotionGaitConfig = {
+  cadenceHz: number;
+  rootBob: number;
+  weightShift: number;
+  footPlant: number;
+  strideDeg: number;
+  armDeg: number;
+  leanDeg: number;
+  stanceRatio: number;
+  swingLiftDeg: number;
+  lateralSway: number;
+};
+type MotionSkillQualityTarget = {
+  maxRootStepDistance: number;
+  maxRootRotationDelta: number;
+  maxPoseStepDelta: number;
+  maxRootLift: number;
+  minLegSeparation?: number;
+  minArmSwingSeparation?: number;
+  minSupportSwitchesPerSec?: number;
+  minFootContactsPerSec?: number;
+  maxFootPlantDrift?: number;
+  maxRootStepJitter?: number;
+  minPrimaryJointDelta?: number;
+};
+type MotionActionSkill = {
+  actionType: MotionSemanticActionType;
+  compileMode: 'semantic_only' | 'universal_assist';
+  grounded: boolean;
+  allowAirborne: boolean;
+  gait?: MotionGaitConfig;
+  rootLimits: { minDrop: number; maxLift: number };
+  smoothing: { root: number; rotation: number; pose: number };
+  maxHorizontalOverlay: number;
+  maxYawOverlay: number;
+  defaultTravelPerSec?: number;
+  maxTravel?: number;
+  quality: MotionSkillQualityTarget;
 };
 type PoseTransitionActionPlan = {
   mode?: 'motion_intent' | 'template_assist' | 'universal';
@@ -667,6 +782,13 @@ const CURVE_DESCRIPTIONS: Record<CurveType, string> = {
   bullet_time: '子弹时间：前段正常推进，中段明显放慢，末段再加速。',
   pulse: '脉冲：整体连续推进，中段短促加速一下，适合打击瞬间或突然发力。',
   hold_then_burst: '保持后冲：前段变化很少，后段快速完成，适合先停住蓄力、最后爆发完成。'
+};
+const SCENE_TOGGLE_DESCRIPTIONS = {
+  groundCollision: '开启后角色和道具向下移动时会被地面阻挡，向上移动不受限制。',
+  groundGrid: '显示地面上的参考网格，用于判断角色、道具和机位在场景中的位置关系。',
+  motionPath: '显示动态播放时的角色运动轨迹，方便检查位移方向、节奏和轨迹是否流畅。',
+  characterLabels: '在视口中显示角色名称，方便多角色场景中快速识别当前对象。',
+  gridSnap: '移动、旋转或缩放对象时按网格步长对齐，方便精确摆放和保持位置整齐。'
 };
 const MAX_IMPORTED_MODEL_BYTES = 80 * 1024 * 1024;
 const IMPORTED_MODEL_ACCEPT = '.fbx,.glb,.gltf,.obj,model/gltf-binary,model/gltf+json,model/obj,application/octet-stream';
@@ -1364,6 +1486,7 @@ const MOTION_SEMANTIC_TYPE_LABELS: Record<MotionSemanticActionType, string> = {
 };
 
 type PromptHandPreference = 'left' | 'right' | 'both' | 'none';
+type PromptLegPreference = 'left' | 'right' | 'none';
 type MotionPromptLexicon = {
   family: MotionSemanticActionFamily;
   type: MotionSemanticActionType;
@@ -1371,43 +1494,641 @@ type MotionPromptLexicon = {
   priority: number;
   reason: string;
 };
+type PromptActionMatch = MotionPromptLexicon & { index: number; sequenceReason?: string };
+type PromptSequenceRelation = {
+  before: MotionSemanticActionType;
+  after: MotionSemanticActionType;
+  reason: string;
+};
 
 const MOTION_PROMPT_LEXICON: MotionPromptLexicon[] = [
-  { family: 'push_pull', type: 'push', priority: 100, match: /推|推动|推开|前推|推东西|push/, reason: '识别到推的动作动词' },
-  { family: 'push_pull', type: 'pull', priority: 100, match: /拉|回拉|拉开|拖拽|pull|drag/, reason: '识别到拉的动作动词' },
-  { family: 'throw', type: 'throw', priority: 96, match: /投|投掷|扔|抛|甩出|throw|toss/, reason: '识别到投掷动作' },
-  { family: 'jump', type: 'jump', priority: 92, match: /跳|跃起|跳起|腾空|jump|hop|leap/, reason: '识别到跳跃或腾空' },
-  { family: 'posture', type: 'crouch', priority: 90, match: /蹲|下蹲|低重心|压低|躲避|闪避|下潜|crouch|squat|duck|evade/, reason: '识别到下蹲、低重心或躲避' },
+  { family: 'push_pull', type: 'push', priority: 100, match: /推|推动|推开|前推|推东西|推箱子|推门|push/, reason: '识别到“推”的动作动词' },
+  { family: 'push_pull', type: 'pull', priority: 100, match: /拉|回拉|拉开|拖拽|拖动|pull|drag/, reason: '识别到“拉”的动作动词' },
+  { family: 'throw', type: 'throw', priority: 96, match: /扔|投掷|投出|甩出|抛出|throw|toss/, reason: '识别到投掷动作' },
+  { family: 'jump', type: 'jump', priority: 92, match: /跳|跳起|跃起|腾空|jump|hop|leap/, reason: '识别到跳跃或腾空' },
+  { family: 'posture', type: 'crouch', priority: 90, match: /蹲|蹲下|下蹲|低重心|压低|躲避|闪避|下潜|crouch|squat|duck|evade/, reason: '识别到下蹲、低重心或躲避' },
   { family: 'combat', type: 'block', priority: 88, match: /格挡|防守|防御|招架|block|guard|parry/, reason: '识别到防守或格挡' },
-  { family: 'combat', type: 'side_kick', priority: 86, match: /侧踢|横踢|side\s*kick/, reason: '识别到侧向踢腿' },
-  { family: 'combat', type: 'kick', priority: 84, match: /踢|踢腿|kick/, reason: '识别到踢腿动作' },
+  { family: 'combat', type: 'side_kick', priority: 86, match: /侧踢|横踢|侧向踢|side\s*kick/, reason: '识别到侧向踢腿' },
+  { family: 'combat', type: 'kick', priority: 84, match: /踢|踢腿|踹|kick/, reason: '识别到踢腿动作' },
   { family: 'combat', type: 'punch', priority: 82, match: /出拳|挥拳|拳击|拳|攻击|打击|打斗|格斗|punch|jab|strike|attack|fight|combat/, reason: '识别到格斗攻击' },
-  { family: 'crawl', type: 'crawl', priority: 78, match: /爬|爬行|匍匐|crawl|creep/, reason: '识别到爬行' },
+  { family: 'crawl', type: 'crawl', priority: 78, match: /爬|爬行|匍匐|crawl|creep/, reason: '识别到爬行动作' },
   { family: 'fall', type: 'fall', priority: 76, match: /摔|倒地|跌倒|倒下|绊倒|fall|collapse|knockdown/, reason: '识别到倒地或跌倒' },
   { family: 'posture', type: 'get_up', priority: 74, match: /起身|站起|get up|stand up|rise/, reason: '识别到起身' },
   { family: 'locomotion', type: 'dash', priority: 70, match: /冲刺|疾跑|猛冲|dash|sprint/, reason: '识别到冲刺' },
   { family: 'locomotion', type: 'run', priority: 68, match: /跑|奔跑|跑步|run/, reason: '识别到跑步' },
-  { family: 'locomotion', type: 'walk', priority: 64, match: /走|步行|行走|迈步|walk|step/, reason: '识别到走路或迈步' },
+  { family: 'locomotion', type: 'walk', priority: 64, match: /走|走路|步行|行走|迈步|walk|step/, reason: '识别到走路或迈步' },
   { family: 'turn', type: 'turn', priority: 58, match: /转身|转向|旋转|回头|turn|rotate|spin|pivot/, reason: '识别到转身' },
-  { family: 'reach', type: 'reach', priority: 54, match: /伸手|抓|拿|指向|触碰|reach|grab|point|touch/, reason: '识别到伸手或触碰' }
+  { family: 'reach', type: 'reach', priority: 54, match: /伸手|拿|抓|指向|触碰|reach|grab|point|touch/, reason: '识别到伸手或触碰' }
 ];
-
 function matchesPrompt(prompt: string, pattern: RegExp) {
   return pattern.test(prompt.trim().toLowerCase());
 }
 
 function promptActionMatches(prompt: string) {
   const normalized = prompt.trim().toLowerCase();
+  return promptActionMatchesByPosition(normalized)
+    .sort((a, b) => b.priority - a.priority || a.index - b.index);
+}
+
+function promptActionMatchesByPosition(prompt: string) {
+  const normalized = prompt.trim().toLowerCase();
   return MOTION_PROMPT_LEXICON
-    .filter((item) => item.match.test(normalized))
-    .sort((a, b) => b.priority - a.priority);
+    .map((item) => {
+      const match = normalized.match(item.match);
+      return match && match.index !== undefined ? { ...item, index: match.index } : null;
+    })
+    .filter((item): item is PromptActionMatch => Boolean(item))
+    .sort((a, b) => a.index === b.index ? b.priority - a.priority : a.index - b.index);
+}
+
+function hasPromptApproachBeforeContact(normalized: string) {
+  const hasApproachVerb = /过去|靠近|接近|上前|跑到|走到|冲到|跑向|走向|冲向|move to|approach/.test(normalized);
+  const hasContactVerb = /推|拉|抓|拿|触碰|碰到|接触|攻击|出拳|踢|投掷|扔|push|pull|grab|touch|punch|kick|throw/.test(normalized);
+  return hasApproachVerb && hasContactVerb;
+}
+
+function hasPromptTurnBeforeAction(normalized: string) {
+  return /(?:转身|回身|转向|回头|pivot|turn).{0,12}(?:后|之后|再|然后|投|扔|出拳|挥拳|踢|攻击|throw|punch|kick|attack)/.test(normalized)
+    || /(?:投|扔|出拳|挥拳|踢|攻击|throw|punch|kick|attack).{0,12}(?:前|之前).{0,8}(?:转身|回身|转向|回头|pivot|turn)/.test(normalized);
+}
+
+function hasPromptCrouchBeforeRecovery(normalized: string) {
+  return /(?:蹲|蹲下|下蹲|低重心|躲避|闪避|下潜|crouch|duck|evade).{0,14}(?:后|之后|再|然后|起身|站起|出拳|攻击|get up|stand up|punch|attack)/.test(normalized);
+}
+
+function hasPromptRecoveryBeforeAttack(normalized: string) {
+  return /(?:起身|站起|get up|stand up|rise).{0,12}(?:后|之后|再|然后|出拳|挥拳|攻击|踢|投|扔|punch|attack|kick|throw)/.test(normalized)
+    || /(?:出拳|挥拳|攻击|踢|投|扔|punch|attack|kick|throw).{0,12}(?:前|之前).{0,8}(?:起身|站起|get up|stand up|rise)/.test(normalized);
+}
+
+function hasPromptFallBeforeRecovery(normalized: string) {
+  return /(?:摔|倒地|跌倒|倒下|fall|collapse).{0,14}(?:后|之后|再|然后|起身|站起|get up|stand up|rise)/.test(normalized);
+}
+
+function promptActionOccurrence(normalized: string, actionType: MotionSemanticActionType) {
+  const lexicon = MOTION_PROMPT_LEXICON.find((item) => item.type === actionType);
+  if (!lexicon) return null;
+  const match = normalized.match(lexicon.match);
+  if (!match || match.index === undefined) return null;
+  return {
+    start: match.index,
+    end: match.index + match[0].length
+  };
+}
+
+function promptSequenceConnectorBetween(text: string) {
+  return /后|之后|以后|然后|再|接着|随后|紧接着|接下来|then|after/.test(text);
+}
+
+function promptReverseSequenceConnectorBetween(text: string) {
+  return /前|之前|before/.test(text);
+}
+
+function promptExplicitSequenceRelations(normalized: string, actionTypes: MotionSemanticActionType[]): PromptSequenceRelation[] {
+  const uniqueTypes = Array.from(new Set(actionTypes.filter((type) => type !== 'unknown' && type !== 'idle')));
+  const occurrences = new Map<MotionSemanticActionType, { start: number; end: number }>();
+  uniqueTypes.forEach((type) => {
+    const occurrence = promptActionOccurrence(normalized, type);
+    if (occurrence) occurrences.set(type, occurrence);
+  });
+  const relations: PromptSequenceRelation[] = [];
+  const addRelation = (before: MotionSemanticActionType, after: MotionSemanticActionType, reason: string) => {
+    if (before === after) return;
+    if (relations.some((item) => item.before === before && item.after === after)) return;
+    relations.push({ before, after, reason });
+  };
+
+  for (let a = 0; a < uniqueTypes.length; a += 1) {
+    for (let b = a + 1; b < uniqueTypes.length; b += 1) {
+      const firstType = uniqueTypes[a];
+      const secondType = uniqueTypes[b];
+      const first = occurrences.get(firstType);
+      const second = occurrences.get(secondType);
+      if (!first || !second) continue;
+      const earlierType = first.start <= second.start ? firstType : secondType;
+      const laterType = first.start <= second.start ? secondType : firstType;
+      const earlier = first.start <= second.start ? first : second;
+      const later = first.start <= second.start ? second : first;
+      const between = normalized.slice(earlier.end, later.start);
+      if (promptSequenceConnectorBetween(between)) {
+        addRelation(earlierType, laterType, '根据“然后/之后/再”等连接词，保持提示词中的先后顺序');
+      }
+      if (promptReverseSequenceConnectorBetween(between)) {
+        addRelation(laterType, earlierType, '根据“之前/前/before”等连接词，后出现的准备动作需要先执行');
+      }
+    }
+  }
+
+  if (hasPromptApproachBeforeContact(normalized)) {
+    uniqueTypes.filter(isLocomotionActionType).forEach((locomotionType) => {
+      uniqueTypes
+        .filter((type) => ['push', 'pull', 'reach', 'throw', 'punch', 'kick', 'side_kick'].includes(type))
+        .forEach((actionType) => {
+          addRelation(locomotionType, actionType, '根据“过去/靠近/跑到”等语义，先完成靠近目标，再执行接触或攻击动作');
+        });
+    });
+  }
+
+  if (hasPromptTurnBeforeAction(normalized)) {
+    uniqueTypes
+      .filter((type) => type === 'turn')
+      .forEach((turnType) => {
+        uniqueTypes
+          .filter((type) => ['push', 'pull', 'reach', 'throw', 'punch', 'kick', 'side_kick'].includes(type))
+          .forEach((actionType) => addRelation(turnType, actionType, '根据“转身后/回身后”语义，先转身再发力'));
+      });
+  }
+
+  if (hasPromptCrouchBeforeRecovery(normalized)) {
+    uniqueTypes
+      .filter((type) => type === 'crouch' || type === 'block')
+      .forEach((lowType) => {
+        uniqueTypes
+          .filter((type) => type === 'get_up' || type === 'punch' || type === 'kick' || type === 'side_kick' || type === 'throw')
+          .forEach((actionType) => addRelation(lowType, actionType, '根据“躲避后/蹲下后”语义，先下沉防守，再进入后续动作'));
+      });
+  }
+
+  if (hasPromptFallBeforeRecovery(normalized)) {
+    addRelation('fall', 'get_up', '根据“倒地后起身”语义，先倒地再起身');
+  }
+
+  if (hasPromptRecoveryBeforeAttack(normalized)) {
+    uniqueTypes
+      .filter((type) => type === 'get_up')
+      .forEach((recoveryType) => {
+        uniqueTypes
+          .filter((type) => ['punch', 'kick', 'side_kick', 'throw'].includes(type))
+          .forEach((actionType) => addRelation(recoveryType, actionType, '根据“起身后”语义，先恢复站姿再攻击或投掷'));
+      });
+  }
+
+  return relations;
+}
+
+function actionSequenceHasType(items: PromptActionMatch[], predicate: (type: MotionSemanticActionType) => boolean) {
+  return items.some((item) => predicate(item.type));
+}
+
+function appendPromptActionReason(item: PromptActionMatch, reason: string) {
+  const parts = [item.sequenceReason, reason].filter(Boolean);
+  return {
+    ...item,
+    sequenceReason: Array.from(new Set(parts)).join('；')
+  };
+}
+
+function movePromptActionBefore(items: PromptActionMatch[], before: (type: MotionSemanticActionType) => boolean, after: (type: MotionSemanticActionType) => boolean, reason: string) {
+  const beforeIndex = items.findIndex((item) => before(item.type));
+  const afterIndex = items.findIndex((item) => after(item.type));
+  if (beforeIndex < 0 || afterIndex < 0) return items;
+  if (beforeIndex < afterIndex) {
+    return items.map((item, index) => index === beforeIndex ? appendPromptActionReason(item, reason) : item);
+  }
+  const next = items.slice();
+  const [moved] = next.splice(beforeIndex, 1);
+  const targetIndex = next.findIndex((item) => after(item.type));
+  next.splice(Math.max(0, targetIndex), 0, appendPromptActionReason(moved, reason));
+  return next;
+}
+
+function normalizePromptActionSequenceOrder(items: PromptActionMatch[], normalized: string) {
+  let next = items.slice();
+  const hasLocomotion = actionSequenceHasType(next, isLocomotionActionType);
+  const hasContactOrAttack = actionSequenceHasType(next, (type) => ['push', 'pull', 'reach', 'throw', 'punch', 'kick', 'side_kick'].includes(type));
+
+  if (hasLocomotion && hasContactOrAttack && hasPromptApproachBeforeContact(normalized)) {
+    next = movePromptActionBefore(
+      next,
+      isLocomotionActionType,
+      (type) => ['push', 'pull', 'reach', 'throw', 'punch', 'kick', 'side_kick'].includes(type),
+      '根据“过去/靠近/跑到”等语义，先完成靠近目标，再执行接触或攻击动作'
+    );
+  }
+
+  if (hasPromptTurnBeforeAction(normalized)) {
+    next = movePromptActionBefore(
+      next,
+      (type) => type === 'turn',
+      (type) => ['throw', 'punch', 'kick', 'side_kick'].includes(type),
+      '根据“转身后/回身后”语义，先转身再发力'
+    );
+  }
+
+  if (hasPromptCrouchBeforeRecovery(normalized)) {
+    next = movePromptActionBefore(
+      next,
+      (type) => type === 'crouch' || type === 'block',
+      (type) => type === 'get_up' || type === 'punch' || type === 'kick' || type === 'side_kick',
+      '根据“躲避后/蹲下后”语义，先下沉防守，再进入后续动作'
+    );
+  }
+
+  if (hasPromptFallBeforeRecovery(normalized)) {
+    next = movePromptActionBefore(
+      next,
+      (type) => type === 'fall',
+      (type) => type === 'get_up',
+      '根据“倒地后起身”语义，先倒地再起身'
+    );
+  }
+
+  if (hasPromptRecoveryBeforeAttack(normalized)) {
+    next = movePromptActionBefore(
+      next,
+      (type) => type === 'get_up',
+      (type) => ['punch', 'kick', 'side_kick', 'throw'].includes(type),
+      '根据“起身后”语义，先恢复站姿再攻击或投掷'
+    );
+  }
+
+  promptExplicitSequenceRelations(normalized, next.map((item) => item.type)).forEach((relation) => {
+    next = movePromptActionBefore(
+      next,
+      (type) => type === relation.before,
+      (type) => type === relation.after,
+      relation.reason
+    );
+  });
+
+  return next;
+}
+
+function promptNeedsImplicitGetUpBeforeAttack(normalized: string) {
+  return /(?:蹲|蹲下|下蹲|低重心|躲避|闪避|下潜|crouch|duck|evade).{0,18}(?:后|之后|再|然后|接着|随后|then|after).{0,18}(?:出拳|挥拳|攻击|踢|投|扔|punch|attack|kick|throw)/.test(normalized);
+}
+
+function insertImplicitActionAfter(
+  items: PromptActionMatch[],
+  after: (type: MotionSemanticActionType) => boolean,
+  before: (type: MotionSemanticActionType) => boolean,
+  actionType: MotionSemanticActionType,
+  reason: string,
+  normalizedLength: number
+) {
+  if (items.some((item) => item.type === actionType)) return items;
+  const afterIndex = items.findIndex((item) => after(item.type));
+  const beforeIndex = items.findIndex((item) => before(item.type));
+  if (afterIndex < 0 || beforeIndex < 0 || beforeIndex <= afterIndex) return items;
+  const next = items.slice();
+  next.splice(beforeIndex, 0, {
+    family: motionSemanticFamilyForAction(actionType),
+    type: actionType,
+    match: /$/,
+    priority: 10,
+    reason,
+    index: Math.max(0, Math.min(normalizedLength, Math.round((items[afterIndex].index + items[beforeIndex].index) / 2))),
+    sequenceReason: reason
+  });
+  return next;
+}
+
+function motionSemanticFamilyForAction(actionType: MotionSemanticActionType): MotionSemanticActionFamily {
+  if (actionType === 'walk' || actionType === 'run' || actionType === 'dash') return 'locomotion';
+  if (actionType === 'push' || actionType === 'pull') return 'push_pull';
+  if (actionType === 'throw') return 'throw';
+  if (actionType === 'punch' || actionType === 'block' || actionType === 'kick' || actionType === 'side_kick') return 'combat';
+  if (actionType === 'jump') return 'jump';
+  if (actionType === 'fall' || actionType === 'get_up') return 'fall';
+  if (actionType === 'crawl') return 'crawl';
+  if (actionType === 'crouch') return 'posture';
+  if (actionType === 'turn') return 'turn';
+  if (actionType === 'reach') return 'reach';
+  return 'unknown';
+}
+
+function sequenceActionCoreWeight(actionType: MotionSemanticActionType, index: number, count: number) {
+  if (isLocomotionActionType(actionType)) return index === 0 && count > 1 ? 1.22 : 0.92;
+  if (actionType === 'turn') return index === 0 && count > 1 ? 0.78 : 0.9;
+  if (actionType === 'push' || actionType === 'pull') return 1.2;
+  if (actionType === 'throw') return 1.18;
+  if (actionType === 'punch' || actionType === 'kick' || actionType === 'side_kick') return 1.02;
+  if (actionType === 'reach') return 0.96;
+  if (actionType === 'crouch' || actionType === 'block') return 0.92;
+  if (actionType === 'jump') return 1.05;
+  return 1;
+}
+
+function sequenceActionOverlap(previous: MotionSemanticActionType, next: MotionSemanticActionType) {
+  if (isLocomotionActionType(previous) && (next === 'push' || next === 'pull' || next === 'reach')) return 0.12;
+  if (isLocomotionActionType(previous) && (next === 'punch' || next === 'kick' || next === 'side_kick')) return 0.1;
+  if (previous === 'turn' && (next === 'throw' || next === 'punch' || next === 'kick' || next === 'side_kick')) return 0.12;
+  if ((previous === 'push' || previous === 'pull' || previous === 'reach') && (next === 'throw' || next === 'punch')) return 0.08;
+  return 0.075;
+}
+
+function sequenceActionMinDurationRatio(actionType: MotionSemanticActionType, sequenceLength = 1) {
+  const crowdScale = sequenceLength >= 4 ? 0.86 : sequenceLength >= 3 ? 0.93 : 1;
+  const base = isLocomotionActionType(actionType)
+    ? 0.18
+    : actionType === 'push' || actionType === 'pull' || actionType === 'throw'
+      ? 0.28
+      : actionType === 'reach'
+        ? 0.22
+        : actionType === 'get_up' || actionType === 'fall'
+          ? 0.2
+          : 0.16;
+  return Number((base * crowdScale).toFixed(3));
+}
+
+function scheduledActionSequenceWindows(actions: MotionSemanticActionType[]) {
+  const count = actions.length;
+  if (!count) return [];
+  if (count === 1) return [{ startRatio: 0, endRatio: 1 }];
+
+  const weights = actions.map((actionType, index) => sequenceActionCoreWeight(actionType, index, count));
+  const totalWeight = weights.reduce((total, value) => total + value, 0) || 1;
+  let cursor = 0;
+  const core = weights.map((weight) => {
+    const start = cursor;
+    const end = cursor + weight / totalWeight;
+    cursor = end;
+    return { startRatio: start, endRatio: end };
+  });
+
+  return core.map((window, index) => {
+    const previousOverlap = index > 0 ? sequenceActionOverlap(actions[index - 1], actions[index]) : 0;
+    const nextOverlap = index < count - 1 ? sequenceActionOverlap(actions[index], actions[index + 1]) : 0;
+    let startRatio = clampNumber(index === 0 ? 0 : window.startRatio - previousOverlap * 0.5, 0, 1);
+    let endRatio = clampNumber(index === count - 1 ? 1 : window.endRatio + nextOverlap * 0.5, startRatio + 0.08, 1);
+    const minDuration = sequenceActionMinDurationRatio(actions[index], count);
+    if (endRatio - startRatio < minDuration) {
+      const center = (startRatio + endRatio) / 2;
+      startRatio = clampNumber(center - minDuration / 2, 0, Math.max(0, 1 - minDuration));
+      endRatio = clampNumber(startRatio + minDuration, minDuration, 1);
+    }
+    return {
+      startRatio: Number(startRatio.toFixed(3)),
+      endRatio: Number(endRatio.toFixed(3))
+    };
+  });
+}
+
+function motionActionSequenceSummary(sequence: MotionActionSequenceStep[]) {
+  if (!sequence.length) return '';
+  return '动作序列：' + sequence
+    .map((step) => `${step.label} ${Math.round(step.startRatio * 100)}%-${Math.round(step.endRatio * 100)}%`)
+    .join(' → ') + '。';
+}
+
+function motionActionChainsForPrompt(prompt: string, sequence: MotionActionSequenceStep[]) {
+  if (!sequence.length) return [] as MotionActionChain[];
+  const normalized = prompt.trim().toLowerCase();
+  const hasStep = (predicate: (type: MotionSemanticActionType) => boolean) => sequence.some((step) => predicate(step.actionType));
+  const chains: MotionActionChain[] = [];
+  if (hasPromptApproachBeforeContact(normalized) && hasStep(isLocomotionActionType) && hasStep((type) => type === 'push' || type === 'pull')) {
+    chains.push({
+      id: 'approach_contact',
+      label: '靠近后接触',
+      steps: sequence.filter((step) => isLocomotionActionType(step.actionType) || step.actionType === 'push' || step.actionType === 'pull').map((step) => step.actionType),
+      description: '先移动到目标附近，再减速贴近并用手接触目标发力。',
+      qualityExpectationIds: ['target_approach', 'approach_contact_bridge', 'hand_contact', 'contact_window']
+    });
+  }
+  if (hasPromptTurnBeforeAction(normalized) && hasStep((type) => type === 'turn') && hasStep((type) => type === 'throw')) {
+    chains.push({
+      id: 'turn_throw',
+      label: '转身后投掷',
+      steps: sequence.filter((step) => step.actionType === 'turn' || step.actionType === 'throw').map((step) => step.actionType),
+      description: '先完成转身和躯干扭转，再进入投掷蓄力、出手和释放。',
+      qualityExpectationIds: ['turn_throw_bridge', 'throw_body_windup', 'throw_release']
+    });
+  }
+  if (promptNeedsImplicitGetUpBeforeAttack(normalized) && hasStep((type) => type === 'crouch' || type === 'block') && hasStep((type) => type === 'get_up') && hasStep((type) => type === 'punch' || type === 'kick' || type === 'side_kick' || type === 'throw')) {
+    chains.push({
+      id: 'low_recovery_attack',
+      label: '下沉恢复后攻击',
+      steps: sequence.filter((step) => step.actionType === 'crouch' || step.actionType === 'block' || step.actionType === 'get_up' || step.actionType === 'punch' || step.actionType === 'kick' || step.actionType === 'side_kick' || step.actionType === 'throw').map((step) => step.actionType),
+      description: '先下沉躲避或防守，再起身恢复重心，最后执行攻击。',
+      qualityExpectationIds: ['low_recovery_attack_bridge', 'punch_extension', 'punch_recovery']
+    });
+  }
+  return chains;
+}
+
+function motionActionChainSummary(chains: MotionActionChain[]) {
+  if (!chains.length) return '';
+  return '固定动作链路：' + chains.map((chain) => `${chain.label}（${chain.description}）`).join('；') + '。';
+}
+
+function rescheduleActionSequence(sequence: MotionActionSequenceStep[] | undefined) {
+  if (!sequence || sequence.length <= 1) return sequence;
+  const windows = scheduledActionSequenceWindows(sequence.map((step) => step.actionType));
+  return sequence.map((step, index) => {
+    const window = windows[index];
+    if (!window) return step;
+    return {
+      ...step,
+      startRatio: window.startRatio,
+      endRatio: window.endRatio,
+      sourceText: `${step.sourceText.split(';')[0]}; ${Math.round(window.startRatio * 100)}%-${Math.round(window.endRatio * 100)}%`
+    };
+  });
+}
+
+function sequenceReportHasMessage(report: MotionQualityReport, text: string) {
+  return report.issues.some((issue) => issue.metric === 'sequence' && issue.message.includes(text));
+}
+
+function sequenceQualityNeedsWindowRebalance(report: MotionQualityReport) {
+  return sequenceReportHasMessage(report, '阶段时间过短')
+    || sequenceReportHasMessage(report, '缺少承接重叠')
+    || sequenceReportHasMessage(report, '混合过多')
+    || sequenceReportHasMessage(report, '过渡不够平滑')
+    || sequenceReportHasMessage(report, '速度突变')
+    || sequenceReportHasMessage(report, '顺序相反')
+    || (report.metrics.sequenceBoundarySmoothnessRatio !== undefined && report.metrics.sequenceBoundarySmoothnessRatio < 0.76)
+    || (report.metrics.sequenceBoundaryMaxPoseDelta !== undefined && report.metrics.sequenceBoundaryMaxPoseDelta > 30)
+    || (report.metrics.sequenceBoundaryMaxRootDelta !== undefined && report.metrics.sequenceBoundaryMaxRootDelta > 0.11)
+    || (report.metrics.sequenceBoundaryMaxVelocityRatio !== undefined && report.metrics.sequenceBoundaryMaxVelocityRatio > 2.35);
+}
+
+function rebalanceActionSequenceWindows(sequence: MotionActionSequenceStep[], report?: MotionQualityReport) {
+  if (sequence.length <= 1) return sequence;
+  const scheduled = rescheduleActionSequence(sequence) || sequence;
+  if (!report || !sequenceQualityNeedsWindowRebalance(report)) return scheduled;
+
+  const count = scheduled.length;
+  const targetOverlap = clampNumber(
+    (report.metrics.sequenceBoundarySmoothnessRatio ?? 1) < 0.62 ? 0.13 : 0.095,
+    0.075,
+    0.14
+  );
+  const minDurations = scheduled.map((step) => sequenceActionMinDurationRatio(step.actionType, count));
+  const next = scheduled.map((step, index) => {
+    const minDuration = minDurations[index];
+    const startRatio = clampNumber(step.startRatio, 0, Math.max(0, 1 - minDuration));
+    const endRatio = clampNumber(step.endRatio, startRatio + minDuration, 1);
+    return {
+      ...step,
+      startRatio,
+      endRatio
+    };
+  });
+
+  for (let index = 0; index < next.length - 1; index += 1) {
+    const current = next[index];
+    const following = next[index + 1];
+    const overlap = current.endRatio - following.startRatio;
+    if (overlap >= targetOverlap * 0.72 && overlap <= targetOverlap * 1.75) continue;
+    const center = clampNumber((current.endRatio + following.startRatio) / 2, current.startRatio + minDurations[index] * 0.58, following.endRatio - minDurations[index + 1] * 0.58);
+    current.endRatio = clampNumber(center + targetOverlap * 0.5, current.startRatio + minDurations[index], 1);
+    following.startRatio = clampNumber(center - targetOverlap * 0.5, 0, following.endRatio - minDurations[index + 1]);
+    current.sourceText = `${current.sourceText.split(';')[0]}; ${Math.round(current.startRatio * 100)}%-${Math.round(current.endRatio * 100)}%`;
+    following.sourceText = `${following.sourceText.split(';')[0]}; ${Math.round(following.startRatio * 100)}%-${Math.round(following.endRatio * 100)}%`;
+  }
+
+  next[0].startRatio = 0;
+  next[next.length - 1].endRatio = 1;
+  return next.map((step) => ({
+    ...step,
+    startRatio: Number(clamp01(step.startRatio).toFixed(3)),
+    endRatio: Number(clampNumber(step.endRatio, step.startRatio, 1).toFixed(3))
+  }));
+}
+
+function transitionWithQualityAdjustedActionSequence(transition: PoseTransition, report?: MotionQualityReport): PoseTransition {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const sequence = semanticPlan?.actionSequence;
+  if (!semanticPlan || !sequence || sequence.length <= 1) return transition;
+  const adjusted = rebalanceActionSequenceWindows(sequence, report);
+  const changed = adjusted.some((step, index) => (
+    step.startRatio !== sequence[index]?.startRatio
+    || step.endRatio !== sequence[index]?.endRatio
+    || step.sourceText !== sequence[index]?.sourceText
+  ));
+  if (!changed) return transition;
+  return {
+    ...transition,
+    actionPlan: {
+      ...transition.actionPlan,
+      semanticPlan: {
+        ...semanticPlan,
+        actionSequence: adjusted,
+        poseStages: sequencePoseStages(adjusted, semanticPlan.actionType),
+        explain: [
+          ...semanticPlan.explain.filter((item) => !item.startsWith('动作序列：')),
+          motionActionSequenceSummary(adjusted)
+        ].filter(Boolean)
+      }
+    }
+  };
+}
+
+function transitionWithRescheduledActionSequence(transition: PoseTransition): PoseTransition {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const sequence = semanticPlan?.actionSequence ? rebalanceActionSequenceWindows(semanticPlan.actionSequence) : undefined;
+  if (!semanticPlan || !sequence || sequence === semanticPlan.actionSequence) return transition;
+  return {
+    ...transition,
+    actionPlan: {
+      ...transition.actionPlan,
+      semanticPlan: {
+        ...semanticPlan,
+        actionSequence: sequence,
+        poseStages: sequencePoseStages(sequence, semanticPlan.actionType),
+        explain: [
+          ...semanticPlan.explain.filter((item) => !item.startsWith('动作序列：')),
+          motionActionSequenceSummary(sequence)
+        ].filter(Boolean)
+      }
+    }
+  };
+}
+
+function buildPromptActionSequence(prompt: string, primaryActionType: MotionSemanticActionType): MotionActionSequenceStep[] {
+  const normalized = prompt.trim().toLowerCase();
+  if (!normalized) return [];
+  const ordered = promptActionMatchesByPosition(normalized);
+  const unique: PromptActionMatch[] = [];
+  ordered.forEach((item) => {
+    if (unique.some((existing) => existing.type === item.type)) return;
+    if (unique.length && unique[unique.length - 1].family === item.family && unique[unique.length - 1].type !== primaryActionType) return;
+    unique.push(item);
+  });
+  if (!unique.some((item) => item.type === primaryActionType) && primaryActionType !== 'unknown' && primaryActionType !== 'idle') {
+    unique.push({
+      family: motionSemanticFamilyForAction(primaryActionType),
+      type: primaryActionType,
+      match: /$/,
+      priority: 0,
+      reason: '主动作',
+      index: normalized.length
+    });
+  }
+  let sequenced = normalizePromptActionSequenceOrder(unique, normalized);
+  if (promptNeedsImplicitGetUpBeforeAttack(normalized)) {
+    sequenced = insertImplicitActionAfter(
+      sequenced,
+      (type) => type === 'crouch' || type === 'block',
+      (type) => ['punch', 'kick', 'side_kick', 'throw'].includes(type),
+      'get_up',
+      '根据“蹲下/躲避后攻击”的语义，自动加入起身恢复阶段',
+      normalized.length
+    );
+  }
+  if (sequenced.length <= 1) return [];
+  const steps = normalizePromptActionSequenceOrder(sequenced, normalized).slice(0, 4);
+  const windows = scheduledActionSequenceWindows(steps.map((item) => item.type));
+  return steps.map((item, index) => {
+    const window = windows[index] || { startRatio: 0, endRatio: 1 };
+    const reason = item.sequenceReason ? `${item.reason}；${item.sequenceReason}` : item.reason;
+    return {
+      id: `sequence_${index}_${item.type}`,
+      actionType: item.type,
+      label: MOTION_SEMANTIC_TYPE_LABELS[item.type],
+      startRatio: window.startRatio,
+      endRatio: window.endRatio,
+      sourceText: `${reason}; ${Math.round(window.startRatio * 100)}%-${Math.round(window.endRatio * 100)}%`
+    };
+  });
+}
+
+function normalizedPromptText(prompt: string) {
+  return prompt.trim().toLowerCase();
+}
+
+function promptHasLeftHand(prompt: string) {
+  return /左手|left\s+hand/.test(normalizedPromptText(prompt));
+}
+
+function promptHasRightHand(prompt: string) {
+  return /右手|right\s+hand/.test(normalizedPromptText(prompt));
+}
+
+function promptHasLeftLeg(prompt: string) {
+  return /左脚|左腿|left\s+(?:foot|leg)/.test(normalizedPromptText(prompt));
+}
+
+function promptHasRightLeg(prompt: string) {
+  return /右脚|右腿|right\s+(?:foot|leg)/.test(normalizedPromptText(prompt));
+}
+
+function promptHasLeftwardDirection(prompt: string) {
+  const normalized = normalizedPromptText(prompt);
+  const hasSideTurnOnly = /向左转|左转|转向左|朝左转/.test(normalized)
+    && !/(向左走|向左跑|向左冲|向左迈|往左走|往左跑|左移|左侧移动|左侧跑|左侧走)/.test(normalized)
+    && !/\b(?:leftward|to\s+the\s+left|move\s+left|step\s+left|run\s+left|walk\s+left|dash\s+left|lunge\s+left|strafe\s+left)\b/.test(normalized);
+  if (hasSideTurnOnly) return false;
+  return /向左|左侧|左边|左方|往左|朝左|左移/.test(normalized)
+    || /\b(?:leftward|to\s+the\s+left|move\s+left|step\s+left|run\s+left|walk\s+left|dash\s+left|lunge\s+left|strafe\s+left)\b/.test(normalized);
+}
+
+function promptHasRightwardDirection(prompt: string) {
+  const normalized = normalizedPromptText(prompt);
+  const hasSideTurnOnly = /向右转|右转|转向右|朝右转/.test(normalized)
+    && !/(向右走|向右跑|向右冲|向右迈|往右走|往右跑|右移|右侧移动|右侧跑|右侧走)/.test(normalized)
+    && !/\b(?:rightward|to\s+the\s+right|move\s+right|step\s+right|run\s+right|walk\s+right|dash\s+right|lunge\s+right|strafe\s+right)\b/.test(normalized);
+  if (hasSideTurnOnly) return false;
+  return /向右|右侧|右边|右方|往右|朝右|右移/.test(normalized)
+    || /\b(?:rightward|to\s+the\s+right|move\s+right|step\s+right|run\s+right|walk\s+right|dash\s+right|lunge\s+right|strafe\s+right)\b/.test(normalized);
 }
 
 function inferPromptHand(prompt: string): PromptHandPreference {
-  const normalized = prompt.trim().toLowerCase();
-  if (/双手|两手|both hands/.test(normalized)) return 'both';
-  if (/左手|left hand|left/.test(normalized)) return 'left';
-  if (/右手|right hand|right/.test(normalized)) return 'right';
+  const normalized = normalizedPromptText(prompt);
+  if (/双手|两手|both\s+hands/.test(normalized)) return 'both';
+  if (promptHasLeftHand(normalized)) return 'left';
+  if (promptHasRightHand(normalized)) return 'right';
   return 'none';
 }
 
@@ -1415,10 +2136,16 @@ function handForTemplate(prompt: string): 'left' | 'right' {
   return inferPromptHand(prompt) === 'left' ? 'left' : 'right';
 }
 
+function inferPromptLeg(prompt: string): PromptLegPreference {
+  if (promptHasLeftLeg(prompt)) return 'left';
+  if (promptHasRightLeg(prompt)) return 'right';
+  return 'none';
+}
+
 function semanticDirectionFromPrompt(prompt: string, universal?: UniversalMotionPlan) {
-  const normalized = prompt.trim().toLowerCase();
-  if (/向左|左侧|左边|左方|left/.test(normalized)) return { label: '向左', direction: vec(-1, 0, 0) };
-  if (/向右|右侧|右边|右方|right/.test(normalized)) return { label: '向右', direction: vec(1, 0, 0) };
+  const normalized = normalizedPromptText(prompt);
+  if (promptHasLeftwardDirection(normalized)) return { label: '向左', direction: vec(-1, 0, 0) };
+  if (promptHasRightwardDirection(normalized)) return { label: '向右', direction: vec(1, 0, 0) };
   if (/向后|后退|退后|远离|back|backward|retreat/.test(normalized)) return { label: '向后', direction: vec(0, 0, 1) };
   if (/向前|前方|前进|靠近|推进|冲向|扑向|forward|approach|lunge/.test(normalized)) return { label: '向前', direction: vec(0, 0, -1) };
   if (universal && Math.abs(universal.turn) > 1) return { label: universal.turn < 0 ? '向左转' : '向右转', direction: vec() };
@@ -1442,6 +2169,133 @@ function promptForceLabel(prompt: string) {
   if (/用力|猛烈|重击|强力|heavy|strong|impact|powerful/.test(normalized)) return '强';
   if (/轻微|轻轻|轻|small|soft|slight/.test(normalized)) return '轻';
   return '常规';
+}
+
+function motionControlFromPrompt(prompt: string, semanticPlan?: Pick<MotionSemanticPlan, 'speedLabel' | 'forceLabel'>) {
+  const speedLabel = semanticPlan?.speedLabel || promptSpeedLabel(prompt);
+  const forceLabel = semanticPlan?.forceLabel || promptForceLabel(prompt);
+  const burst = promptRequestsBurstTiming(prompt);
+  const sustained = promptRequestsSustainedTiming(prompt);
+  const accelerate = promptRequestsAccelerateTiming(prompt);
+  const decelerate = promptRequestsDecelerateTiming(prompt);
+  const speedScale = speedLabel === '快速' || burst
+    ? 1.14
+    : speedLabel === '缓慢' || decelerate
+      ? 0.82
+      : 1;
+  const forceScale = forceLabel === '强' || burst
+    ? 1.22
+    : forceLabel === '轻'
+      ? 0.72
+      : 1;
+  const holdScale = sustained
+    ? 1.3
+    : speedLabel === '缓慢'
+      ? 1.18
+      : speedLabel === '快速' || burst
+        ? 0.86
+        : 1;
+  const travelScale = forceLabel === '强'
+    ? 1.18
+    : forceLabel === '轻'
+      ? 0.74
+      : speedLabel === '快速'
+        ? 1.08
+        : speedLabel === '缓慢'
+          ? 0.86
+          : 1;
+  return {
+    speedLabel,
+    forceLabel,
+    speedScale,
+    forceScale,
+    holdScale,
+    travelScale,
+    burst,
+    sustained,
+    accelerate,
+    decelerate
+  };
+}
+
+function promptStageTags(prompt: string) {
+  const normalized = prompt.trim().toLowerCase();
+  const tags: string[] = [];
+  const add = (tag: string, pattern: RegExp) => {
+    if (pattern.test(normalized) && !tags.includes(tag)) tags.push(tag);
+  };
+  add('预备', /预备|准备|起势|起手|anticipation|prepare/);
+  add('蓄力', /蓄力|后拉|回拉|后方|windup|charge|draw back/);
+  add('发力', /发力|用力|爆发|甩出|推出|冲出|drive|power|burst/);
+  add('接触', /接触|碰到|抓住|握住|贴近|contact|grasp|touch/);
+  add('保持', /保持|持续|hold|keep|sustain/);
+  add('回收', /回收|收势|恢复|回到|recovery|recover/);
+  add('低重心', /低重心|下蹲|蹲下|压低|duck|crouch|low/);
+  return tags;
+}
+
+function promptBodyControlTags(prompt: string) {
+  const normalized = prompt.trim().toLowerCase();
+  const tags: string[] = [];
+  const add = (tag: string, pattern: RegExp) => {
+    if (pattern.test(normalized) && !tags.includes(tag)) tags.push(tag);
+  };
+  add('身体前压', /身体前压|前倾|压上去|lean forward|body forward/);
+  add('身体后仰', /后仰|向后仰|lean back/);
+  add('双脚贴地', /双脚踩地|脚贴地|踩地|贴地|grounded|feet on ground/);
+  add('允许离地', /跳|跳起|腾空|飞跃|浮空|离地|jump|airborne|leap/);
+  add('双手主导', /双手|两手|both hands/);
+  add('左手主导', /左手|left hand/);
+  add('右手主导', /右手|right hand/);
+  add('左腿主导', /左脚|左腿|left foot|left leg/);
+  add('右腿主导', /右脚|右腿|right foot|right leg/);
+  add('看向目标', /看向|面向|盯着|look at|face/);
+  return tags;
+}
+
+function motionPromptControlSummary(prompt: string, universal?: UniversalMotionPlan, semanticPlan?: Pick<MotionSemanticPlan, 'speedLabel' | 'forceLabel'>) {
+  const control = motionControlFromPrompt(prompt, semanticPlan);
+  const direction = semanticDirectionFromPrompt(prompt, universal);
+  const timingTags = [
+    control.burst ? '突然爆发' : '',
+    control.sustained ? '持续保持' : '',
+    control.accelerate ? '逐渐加速' : '',
+    control.decelerate ? '逐渐减速' : ''
+  ].filter(Boolean);
+  return {
+    directionLabel: direction.label,
+    speedLabel: control.speedLabel,
+    forceLabel: control.forceLabel,
+    timingTags,
+    stageTags: promptStageTags(prompt),
+    bodyTags: promptBodyControlTags(prompt),
+    speedScale: Number(control.speedScale.toFixed(2)),
+    forceScale: Number(control.forceScale.toFixed(2)),
+    holdScale: Number(control.holdScale.toFixed(2)),
+    travelScale: Number(control.travelScale.toFixed(2))
+  };
+}
+
+function motionPromptControlExplain(summary: ReturnType<typeof motionPromptControlSummary>) {
+  const parts = [
+    `方向 ${summary.directionLabel}`,
+    `速度 ${summary.speedLabel}`,
+    `力度 ${summary.forceLabel}`,
+    summary.timingTags.length ? `节奏 ${summary.timingTags.join('、')}` : '',
+    summary.stageTags.length ? `阶段词 ${summary.stageTags.join('、')}` : '',
+    summary.bodyTags.length ? `身体控制 ${summary.bodyTags.join('、')}` : ''
+  ].filter(Boolean);
+  return `提示词控制参数：${parts.join('；')}。`;
+}
+
+function semanticTimingExplain(prompt: string, speedLabel: string) {
+  if (promptRequestsBurstTiming(prompt)) return '节奏识别：先短暂预备，再突然爆发。';
+  if (promptRequestsSustainedTiming(prompt)) return '节奏识别：动作高峰会持续保持一段时间。';
+  if (promptRequestsAccelerateTiming(prompt)) return '节奏识别：动作逐渐加速。';
+  if (promptRequestsDecelerateTiming(prompt)) return '节奏识别：动作逐渐减速并收稳。';
+  if (speedLabel === '快速') return '节奏识别：快速进入动作发力阶段。';
+  if (speedLabel === '缓慢') return '节奏识别：缓慢平滑推进动作阶段。';
+  return '节奏识别：常规线性动作节奏。';
 }
 
 function promptAllowsLargePerformance(prompt: string) {
@@ -1533,6 +2387,26 @@ function motionStagesForAction(actionType: MotionSemanticActionType): MotionSema
     semanticStage('middle', '过渡', 0.5, '身体平滑过渡到目标姿势', '根节点平滑移动', '保持合理接触'),
     semanticStage('end', '结束', 1, '到达终点姿势', '根节点稳定', '按终点接触关系保持')
   ];
+}
+
+function mergeSemanticStages(baseStages: MotionSemanticStage[], aiStages: MotionSemanticStage[]) {
+  const merged: MotionSemanticStage[] = [...baseStages];
+  aiStages.forEach((stage) => {
+    const nearIndex = merged.findIndex((item) => Math.abs(item.timeRatio - stage.timeRatio) <= 0.08 || item.id === stage.id);
+    if (nearIndex >= 0) {
+      merged[nearIndex] = {
+        ...merged[nearIndex],
+        poseHint: `${merged[nearIndex].poseHint}；${stage.poseHint}`,
+        rootMotionHint: `${merged[nearIndex].rootMotionHint}；${stage.rootMotionHint}`,
+        contactHint: `${merged[nearIndex].contactHint}；${stage.contactHint}`
+      };
+      return;
+    }
+    merged.push(stage);
+  });
+  return merged
+    .sort((a, b) => a.timeRatio - b.timeRatio)
+    .slice(0, 10);
 }
 
 // SECTION: Rig metadata, joint limits, and joint-axis semantics.
@@ -1938,6 +2812,24 @@ function offsetPose(base: StandardHumanRigPose, offsets: Partial<Record<PoseJoin
       z: next[key].z + (offset.z || 0)
     };
   }
+  return next;
+}
+
+function composePoseOffsets(...offsets: Array<Partial<Record<PoseJointKey, Partial<RigRotation>>> | undefined>) {
+  const next: Partial<Record<PoseJointKey, Partial<RigRotation>>> = {};
+  offsets.forEach((patch) => {
+    if (!patch) return;
+    for (const key of Object.keys(patch) as PoseJointKey[]) {
+      const value = patch[key];
+      if (!value) continue;
+      const current = next[key] || {};
+      next[key] = {
+        x: (current.x || 0) + (value.x || 0),
+        y: (current.y || 0) + (value.y || 0),
+        z: (current.z || 0) + (value.z || 0)
+      };
+    }
+  });
   return next;
 }
 
@@ -2659,6 +3551,12 @@ function cameraMotionForTransition(transition: PoseTransition) {
   return promptMotion.matched ? promptMotion.motion : normalizeCameraMotion(transition.cameraMotion, transition.durationSec, transition.characterId);
 }
 
+function cameraMotionForAiIntent(transition: PoseTransition, intent: MotionIntent) {
+  const promptMotion = cameraMotionFromPrompt(transition.actionPrompt, transition.durationSec, transition.characterId, transition.cameraMotion);
+  if (!promptMotion.matched || !intent.cameraMotionHint?.enabled) return cameraMotionForTransition(transition);
+  return normalizeCameraMotion(intent.cameraMotionHint, transition.durationSec, transition.characterId);
+}
+
 function normalizeTransitionKeyframe(value: any, durationSec: number): TransitionKeyframe | null {
   if (!value || typeof value !== 'object') return null;
   return {
@@ -2832,6 +3730,55 @@ function normalizeMotionSemanticStage(value: any, index: number): MotionSemantic
   };
 }
 
+function normalizeMotionActionSequenceStep(value: any, index: number): MotionActionSequenceStep {
+  const startRatio = clampNumber(Number.isFinite(Number(value?.startRatio)) ? Number(value.startRatio) : index / 3, 0, 1);
+  const endRatio = clampNumber(Number.isFinite(Number(value?.endRatio)) ? Number(value.endRatio) : Math.min(1, startRatio + 0.34), startRatio, 1);
+  const actionType = normalizeSemanticActionType(value?.actionType);
+  return {
+    id: typeof value?.id === 'string' ? value.id : `sequence_${index}`,
+    actionType,
+    label: typeof value?.label === 'string' && value.label.trim() ? value.label.trim() : MOTION_SEMANTIC_TYPE_LABELS[actionType],
+    startRatio,
+    endRatio,
+    sourceText: typeof value?.sourceText === 'string' ? value.sourceText : ''
+  };
+}
+
+function normalizeMotionQualityExpectation(value: any, index: number): MotionQualityExpectation | null {
+  const metric = ['endpoint', 'speed', 'rotation', 'foot_lock', 'contact', 'pose', 'sequence'].includes(value?.metric)
+    ? value.metric as MotionQualityIssue['metric']
+    : null;
+  if (!metric) return null;
+  return {
+    id: typeof value?.id === 'string' && value.id.trim() ? value.id.trim() : `expectation_${index}`,
+    metric,
+    label: typeof value?.label === 'string' && value.label.trim() ? value.label.trim() : `质量期望 ${index + 1}`,
+    description: typeof value?.description === 'string' ? value.description : '',
+    minValue: Number.isFinite(Number(value?.minValue)) ? Number(value.minValue) : undefined,
+    maxValue: Number.isFinite(Number(value?.maxValue)) ? Number(value.maxValue) : undefined,
+    required: value?.required !== false
+  };
+}
+
+function normalizeMotionActionChain(value: any): MotionActionChain | null {
+  const id = value?.id === 'approach_contact' || value?.id === 'turn_throw' || value?.id === 'low_recovery_attack'
+    ? value.id as MotionActionChain['id']
+    : null;
+  if (!id) return null;
+  const steps = Array.isArray(value.steps)
+    ? value.steps.map(normalizeSemanticActionType).filter((type: MotionSemanticActionType) => type !== 'unknown' && type !== 'idle').slice(0, 6)
+    : [];
+  return {
+    id,
+    label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : id,
+    steps,
+    description: typeof value.description === 'string' ? value.description : '',
+    qualityExpectationIds: Array.isArray(value.qualityExpectationIds)
+      ? value.qualityExpectationIds.map((item: any) => String(item)).filter(Boolean).slice(0, 8)
+      : []
+  };
+}
+
 function normalizeMotionSemanticPlan(value: any): MotionSemanticPlan | undefined {
   if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
   const cameraType = CAMERA_MOTION_OPTIONS.some((item) => item.id === value?.cameraIntent?.type) ? value.cameraIntent.type as CameraMotionType : 'none';
@@ -2846,7 +3793,9 @@ function normalizeMotionSemanticPlan(value: any): MotionSemanticPlan | undefined
     forceLabel: typeof value.forceLabel === 'string' ? value.forceLabel : '常规',
     bodyFocus: Array.isArray(value.bodyFocus) ? value.bodyFocus.map((item: any) => String(item)).filter(Boolean).slice(0, 10) : [],
     rootMotion: Array.isArray(value.rootMotion) ? value.rootMotion.map((item: any) => String(item)).filter(Boolean).slice(0, 10) : [],
-    poseStages: Array.isArray(value.poseStages) ? value.poseStages.map(normalizeMotionSemanticStage).slice(0, 8) : [],
+    poseStages: Array.isArray(value.poseStages) ? value.poseStages.map(normalizeMotionSemanticStage).slice(0, 10) : [],
+    actionSequence: Array.isArray(value.actionSequence) ? value.actionSequence.map(normalizeMotionActionSequenceStep).filter((item: MotionActionSequenceStep) => item.actionType !== 'unknown').slice(0, 6) : undefined,
+    actionChains: Array.isArray(value.actionChains) ? value.actionChains.map(normalizeMotionActionChain).filter(Boolean).slice(0, 4) as MotionActionChain[] : undefined,
     contacts: Array.isArray(value.contacts)
       ? value.contacts.map((item: any) => {
           const contact = normalizeMotionContacts([item?.contact])[0] || 'feet';
@@ -2857,6 +3806,18 @@ function normalizeMotionSemanticPlan(value: any): MotionSemanticPlan | undefined
           };
         }).slice(0, 12)
       : [],
+    qualityExpectations: Array.isArray(value.qualityExpectations)
+      ? value.qualityExpectations.map(normalizeMotionQualityExpectation).filter(Boolean).slice(0, 16) as MotionQualityExpectation[]
+      : undefined,
+    actionSkill: value.actionSkill && typeof value.actionSkill === 'object'
+      ? {
+          label: typeof value.actionSkill.label === 'string' ? value.actionSkill.label : MOTION_SEMANTIC_TYPE_LABELS[normalizeSemanticActionType(value.actionType)],
+          compileMode: value.actionSkill.compileMode === 'universal_assist' ? 'universal_assist' : 'semantic_only',
+          grounded: value.actionSkill.grounded !== false,
+          allowAirborne: value.actionSkill.allowAirborne === true,
+          constraints: Array.isArray(value.actionSkill.constraints) ? value.actionSkill.constraints.map((item: any) => String(item)).filter(Boolean).slice(0, 8) : []
+        }
+      : undefined,
     cameraIntent: value.cameraIntent && cameraType !== 'none'
       ? {
           label: typeof value.cameraIntent.label === 'string' ? value.cameraIntent.label : CAMERA_MOTION_LABELS[cameraType],
@@ -2911,6 +3872,8 @@ function normalizeMotionIntent(value: any, durationFallback = 1.2): MotionIntent
     contacts: normalizeMotionContacts(value.contacts),
     lookAt: normalizeMotionLookAt(value.lookAt),
     targetObjectId: typeof value.targetObjectId === 'string' ? value.targetObjectId : undefined,
+    actionFamily: value.actionFamily === undefined ? undefined : normalizeSemanticActionFamily(value.actionFamily),
+    actionType: value.actionType === undefined ? undefined : normalizeSemanticActionType(value.actionType),
     motionFamilies: normalizeMotionFamilies(value.motionFamilies),
     keyframeHints: normalizeMotionKeyframeHints(value.keyframeHints),
     contactHints: Array.isArray(value.contactHints) ? value.contactHints.map((item: any) => ({
@@ -2959,7 +3922,7 @@ function normalizeMotionQualityReport(value: any): MotionQualityReport | undefin
     ? value.issues.slice(0, 32).map((issue: any): MotionQualityIssue => ({
         id: typeof issue?.id === 'string' ? issue.id : createId('quality'),
         severity: issue?.severity === 'error' || issue?.severity === 'warning' ? issue.severity : 'info',
-        metric: ['endpoint', 'speed', 'rotation', 'foot_lock', 'contact', 'pose'].includes(issue?.metric) ? issue.metric : 'pose',
+        metric: ['endpoint', 'speed', 'rotation', 'foot_lock', 'contact', 'pose', 'sequence'].includes(issue?.metric) ? issue.metric : 'pose',
         message: typeof issue?.message === 'string' ? issue.message : '',
         timeSec: Number.isFinite(Number(issue?.timeSec)) ? Number(issue.timeSec) : undefined,
         value: Number.isFinite(Number(issue?.value)) ? Number(issue.value) : undefined
@@ -2977,7 +3940,43 @@ function normalizeMotionQualityReport(value: any): MotionQualityReport | undefin
       startPositionDrift: Number.isFinite(Number(metrics.startPositionDrift)) ? Number(metrics.startPositionDrift) : 0,
       endPositionDrift: Number.isFinite(Number(metrics.endPositionDrift)) ? Number(metrics.endPositionDrift) : 0,
       lockedFootChanges: Number.isFinite(Number(metrics.lockedFootChanges)) ? Number(metrics.lockedFootChanges) : 0,
-      contactCount: Number.isFinite(Number(metrics.contactCount)) ? Number(metrics.contactCount) : 0
+      contactCount: Number.isFinite(Number(metrics.contactCount)) ? Number(metrics.contactCount) : 0,
+      motionSampleRate: Number.isFinite(Number(metrics.motionSampleRate)) ? Number(metrics.motionSampleRate) : undefined,
+      locomotionFootPlantDrift: Number.isFinite(Number(metrics.locomotionFootPlantDrift)) ? Number(metrics.locomotionFootPlantDrift) : undefined,
+      locomotionRootStepJitter: Number.isFinite(Number(metrics.locomotionRootStepJitter)) ? Number(metrics.locomotionRootStepJitter) : undefined,
+      locomotionFootContactCount: Number.isFinite(Number(metrics.locomotionFootContactCount)) ? Number(metrics.locomotionFootContactCount) : undefined,
+      locomotionFootPhaseMismatchCount: Number.isFinite(Number(metrics.locomotionFootPhaseMismatchCount)) ? Number(metrics.locomotionFootPhaseMismatchCount) : undefined,
+      locomotionRootBacktrackCount: Number.isFinite(Number(metrics.locomotionRootBacktrackCount)) ? Number(metrics.locomotionRootBacktrackCount) : undefined,
+      locomotionRootTravelDistance: Number.isFinite(Number(metrics.locomotionRootTravelDistance)) ? Number(metrics.locomotionRootTravelDistance) : undefined,
+      locomotionExpectedTravelDistance: Number.isFinite(Number(metrics.locomotionExpectedTravelDistance)) ? Number(metrics.locomotionExpectedTravelDistance) : undefined,
+      locomotionPaceCoverageRatio: Number.isFinite(Number(metrics.locomotionPaceCoverageRatio)) ? Number(metrics.locomotionPaceCoverageRatio) : undefined,
+      locomotionSupportSwitchCount: Number.isFinite(Number(metrics.locomotionSupportSwitchCount)) ? Number(metrics.locomotionSupportSwitchCount) : undefined,
+      locomotionSupportCoverageRatio: Number.isFinite(Number(metrics.locomotionSupportCoverageRatio)) ? Number(metrics.locomotionSupportCoverageRatio) : undefined,
+      locomotionArmSwingSeparation: Number.isFinite(Number(metrics.locomotionArmSwingSeparation)) ? Number(metrics.locomotionArmSwingSeparation) : undefined,
+      locomotionArmLegSyncScore: Number.isFinite(Number(metrics.locomotionArmLegSyncScore)) ? Number(metrics.locomotionArmLegSyncScore) : undefined,
+      locomotionLegSeparation: Number.isFinite(Number(metrics.locomotionLegSeparation)) ? Number(metrics.locomotionLegSeparation) : undefined,
+      locomotionLegSignChanges: Number.isFinite(Number(metrics.locomotionLegSignChanges)) ? Number(metrics.locomotionLegSignChanges) : undefined,
+      semanticTimingPeakRatio: Number.isFinite(Number(metrics.semanticTimingPeakRatio)) ? Number(metrics.semanticTimingPeakRatio) : undefined,
+      semanticTimingSpeedContrast: Number.isFinite(Number(metrics.semanticTimingSpeedContrast)) ? Number(metrics.semanticTimingSpeedContrast) : undefined,
+      semanticHandReachDistance: Number.isFinite(Number(metrics.semanticHandReachDistance)) ? Number(metrics.semanticHandReachDistance) : undefined,
+      semanticHandContactSuccessRatio: Number.isFinite(Number(metrics.semanticHandContactSuccessRatio)) ? Number(metrics.semanticHandContactSuccessRatio) : undefined,
+      semanticTargetApproachDistance: Number.isFinite(Number(metrics.semanticTargetApproachDistance)) ? Number(metrics.semanticTargetApproachDistance) : undefined,
+      semanticContactBodyDrive: Number.isFinite(Number(metrics.semanticContactBodyDrive)) ? Number(metrics.semanticContactBodyDrive) : undefined,
+      semanticContactFootStability: Number.isFinite(Number(metrics.semanticContactFootStability)) ? Number(metrics.semanticContactFootStability) : undefined,
+      semanticContactWindowCoverage: Number.isFinite(Number(metrics.semanticContactWindowCoverage)) ? Number(metrics.semanticContactWindowCoverage) : undefined,
+      semanticPropMotionDistance: Number.isFinite(Number(metrics.semanticPropMotionDistance)) ? Number(metrics.semanticPropMotionDistance) : undefined,
+      semanticPropDirectionAlignment: Number.isFinite(Number(metrics.semanticPropDirectionAlignment)) ? Number(metrics.semanticPropDirectionAlignment) : undefined,
+      semanticThrowReleaseDistance: Number.isFinite(Number(metrics.semanticThrowReleaseDistance)) ? Number(metrics.semanticThrowReleaseDistance) : undefined,
+      semanticPunchExtension: Number.isFinite(Number(metrics.semanticPunchExtension)) ? Number(metrics.semanticPunchExtension) : undefined,
+      semanticPunchRecoveryRatio: Number.isFinite(Number(metrics.semanticPunchRecoveryRatio)) ? Number(metrics.semanticPunchRecoveryRatio) : undefined,
+      sequenceBoundaryMaxPoseDelta: Number.isFinite(Number(metrics.sequenceBoundaryMaxPoseDelta)) ? Number(metrics.sequenceBoundaryMaxPoseDelta) : undefined,
+      sequenceBoundaryMaxRootDelta: Number.isFinite(Number(metrics.sequenceBoundaryMaxRootDelta)) ? Number(metrics.sequenceBoundaryMaxRootDelta) : undefined,
+      sequenceBoundaryMaxRotationDelta: Number.isFinite(Number(metrics.sequenceBoundaryMaxRotationDelta)) ? Number(metrics.sequenceBoundaryMaxRotationDelta) : undefined,
+      sequenceBoundaryMaxVelocityRatio: Number.isFinite(Number(metrics.sequenceBoundaryMaxVelocityRatio)) ? Number(metrics.sequenceBoundaryMaxVelocityRatio) : undefined,
+      sequenceBoundarySmoothnessRatio: Number.isFinite(Number(metrics.sequenceBoundarySmoothnessRatio)) ? Number(metrics.sequenceBoundarySmoothnessRatio) : undefined,
+      motionExpectationCount: Number.isFinite(Number(metrics.motionExpectationCount)) ? Number(metrics.motionExpectationCount) : undefined,
+      motionExpectationFailedCount: Number.isFinite(Number(metrics.motionExpectationFailedCount)) ? Number(metrics.motionExpectationFailedCount) : undefined,
+      motionExpectationPassRatio: Number.isFinite(Number(metrics.motionExpectationPassRatio)) ? Number(metrics.motionExpectationPassRatio) : undefined
     }
   };
 }
@@ -3544,11 +4543,140 @@ function interpolateKeyframeSample(from: TransitionKeyframe, to: TransitionKeyfr
   };
 }
 
+function sampleTimesForKeyframeTrack(durationSec: number, sampleCount: number, keyframeTrack: TransitionKeyframe[]) {
+  const times = new Map<string, number>();
+  for (let index = 0; index <= sampleCount; index += 1) {
+    const timeSec = Number(((index / sampleCount) * durationSec).toFixed(4));
+    times.set(timeSec.toFixed(4), timeSec);
+  }
+  keyframeTrack.forEach((frame) => {
+    const timeSec = Number(clampNumber(frame.timeSec, 0, durationSec).toFixed(4));
+    times.set(timeSec.toFixed(4), timeSec);
+  });
+  return Array.from(times.values()).sort((a, b) => a - b);
+}
+
+function exactKeyframeAtTime(keyframeTrack: TransitionKeyframe[], timeSec: number) {
+  return keyframeTrack.find((frame) => Math.abs(frame.timeSec - timeSec) <= 0.0006);
+}
+
+function animationSampleFromKeyframe(frame: TransitionKeyframe, timeSec = frame.timeSec): AnimationClipSample {
+  return {
+    timeSec: Number(timeSec.toFixed(4)),
+    transform: clonePoseTransform(frame.transform),
+    pose: clonePose(frame.pose),
+    bonePose: cloneBonePose(frame.bonePose),
+    fingerPose: cloneFingerPose(frame.fingerPose),
+    toePose: cloneToePose(frame.toePose),
+    libTvJointAngles: cloneLibTvJointAngles(frame.libTvJointAngles)
+  };
+}
+
+function restoreExplicitMiddleKeyframeSamples(samples: AnimationClipSample[], transition: PoseTransition) {
+  if (!samples.length || !transition.keyframes.length) return samples;
+  const durationSec = Math.max(0.1, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const middleKeyframes = normalizeTransitionKeyframes(transition.keyframes, durationSec)
+    .filter((frame) => frame.timeSec > 0 && frame.timeSec < durationSec);
+  if (!middleKeyframes.length) return samples;
+
+  const next = samples.map(cloneAnimationSample);
+  middleKeyframes.forEach((frame) => {
+    const timeSec = Number(frame.timeSec.toFixed(4));
+    let index = next.findIndex((sample) => Math.abs(sample.timeSec - timeSec) <= 0.0006);
+    const restored = animationSampleFromKeyframe(frame, timeSec);
+    if (index < 0) {
+      next.push(restored);
+      return;
+    }
+    next[index] = restored;
+  });
+  return next.sort((a, b) => a.timeSec - b.timeSec);
+}
+
+function explicitMiddleKeyframeTimes(transition: PoseTransition, durationSec: number) {
+  return normalizeTransitionKeyframes(transition.keyframes, durationSec)
+    .filter((frame) => frame.timeSec > 0 && frame.timeSec < durationSec)
+    .map((frame) => Number(frame.timeSec.toFixed(4)));
+}
+
+function roundMotionConstraintNumber(value: number, digits = 3) {
+  return Number(value.toFixed(digits));
+}
+
+function compactMotionVec3(value: Vec3, digits = 3) {
+  return {
+    x: roundMotionConstraintNumber(value.x, digits),
+    y: roundMotionConstraintNumber(value.y, digits),
+    z: roundMotionConstraintNumber(value.z, digits)
+  };
+}
+
+function compactMotionPoseForConstraint(pose: StandardHumanRigPose) {
+  const keys: PoseJointKey[] = [
+    'pelvis',
+    'chest',
+    'head',
+    'leftUpperArm',
+    'leftLowerArm',
+    'rightUpperArm',
+    'rightLowerArm',
+    'leftUpperLeg',
+    'leftLowerLeg',
+    'rightUpperLeg',
+    'rightLowerLeg',
+    'leftFoot',
+    'rightFoot'
+  ];
+  return keys.reduce((acc, key) => {
+    acc[key] = compactMotionVec3(pose[key], 1);
+    return acc;
+  }, {} as Partial<Record<PoseJointKey, Vec3>>);
+}
+
+function motionFixedPoseConstraints(transition: PoseTransition) {
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  return transitionKeyframeTrack(transition, durationSec).map((frame) => {
+    const role = frame.timeSec <= 0.0006
+      ? 'start'
+      : frame.timeSec >= durationSec - 0.0006
+        ? 'end'
+        : 'middle';
+    return {
+      id: frame.id,
+      role,
+      label: frame.label,
+      timeSec: roundMotionConstraintNumber(frame.timeSec, 4),
+      timeRatio: roundMotionConstraintNumber(frame.timeSec / durationSec, 4),
+      posePresetId: frame.posePresetId,
+      transform: {
+        position: compactMotionVec3(frame.transform.position),
+        rotation: compactMotionVec3(frame.transform.rotation, 1),
+        scale: compactMotionVec3(frame.transform.scale)
+      },
+      pose: compactMotionPoseForConstraint(frame.pose),
+      hasBonePose: Boolean(frame.bonePose),
+      hasFingerPose: Boolean(frame.fingerPose),
+      hasToePose: Boolean(frame.toePose),
+      note: frame.note || ''
+    };
+  });
+}
+
+function middleKeyframeConstraintNote(transition: PoseTransition) {
+  const count = motionFixedPoseConstraints(transition).filter((frame) => frame.role === 'middle').length;
+  return count > 0 ? `已把 ${count} 个中间帧作为硬关键姿势约束，动作理解和生成必须按时间经过这些姿势。` : '';
+}
+
+function intervalTouchesExplicitKeyframe(a: number, b: number, keyframeTimes: number[]) {
+  if (!keyframeTimes.length) return false;
+  return keyframeTimes.some((timeSec) => Math.abs(a - timeSec) <= 0.0006 || Math.abs(b - timeSec) <= 0.0006);
+}
+
 function easeCurve(curve: CurveType, t: number) {
   const x = clampNumber(t, 0, 1);
-  if (curve === 'ease_in') return t * t;
-  if (curve === 'ease_out') return 1 - (1 - t) * (1 - t);
-  if (curve === 'ease_in_out') return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  if (curve === 'ease_in') return x * x;
+  if (curve === 'ease_out') return 1 - (1 - x) * (1 - x);
+  if (curve === 'ease_in_out') return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
   if (curve === 'bullet_time') return x < 0.22 ? x * 1.25 : x < 0.72 ? 0.275 + (x - 0.22) * 0.35 : 0.45 + (x - 0.72) * (0.55 / 0.28);
   if (curve === 'pulse') return clampNumber(x + Math.sin(x * Math.PI) * Math.exp(-Math.pow((x - 0.5) / 0.18, 2)) * 0.18, 0, 1);
   if (curve === 'hold_then_burst') return x < 0.62 ? x * 0.16 : 0.1 + Math.pow((x - 0.62) / 0.38, 2) * 0.9;
@@ -3668,7 +4796,186 @@ function jointAxisProfileSummary(profile: Scene3DJointAxisProfile) {
 }
 
 // SECTION: Prompt parsing and deterministic motion planning
-function targetPositionForConstraint(scene: Scene3DState, transition: PoseTransition, transform: PoseTransform) {
+function semanticSequenceLocalRatio(transition: PoseTransition, actionType: MotionSemanticActionType, t: number) {
+  const step = transition.actionPlan.semanticPlan?.actionSequence?.find((item) => item.actionType === actionType);
+  return step ? stageProgress(t, step.startRatio, step.endRatio) : clamp01(t);
+}
+
+function semanticContactActionAtTime(transition: PoseTransition, t: number): MotionSemanticActionType | undefined {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan) return undefined;
+  const contactActions: MotionSemanticActionType[] = ['push', 'pull', 'throw', 'reach'];
+  const active = semanticPlan.actionSequence
+    ? activeSequenceWeights(semanticPlan.actionSequence, t)
+      .filter((item) => contactActions.includes(item.step.actionType))
+      .sort((a, b) => b.weight - a.weight)[0]?.step.actionType
+    : undefined;
+  return active || (contactActions.includes(semanticPlan.actionType) ? semanticPlan.actionType : undefined);
+}
+
+function semanticBaseTargetPosition(scene: Scene3DState, transition: PoseTransition, fallbackRatio = 0.45, origin?: Vec3) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const target = findSceneObject(scene, semanticPlan?.targetObjectId);
+  const actionType = semanticContactActionAtTime(transition, fallbackRatio) || semanticPlan?.actionType;
+  return target ? semanticContactAnchorPosition(target, origin, actionType) : semanticTargetPosition(scene, transition, fallbackRatio);
+}
+
+function semanticContactForwardDirection(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  origin: Vec3,
+  t = 0.45,
+  actionType?: MotionSemanticActionType
+) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const contactAction = actionType || semanticContactActionAtTime(transition, t) || semanticPlan?.actionType;
+  const target = findSceneObject(scene, semanticPlan?.targetObjectId);
+  const targetPosition = target
+    ? semanticContactAnchorPosition(target, origin, contactAction)
+    : semanticTargetPosition(scene, transition, t);
+  const targetVector = vec(targetPosition.x - origin.x, 0, targetPosition.z - origin.z);
+  const targetDirection = normalizedDirection(targetVector);
+  if (targetDirection.x || targetDirection.z) return targetDirection;
+  const promptDirection = normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
+  return promptDirection.x || promptDirection.z ? promptDirection : vec(0, 0, -1);
+}
+
+function semanticPropContactForwardDirection(prop: PropObject, transition: PoseTransition, sample: AnimationClipSample, actionType?: MotionSemanticActionType) {
+  const contactPoint = semanticContactAnchorPosition(prop, sample.transform.position, actionType);
+  const targetVector = vec(contactPoint.x - sample.transform.position.x, 0, contactPoint.z - sample.transform.position.z);
+  const targetDirection = normalizedDirection(targetVector);
+  if (targetDirection.x || targetDirection.z) return targetDirection;
+  const promptDirection = normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
+  return promptDirection.x || promptDirection.z ? promptDirection : vec(0, 0, -1);
+}
+
+function semanticContactWindow(actionType: MotionSemanticActionType | undefined, localT: number, control: ReturnType<typeof motionControlFromPrompt>) {
+  const t = clamp01(localT);
+  if (actionType === 'push') {
+    const reach = ramp(t, 0.08, control.speedLabel === '缓慢' ? 0.38 : 0.32);
+    const hold = Math.min(ramp(t, 0.26, 0.44), 1 - ramp(t, control.sustained ? 0.96 : 0.88, 1));
+    const drive = ramp(t, control.burst ? 0.44 : 0.48, control.sustained ? 0.94 : 0.84);
+    const release = ramp(t, control.sustained ? 0.96 : 0.9, 1);
+    return { reach, hold, drive, release, contact: Math.max(hold, drive * 0.9) };
+  }
+  if (actionType === 'pull') {
+    const reach = ramp(t, 0.06, control.speedLabel === '缓慢' ? 0.34 : 0.28);
+    const hold = Math.min(ramp(t, 0.26, 0.42), 1 - ramp(t, control.sustained ? 0.94 : 0.86, 1));
+    const drive = ramp(t, control.burst ? 0.42 : 0.46, control.sustained ? 0.92 : 0.82);
+    const release = ramp(t, control.sustained ? 0.95 : 0.88, 1);
+    return { reach, hold, drive, release, contact: Math.max(hold, drive * 0.84) };
+  }
+  if (actionType === 'throw') {
+    const reach = 1 - ramp(t, 0.58, 0.72);
+    const hold = 1 - ramp(t, control.burst ? 0.52 : 0.56, control.speedLabel === '缓慢' ? 0.78 : 0.68);
+    const drive = ramp(t, control.burst ? 0.48 : 0.52, control.speedLabel === '缓慢' ? 0.82 : 0.72);
+    const release = ramp(t, control.burst ? 0.56 : 0.62, control.speedLabel === '缓慢' ? 0.82 : 0.74);
+    return { reach, hold: Math.max(0, hold), drive, release, contact: Math.max(0, Math.min(reach, hold)) };
+  }
+  return { reach: 0, hold: 0, drive: 0, release: 0, contact: 0 };
+}
+
+function contactHandOffset(forward: Vec3, limb: 'leftHand' | 'rightHand', width = 0.11) {
+  const side = limb === 'leftHand' ? -1 : 1;
+  const perpendicular = normalizedDirection(vec(-forward.z, 0, forward.x));
+  const fallback = perpendicular.x || perpendicular.z ? perpendicular : vec(1, 0, 0);
+  return vec(fallback.x * width * side, 0, fallback.z * width * side);
+}
+
+function contactTargetForHand(position: Vec3, forward: Vec3, limb: 'leftHand' | 'rightHand', width = 0.11) {
+  const offset = contactHandOffset(forward, limb, width);
+  return vec(
+    Number((position.x + offset.x).toFixed(4)),
+    Number(position.y.toFixed(4)),
+    Number((position.z + offset.z).toFixed(4))
+  );
+}
+
+function semanticContactHandWidth(scene: Scene3DState, transition: PoseTransition, actionType?: MotionSemanticActionType) {
+  const target = findSceneObject(scene, transition.actionPlan.semanticPlan?.targetObjectId);
+  const targetScale = target && 'scale' in target ? target.scale : undefined;
+  const targetWidth = targetScale ? Math.max(targetScale.x || 0.3, targetScale.z || 0.3) : 0.3;
+  if (actionType === 'throw') return clampNumber(targetWidth * 0.16, 0.055, 0.11);
+  if (actionType === 'push' || actionType === 'pull') return clampNumber(targetWidth * 0.24, 0.1, 0.22);
+  return clampNumber(targetWidth * 0.2, 0.08, 0.16);
+}
+
+function semanticHandTargetSample(scene: Scene3DState, transition: PoseTransition, transform: PoseTransform, t: number) {
+  const actionType = semanticContactActionAtTime(transition, t);
+  if (!actionType) return null;
+  const localT = semanticSequenceLocalRatio(transition, actionType, t);
+  const control = motionControlFromPrompt(transition.actionPrompt, transition.actionPlan.semanticPlan);
+  const baseTarget = semanticBaseTargetPosition(scene, transition, localT, transform.position);
+  const forward = semanticContactForwardDirection(scene, transition, transform.position, t, actionType);
+  const bodyTarget = vec(
+    Number((transform.position.x + forward.x * 0.18).toFixed(4)),
+    Number((transform.position.y + 1.05).toFixed(4)),
+    Number((transform.position.z + forward.z * 0.18).toFixed(4))
+  );
+
+  if (actionType === 'push') {
+    const window = semanticContactWindow(actionType, localT, control);
+    const brace = 1 - window.release;
+    const position = vec(
+      Number((baseTarget.x + forward.x * 0.34 * window.drive * control.travelScale).toFixed(4)),
+      Number((baseTarget.y + 0.015 + 0.025 * brace).toFixed(4)),
+      Number((baseTarget.z + forward.z * 0.34 * window.drive * control.travelScale).toFixed(4))
+    );
+    return { actionType, position, strength: Math.min(1, Math.max(window.reach * 0.55, window.contact * 0.95) * control.holdScale) };
+  }
+
+  if (actionType === 'pull') {
+    const window = semanticContactWindow(actionType, localT, control);
+    const propFollow = 0.3 * control.travelScale * window.hold * window.drive;
+    const position = vec(
+      Number((baseTarget.x - forward.x * propFollow).toFixed(4)),
+      Number(lerp(baseTarget.y, bodyTarget.y, window.drive * 0.18).toFixed(4)),
+      Number((baseTarget.z - forward.z * propFollow).toFixed(4))
+    );
+    return { actionType, position, strength: Math.min(1, Math.max(window.reach * 0.5, window.contact * 0.94) * control.holdScale) };
+  }
+
+  if (actionType === 'throw') {
+    const window = semanticContactWindow(actionType, localT, control);
+    const releaseTarget = releasePositionForThrow(transition);
+    const windupTarget = vec(
+      Number((transform.position.x - forward.x * 0.2).toFixed(4)),
+      Number((transform.position.y + 1.18).toFixed(4)),
+      Number((transform.position.z - forward.z * 0.22).toFixed(4))
+    );
+    const position = localT < 0.42
+      ? lerpVec3(baseTarget, windupTarget, ramp(localT, 0.06, 0.34))
+      : lerpVec3(windupTarget, releaseTarget, window.release * control.forceScale);
+    return { actionType, position, strength: Math.max(0, window.contact * 0.82 * control.holdScale) };
+  }
+
+  const reach = Math.min(ramp(localT, 0.1, 0.52), 1 - ramp(localT, 0.88, 1));
+  return { actionType, position: baseTarget, strength: reach * 0.78 };
+}
+
+function semanticHandTargetForLimb(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  transform: PoseTransform,
+  t: number,
+  limb: 'leftHand' | 'rightHand'
+) {
+  const sample = semanticHandTargetSample(scene, transition, transform, t);
+  if (!sample) return null;
+  const forward = semanticContactForwardDirection(scene, transition, transform.position, t, sample.actionType);
+  return {
+    ...sample,
+    forward,
+    position: contactTargetForHand(
+      sample.position,
+      forward,
+      limb,
+      semanticContactHandWidth(scene, transition, sample.actionType)
+    )
+  };
+}
+
+function targetPositionForConstraint(scene: Scene3DState, transition: PoseTransition, transform: PoseTransform, t = 0.5) {
   const objectById = (id?: string) => {
     if (!id) return null;
     return scene.objects.props.find((item) => item.id === id)
@@ -3688,15 +4995,31 @@ function targetPositionForConstraint(scene: Scene3DState, transition: PoseTransi
     : transition.constraints.headLookAt.targetMode === 'object'
       ? objectById(transition.constraints.headLookAt.targetObjectId)?.position
       : transition.constraints.headLookAt.targetPosition;
-  const explicitHandTarget = transition.constraints.handTarget.targetMode === 'object'
-    ? objectById(transition.constraints.handTarget.targetObjectId)?.position
+  const explicitHandTargetObject = transition.constraints.handTarget.targetMode === 'object'
+    ? objectById(transition.constraints.handTarget.targetObjectId)
+    : null;
+  const explicitHandTarget = explicitHandTargetObject
+    ? contactPositionForObject(explicitHandTargetObject, transform.position)
     : transition.constraints.handTarget.targetPosition;
   const templateTargetObject = objectById(templateTarget?.targetObjectId || undefined);
-  const handTarget = explicitHandTarget || templateTargetObject?.position;
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const semanticTargetObject = objectById(semanticPlan?.targetObjectId);
+  const hasSemanticHandTarget = Boolean(semanticPlan?.contacts.some((item) => (
+    item.contact === 'hands' || item.contact === 'leftHand' || item.contact === 'rightHand'
+  )));
+  const semanticHandTarget = hasSemanticHandTarget
+    ? semanticHandTargetSample(scene, transition, transform, t)?.position
+      || (semanticTargetObject
+        ? semanticContactAnchorPosition(semanticTargetObject, transform.position, semanticContactActionAtTime(transition, t) || semanticPlan?.actionType)
+        : semanticTargetPosition(scene, transition))
+    : undefined;
+  const semanticHandStrength = hasSemanticHandTarget ? semanticHandTargetSample(scene, transition, transform, t)?.strength ?? 0.72 : 0;
+  const handTarget = explicitHandTarget || (templateTargetObject ? contactPositionForObject(templateTargetObject, transform.position) : undefined) || semanticHandTarget;
   return {
     headTarget: headTarget ? normalizeVec(headTarget, vec()) : undefined,
     handTarget: handTarget ? normalizeVec(handTarget, vec()) : undefined,
-    handTargetObjectId: transition.constraints.handTarget.targetObjectId || templateTarget?.targetObjectId || undefined,
+    handTargetObjectId: transition.constraints.handTarget.targetObjectId || templateTarget?.targetObjectId || semanticPlan?.targetObjectId || undefined,
+    handStrength: explicitHandTarget || templateTargetObject ? 1 : semanticHandStrength,
     hand: templateHand,
     origin: transform.position
   };
@@ -3718,12 +5041,13 @@ function solveArmIkToTarget(
   pose: StandardHumanRigPose,
   hand: 'left' | 'right',
   handTarget: Vec3 | undefined,
-  origin: Vec3
+  origin: Vec3,
+  verticalAimOffset = 0.22
 ): { pose: StandardHumanRigPose; warning?: string } {
   if (!handTarget) return { pose };
   const side = hand === 'left' ? -1 : 1;
   const shoulder = new THREE.Vector3(origin.x + side * 0.28, origin.y + 1.28, origin.z);
-  const target = new THREE.Vector3(handTarget.x, handTarget.y + 0.22, handTarget.z);
+  const target = new THREE.Vector3(handTarget.x, handTarget.y + verticalAimOffset, handTarget.z);
   const direction = target.sub(shoulder);
   const distance = direction.length();
   if (distance < 0.0001) return { pose };
@@ -3755,9 +5079,9 @@ function solveArmIkToTarget(
   }
   return {
     pose: patchPose(pose, {
-      rightUpperArm: { x: shoulderX, y: twist, z: -sideLift },
+      rightUpperArm: { x: shoulderX, y: twist, z: sideLift },
       rightLowerArm: { x: bend },
-      rightHand: { x: Math.min(22, Math.max(-22, pitch * 0.25)), z: -10 }
+      rightHand: { x: Math.min(22, Math.max(-22, pitch * 0.25)), z: 10 }
     }),
     warning
   };
@@ -3992,6 +5316,42 @@ function stageProgress(t: number, start: number, end: number) {
   return clamp01((t - start) / Math.max(0.0001, end - start));
 }
 
+function promptRequestsBurstTiming(prompt: string) {
+  return matchesPrompt(prompt, /突然|猛然|瞬间|爆发|猛冲|急停|burst|sudden|snap|impact/);
+}
+
+function promptRequestsSustainedTiming(prompt: string) {
+  return matchesPrompt(prompt, /持续|保持|稳住|停住|定住|continuous|sustain|hold|pause|stop/);
+}
+
+function promptRequestsAccelerateTiming(prompt: string) {
+  return matchesPrompt(prompt, /加速|越来越快|逐渐加快|accelerate|speed up/);
+}
+
+function promptRequestsDecelerateTiming(prompt: string) {
+  return matchesPrompt(prompt, /减速|放慢|慢下来|停下|刹住|decelerate|slow down|brake/);
+}
+
+function semanticActionTime(transition: PoseTransition, t: number) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const x = clamp01(t);
+  const prompt = transition.actionPrompt;
+  if (promptRequestsBurstTiming(prompt)) return easeCurve('hold_then_burst', x);
+  if (promptRequestsSustainedTiming(prompt)) {
+    return x < 0.18
+      ? easeCurve('ease_out', x / 0.18) * 0.28
+      : x < 0.78
+        ? 0.28 + (x - 0.18) * 0.36
+        : 0.5 + easeCurve('ease_in', (x - 0.78) / 0.22) * 0.5;
+  }
+  if (promptRequestsAccelerateTiming(prompt)) return easeCurve('ease_in', x);
+  if (promptRequestsDecelerateTiming(prompt)) return easeCurve('ease_out', x);
+  if (semanticPlan?.speedLabel === '快速') return easeCurve('ease_out', x);
+  if (semanticPlan?.speedLabel === '缓慢') return easeCurve('ease_in_out', x);
+  if (semanticPlan?.speedLabel === '持续') return x < 0.72 ? x * 0.72 : 0.52 + (x - 0.72) * (0.48 / 0.28);
+  return x;
+}
+
 function applySemanticActionStageOverlay(
   pose: StandardHumanRigPose,
   transform: PoseTransform,
@@ -4008,153 +5368,217 @@ function applySemanticActionStageOverlay(
   const mainHand: 'left' | 'right' = handPreference === 'left' ? 'left' : 'right';
   const bothHands = handPreference === 'both' || semanticPlan.contacts.some((item) => item.contact === 'hands');
   const direction = transition.actionPlan.universal?.direction || vec(0, 0, -1);
-  const forceScale = semanticPlan.forceLabel === '强' ? 1.12 : semanticPlan.forceLabel === '轻' ? 0.82 : 1;
-  const speedScale = semanticPlan.speedLabel === '快速' ? 1.08 : semanticPlan.speedLabel === '缓慢' ? 0.86 : 1;
+  const control = motionControlFromPrompt(prompt, semanticPlan);
+  const forceScale = control.forceScale;
+  const speedScale = control.speedScale;
 
   if (actionType === 'push') {
-    const prepare = stageWindow(t, 0.02, 0.32);
-    const contact = stageWindow(t, 0.24, 0.58);
-    const exert = stageWindow(t, 0.44, 0.94);
-    const drive = Math.max(contact, exert * 0.78) * forceScale;
-    transform.position.x += direction.x * 0.055 * drive;
-    transform.position.z += (direction.z || -1) * 0.055 * drive;
+    const brace = ramp(t, 0.02, control.speedLabel === '缓慢' ? 0.28 : 0.2) * (1 - ramp(t, 0.92, 1));
+    const reach = stageWindow(t, 0.04, control.speedLabel === '快速' ? 0.28 : 0.34);
+    const contact = stageWindow(t, 0.24, control.sustained ? 0.68 : 0.56);
+    const exert = stageWindow(t, control.burst ? 0.54 : 0.48, control.sustained ? 0.96 : 0.9) * forceScale;
+    const drive = Math.max(contact * 0.72, exert);
+    transform.position.x += direction.x * 0.045 * drive * control.travelScale;
+    transform.position.z += (direction.z || -1) * 0.045 * drive * control.travelScale;
     const armPatch = bothHands
       ? {
-          leftUpperArm: { x: -22 * drive + 12 * prepare, y: -8 * drive, z: -34 * drive },
-          rightUpperArm: { x: -22 * drive + 12 * prepare, y: 8 * drive, z: 34 * drive },
-          leftLowerArm: { x: 22 * drive + 18 * prepare },
-          rightLowerArm: { x: 22 * drive + 18 * prepare },
+          leftUpperArm: { x: 10 * reach - 26 * drive, y: -6 * drive, z: -24 * brace - 34 * drive },
+          rightUpperArm: { x: 10 * reach - 26 * drive, y: 6 * drive, z: 24 * brace + 34 * drive },
+          leftLowerArm: { x: 28 * reach + 18 * drive },
+          rightLowerArm: { x: 28 * reach + 18 * drive },
           leftHand: { x: -5 * drive, z: -8 * drive },
           rightHand: { x: -5 * drive, z: 8 * drive }
         }
       : mainHand === 'left'
         ? {
-            leftUpperArm: { x: -26 * drive + 12 * prepare, y: -10 * drive, z: -38 * drive },
-            leftLowerArm: { x: 22 * drive + 18 * prepare },
-            leftHand: { x: -5 * drive, z: -8 * drive }
+            leftUpperArm: { x: 10 * reach - 30 * drive, y: -8 * drive, z: -22 * brace - 38 * drive },
+            leftLowerArm: { x: 30 * reach + 18 * drive },
+            leftHand: { x: -5 * drive, z: -8 * drive },
+            rightUpperArm: { x: 20 * brace, z: 20 * brace },
+            rightLowerArm: { x: 58 * brace }
           }
         : {
-            rightUpperArm: { x: -26 * drive + 12 * prepare, y: 10 * drive, z: 38 * drive },
-            rightLowerArm: { x: 22 * drive + 18 * prepare },
-            rightHand: { x: -5 * drive, z: 8 * drive }
+            rightUpperArm: { x: 10 * reach - 30 * drive, y: 8 * drive, z: 22 * brace + 38 * drive },
+            rightLowerArm: { x: 30 * reach + 18 * drive },
+            rightHand: { x: -5 * drive, z: 8 * drive },
+            leftUpperArm: { x: 20 * brace, z: -20 * brace },
+            leftLowerArm: { x: 58 * brace }
           };
     return finalize(offsetPose(pose, {
-      pelvis: { x: -5 * drive },
-      chest: { x: -11 * drive, y: direction.x * 6 * drive },
+      pelvis: { x: -6 * brace - 6 * drive },
+      chest: { x: -8 * brace - 12 * drive, y: direction.x * 5 * drive },
       head: { x: -3 * drive },
-      leftUpperLeg: { x: -4 * exert },
-      rightUpperLeg: { x: -4 * exert },
-      leftLowerLeg: { x: 8 * exert },
-      rightLowerLeg: { x: 8 * exert },
+      leftUpperLeg: { x: -5 * brace - 4 * exert, z: -2 * direction.x * drive },
+      rightUpperLeg: { x: -5 * brace - 4 * exert, z: 2 * direction.x * drive },
+      leftLowerLeg: { x: 8 * brace + 8 * exert },
+      rightLowerLeg: { x: 8 * brace + 8 * exert },
       ...armPatch
     }));
   }
 
   if (actionType === 'pull') {
-    const reach = stageWindow(t, 0.02, 0.36);
-    const pull = stageWindow(t, 0.32, 0.8) * forceScale;
-    transform.position.x -= direction.x * 0.04 * pull;
-    transform.position.z -= (direction.z || -1) * 0.04 * pull;
+    const reach = stageWindow(t, 0.02, control.speedLabel === '快速' ? 0.28 : 0.34);
+    const grab = stageWindow(t, 0.26, control.sustained ? 0.58 : 0.48);
+    const pull = stageWindow(t, control.burst ? 0.48 : 0.42, control.sustained ? 0.94 : 0.84) * forceScale;
+    const settle = stageWindow(t, 0.78, 0.98);
+    transform.position.x -= direction.x * 0.04 * pull * control.travelScale;
+    transform.position.z -= (direction.z || -1) * 0.04 * pull * control.travelScale;
+    const armPatch = bothHands
+      ? {
+          leftUpperArm: { x: -18 * reach + 26 * pull, y: -6 * pull, z: -26 * reach - 12 * pull },
+          rightUpperArm: { x: -18 * reach + 26 * pull, y: 6 * pull, z: 26 * reach + 12 * pull },
+          leftLowerArm: { x: 26 * reach + 48 * pull - 12 * settle },
+          rightLowerArm: { x: 26 * reach + 48 * pull - 12 * settle },
+          leftHand: { x: -4 * grab + 6 * pull, z: -6 * grab },
+          rightHand: { x: -4 * grab + 6 * pull, z: 6 * grab }
+        }
+      : mainHand === 'left'
+        ? {
+            leftUpperArm: { x: -20 * reach + 30 * pull, y: -8 * pull, z: -30 * reach - 12 * pull },
+            leftLowerArm: { x: 28 * reach + 50 * pull - 12 * settle },
+            leftHand: { x: -4 * grab + 6 * pull, z: -6 * grab },
+            rightUpperArm: { x: 20 * grab, z: 18 * grab },
+            rightLowerArm: { x: 56 * grab }
+          }
+        : {
+            rightUpperArm: { x: -20 * reach + 30 * pull, y: 8 * pull, z: 30 * reach + 12 * pull },
+            rightLowerArm: { x: 28 * reach + 50 * pull - 12 * settle },
+            rightHand: { x: -4 * grab + 6 * pull, z: 6 * grab },
+            leftUpperArm: { x: 20 * grab, z: -18 * grab },
+            leftLowerArm: { x: 56 * grab }
+          };
     return finalize(offsetPose(pose, {
-      pelvis: { x: 5 * pull },
-      chest: { x: 8 * pull - 6 * reach },
-      leftUpperArm: { x: -14 * reach + 22 * pull, z: -28 * reach - 12 * pull },
-      rightUpperArm: { x: -14 * reach + 22 * pull, z: 28 * reach + 12 * pull },
-      leftLowerArm: { x: 22 * reach + 46 * pull },
-      rightLowerArm: { x: 22 * reach + 46 * pull }
+      pelvis: { x: 4 * grab + 8 * pull },
+      chest: { x: -6 * reach + 10 * pull, y: -direction.x * 5 * pull },
+      head: { x: 2 * pull },
+      leftUpperLeg: { x: -3 * grab + 5 * pull },
+      rightUpperLeg: { x: -3 * grab + 5 * pull },
+      leftLowerLeg: { x: 7 * grab },
+      rightLowerLeg: { x: 7 * grab },
+      ...armPatch
     }));
   }
 
   if (actionType === 'throw') {
-    const windup = stageWindow(t, 0.02, 0.42) * forceScale;
-    const release = stageWindow(t, 0.38, 0.72) * forceScale * speedScale;
-    const follow = stageWindow(t, 0.66, 0.98);
-    transform.rotation.y += (mainHand === 'left' ? -1 : 1) * (-12 * windup + 18 * release + 6 * follow);
-    transform.position.z += 0.035 * windup - 0.08 * release;
+    const windup = stageWindow(t, 0.04, control.burst ? 0.46 : 0.42) * forceScale;
+    const release = stageWindow(t, control.burst ? 0.48 : 0.38, control.speedLabel === '缓慢' ? 0.74 : 0.68, control.burst ? 0.035 : 0.055) * forceScale * speedScale;
+    const follow = stageWindow(t, 0.62, 0.96);
+    const side = mainHand === 'left' ? -1 : 1;
+    transform.rotation.y += side * (-14 * windup + 20 * release + 5 * follow);
+    transform.position.z += 0.03 * windup - 0.07 * release;
     const throwingArm = mainHand === 'left'
       ? {
-          leftUpperArm: { x: 42 * windup - 48 * release + 18 * follow, y: -20 * windup - 26 * release, z: -22 * windup - 44 * release },
-          leftLowerArm: { x: 58 * windup - 24 * release + 18 * follow, y: -10 * release },
-          leftHand: { x: -8 * release, z: -12 * release }
+          leftUpperArm: { x: 44 * windup - 50 * release + 18 * follow, y: -18 * windup - 28 * release, z: -24 * windup - 42 * release },
+          leftLowerArm: { x: 62 * windup - 30 * release + 18 * follow, y: -10 * release },
+          leftHand: { x: -8 * release, z: -12 * release },
+          rightUpperArm: { x: 18 * windup + 12 * follow, z: 18 * windup },
+          rightLowerArm: { x: 48 * windup }
         }
       : {
-          rightUpperArm: { x: 42 * windup - 48 * release + 18 * follow, y: 20 * windup + 26 * release, z: 22 * windup + 44 * release },
-          rightLowerArm: { x: 58 * windup - 24 * release + 18 * follow, y: 10 * release },
-          rightHand: { x: -8 * release, z: 12 * release }
+          rightUpperArm: { x: 44 * windup - 50 * release + 18 * follow, y: 18 * windup + 28 * release, z: 24 * windup + 42 * release },
+          rightLowerArm: { x: 62 * windup - 30 * release + 18 * follow, y: 10 * release },
+          rightHand: { x: -8 * release, z: 12 * release },
+          leftUpperArm: { x: 18 * windup + 12 * follow, z: -18 * windup },
+          leftLowerArm: { x: 48 * windup }
         };
     return finalize(offsetPose(pose, {
-      pelvis: { x: -4 * windup - 6 * release, y: (mainHand === 'left' ? -1 : 1) * (8 * windup - 10 * release) },
-      chest: { x: 8 * windup - 12 * release, y: (mainHand === 'left' ? -1 : 1) * (18 * windup - 24 * release) },
-      head: { y: (mainHand === 'left' ? -1 : 1) * (6 * release) },
-      leftUpperLeg: { x: -8 * release },
-      rightUpperLeg: { x: 6 * release },
+      pelvis: { x: -4 * windup - 6 * release, y: side * (8 * windup - 10 * release) },
+      chest: { x: 8 * windup - 12 * release, y: side * (18 * windup - 24 * release) },
+      head: { y: side * 6 * release },
+      leftUpperLeg: { x: -4 * windup - 7 * release, z: mainHand === 'left' ? -3 * release : 1 * release },
+      rightUpperLeg: { x: -2 * windup + 6 * release, z: mainHand === 'right' ? 3 * release : -1 * release },
+      leftLowerLeg: { x: 8 * windup },
+      rightLowerLeg: { x: 8 * windup },
       ...throwingArm
     }));
   }
 
   if (actionType === 'punch') {
-    const guard = stageWindow(t, 0.02, 0.28);
-    const strike = stageWindow(t, 0.28, 0.62) * forceScale * speedScale;
-    const recover = stageWindow(t, 0.58, 0.98);
-    transform.position.z -= 0.055 * strike;
-    transform.rotation.y += (mainHand === 'left' ? -1 : 1) * (6 * strike - 4 * guard);
+    const guard = Math.max(0.35, 1 - ramp(t, 0.86, 1));
+    const load = stageWindow(t, 0.06, 0.34) * forceScale;
+    const strike = stageWindow(t, 0.28, 0.58, 0.055) * forceScale * speedScale;
+    const recover = stageWindow(t, 0.52, 0.92);
+    const side = mainHand === 'left' ? -1 : 1;
+    transform.position.z -= 0.045 * strike;
+    transform.rotation.y += side * (-4 * load + 9 * strike - 5 * recover);
     const strikeArm = mainHand === 'left'
       ? {
-          leftUpperArm: { x: 18 * guard - 38 * strike + 12 * recover, y: -20 * strike, z: -34 * strike - 22 * guard },
-          leftLowerArm: { x: 68 * guard - 20 * strike + 24 * recover },
-          rightUpperArm: { x: 28 * guard, z: 26 * guard },
-          rightLowerArm: { x: 68 * guard }
+          leftUpperArm: { x: 22 * guard + 18 * load - 42 * strike + 18 * recover, y: -8 * guard - 22 * strike, z: -18 * guard - 32 * strike },
+          leftLowerArm: { x: 74 * guard + 14 * load - 28 * strike + 22 * recover },
+          leftHand: { x: -8 * strike, z: -8 * strike },
+          rightUpperArm: { x: 28 * guard + 5 * strike, z: 26 * guard },
+          rightLowerArm: { x: 72 * guard },
+          rightHand: { x: -4 * guard }
         }
       : {
-          rightUpperArm: { x: 18 * guard - 38 * strike + 12 * recover, y: 20 * strike, z: 34 * strike + 22 * guard },
-          rightLowerArm: { x: 68 * guard - 20 * strike + 24 * recover },
-          leftUpperArm: { x: 28 * guard, z: -26 * guard },
-          leftLowerArm: { x: 68 * guard }
+          rightUpperArm: { x: 22 * guard + 18 * load - 42 * strike + 18 * recover, y: 8 * guard + 22 * strike, z: 18 * guard + 32 * strike },
+          rightLowerArm: { x: 74 * guard + 14 * load - 28 * strike + 22 * recover },
+          rightHand: { x: -8 * strike, z: 8 * strike },
+          leftUpperArm: { x: 28 * guard + 5 * strike, z: -26 * guard },
+          leftLowerArm: { x: 72 * guard },
+          leftHand: { x: -4 * guard }
         };
     return finalize(offsetPose(pose, {
-      pelvis: { x: -5 * strike },
-      chest: { x: -8 * strike, y: (mainHand === 'left' ? -1 : 1) * 12 * strike },
-      head: { y: (mainHand === 'left' ? -1 : 1) * 5 * strike },
-      leftUpperLeg: { x: -6 * guard + 6 * strike },
-      rightUpperLeg: { x: -6 * guard - 4 * strike },
+      pelvis: { x: -4 * guard - 5 * strike, y: side * (-3 * load + 5 * strike) },
+      chest: { x: -5 * guard - 8 * strike, y: side * (7 * load + 13 * strike - 4 * recover) },
+      head: { y: side * 5 * strike },
+      leftUpperLeg: { x: -5 * guard + 4 * strike, z: mainHand === 'left' ? -2 * strike : 1 * strike },
+      rightUpperLeg: { x: -5 * guard - 3 * strike, z: mainHand === 'right' ? 2 * strike : -1 * strike },
       ...strikeArm
     }));
   }
 
   if (actionType === 'block') {
-    const raise = stageProgress(t, 0.08, 0.42);
-    const hold = stageWindow(t, 0.28, 0.94);
-    transform.position.z += 0.035 * hold;
+    const raise = ramp(t, 0.06, 0.34);
+    const absorb = stageWindow(t, 0.32, 0.68);
+    const hold = Math.max(raise * (1 - ramp(t, 0.92, 1)), absorb);
+    transform.position.z += 0.028 * absorb;
     return finalize(offsetPose(pose, {
-      pelvis: { x: -5 * hold },
-      chest: { x: -5 * hold, z: -5 * hold },
+      pelvis: { x: -5 * hold, z: -2 * absorb },
+      chest: { x: -6 * hold, z: -4 * hold },
       head: { x: -3 * hold },
-      leftUpperArm: { x: 34 * raise, y: -14 * raise, z: -38 * raise },
-      rightUpperArm: { x: 34 * raise, y: 14 * raise, z: 38 * raise },
-      leftLowerArm: { x: 78 * raise, y: 8 * hold },
-      rightLowerArm: { x: 78 * raise, y: -8 * hold }
+      leftUpperArm: { x: 32 * hold, y: -10 * hold, z: -34 * hold },
+      rightUpperArm: { x: 32 * hold, y: 10 * hold, z: 34 * hold },
+      leftLowerArm: { x: 82 * hold, y: 10 * hold, z: -8 * absorb },
+      rightLowerArm: { x: 82 * hold, y: -10 * hold, z: 8 * absorb },
+      leftHand: { z: -6 * hold },
+      rightHand: { z: 6 * hold }
     }));
   }
 
   if (actionType === 'kick' || actionType === 'side_kick') {
-    const chamber = stageWindow(t, 0.08, 0.36);
-    const extend = stageWindow(t, 0.32, 0.68) * forceScale;
-    const retract = stageWindow(t, 0.62, 0.94);
+    const chamber = stageWindow(t, 0.08, 0.34);
+    const extend = stageWindow(t, 0.32, 0.62, 0.055) * forceScale;
+    const retract = stageWindow(t, 0.58, 0.92);
     const sideKick = actionType === 'side_kick' || /侧|横|side/.test(prompt);
+    const kickLeg = inferPromptLeg(prompt) === 'left' ? 'left' : 'right';
     const side = sideKick ? (semanticDirectionLabel(prompt, transition.actionPlan.universal || deriveUniversalMotionPlan(prompt, [])) === '向左' ? -1 : 1) : 1;
-    transform.rotation.z += sideKick ? -side * 5 * extend : 0;
+    const kickSign = kickLeg === 'left' ? -1 : 1;
+    transform.rotation.z += sideKick ? -side * 5 * extend : -kickSign * 2 * extend;
+    transform.position.z -= sideKick ? 0 : 0.035 * extend;
+    const leftKickPatch = kickLeg === 'left'
+      ? {
+          leftUpperLeg: { x: sideKick ? 20 * chamber - 40 * retract : -38 * chamber - 48 * extend + 26 * retract, z: sideKick ? side * 54 * extend : -7 * extend },
+          leftLowerLeg: { x: sideKick ? 12 * chamber - 14 * extend + 10 * retract : 28 * chamber - 18 * extend + 18 * retract },
+          leftFoot: { x: sideKick ? 4 * extend : -14 * extend, z: sideKick ? side * 8 * extend : 0 },
+          rightUpperLeg: { x: -10 * chamber + 10 * extend, z: sideKick ? -side * 8 * extend : 0 },
+          rightLowerLeg: { x: 18 * chamber + 8 * extend }
+        }
+      : {
+          rightUpperLeg: { x: sideKick ? 20 * chamber - 40 * retract : -38 * chamber - 48 * extend + 26 * retract, z: sideKick ? side * 54 * extend : 7 * extend },
+          rightLowerLeg: { x: sideKick ? 12 * chamber - 14 * extend + 10 * retract : 28 * chamber - 18 * extend + 18 * retract },
+          rightFoot: { x: sideKick ? 4 * extend : -14 * extend, z: sideKick ? side * 8 * extend : 0 },
+          leftUpperLeg: { x: -10 * chamber + 10 * extend, z: sideKick ? -side * 8 * extend : 0 },
+          leftLowerLeg: { x: 18 * chamber + 8 * extend }
+        };
     return finalize(offsetPose(pose, {
-      pelvis: { x: -7 * chamber - 5 * extend, z: sideKick ? -side * 10 * extend : 0 },
-      chest: { x: 6 * chamber + 6 * extend, z: sideKick ? side * 10 * extend : 0 },
-      leftUpperArm: { x: 14 * extend, z: -24 * extend },
-      rightUpperArm: { x: 14 * extend, z: 24 * extend },
-      leftLowerArm: { x: 34 * extend },
-      rightLowerArm: { x: 34 * extend },
-      leftUpperLeg: { x: sideKick ? 18 * chamber - 28 * retract : -34 * chamber - 46 * extend + 24 * retract, z: sideKick ? side * 48 * extend : -6 * extend },
-      leftLowerLeg: { x: sideKick ? 10 * chamber - 10 * extend : 22 * chamber - 16 * extend },
-      leftFoot: { x: sideKick ? 4 * extend : -12 * extend },
-      rightUpperLeg: { x: -8 * chamber + 10 * extend },
-      rightLowerLeg: { x: 16 * chamber + 8 * extend }
+      pelvis: { x: -7 * chamber - 5 * extend, z: sideKick ? -side * 10 * extend : -kickSign * 2 * extend },
+      chest: { x: 6 * chamber + 6 * extend, z: sideKick ? side * 10 * extend : kickSign * 3 * extend },
+      leftUpperArm: { x: 18 * chamber + 12 * extend, z: -22 * chamber - 12 * extend },
+      rightUpperArm: { x: 18 * chamber + 12 * extend, z: 22 * chamber + 12 * extend },
+      leftLowerArm: { x: 46 * chamber + 18 * extend },
+      rightLowerArm: { x: 46 * chamber + 18 * extend },
+      ...leftKickPatch
     }));
   }
 
@@ -4175,34 +5599,9 @@ function applySemanticActionStageOverlay(
   }
 
   if (actionType === 'run' || actionType === 'dash' || actionType === 'walk') {
-    const gait = locomotionGaitConfig(actionType);
-    const drive = locomotionEnvelope(t) * forceScale * speedScale;
-    const phase = gaitPhase(actionType, t, transition.durationSec);
-    const step = Math.sin(phase * Math.PI * 2);
-    const counter = Math.sin(phase * Math.PI * 2 + Math.PI);
-    const stride = gait?.strideDeg || 18;
-    const arm = gait?.armDeg || 10;
-    const lean = gait?.leanDeg || 3;
-    const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
-    const lateral = Math.abs(direction.x) > Math.abs(direction.z) ? direction.x : 0;
-    const forward = Math.abs(direction.z) >= Math.abs(direction.x) ? (direction.z || -1) : 0;
-    const swingLift = Math.max(0, Math.cos(phase * Math.PI * 2));
-    transform.position.y += Math.abs(step) * (gait?.rootBob || 0.012) * drive;
-    return finalize(offsetPose(pose, {
-      pelvis: { x: -lean * drive, z: step * (gait?.weightShift || 2.2) * drive },
-      chest: { x: -lean * 0.65 * drive, z: -step * (gait?.weightShift || 2.2) * 0.45 * drive },
-      head: { x: -lean * 0.18 * drive },
-      leftUpperLeg: { x: step * stride * drive * (forward ? 1 : 0.45), z: lateral ? step * stride * 0.72 * lateral * drive : 0 },
-      rightUpperLeg: { x: -step * stride * drive * (forward ? 1 : 0.45), z: lateral ? -step * stride * 0.72 * lateral * drive : 0 },
-      leftLowerLeg: { x: Math.max(0, -step) * stride * 0.85 * drive + swingLift * stride * 0.12 * drive },
-      rightLowerLeg: { x: Math.max(0, step) * stride * 0.85 * drive + Math.max(0, -Math.cos(phase * Math.PI * 2)) * stride * 0.12 * drive },
-      leftFoot: { x: -Math.max(0, -step) * 4 * drive, z: lateral ? -2 * lateral * Math.max(0, -step) * drive : 0 },
-      rightFoot: { x: -Math.max(0, step) * 4 * drive, z: lateral ? 2 * lateral * Math.max(0, step) * drive : 0 },
-      leftUpperArm: { x: -counter * arm * drive, z: (-5 - lateral * 4) * drive },
-      rightUpperArm: { x: counter * arm * drive, z: (5 - lateral * 4) * drive },
-      leftLowerArm: { x: Math.max(0, counter) * arm * 0.5 * drive },
-      rightLowerArm: { x: Math.max(0, -counter) * arm * 0.5 * drive }
-    }));
+    const gaitFrame = locomotionGaitFrame(transition, actionType, t, forceScale, speedScale);
+    transform.position.y += gaitFrame.rootBob;
+    return finalize(offsetPose(pose, gaitFrame.posePatch));
   }
 
   if (actionType === 'crouch') {
@@ -4243,6 +5642,267 @@ function applySemanticActionStageOverlay(
   }
 
   return pose;
+}
+
+function transitionWithSequenceAction(transition: PoseTransition, step: MotionActionSequenceStep): PoseTransition {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan) return transition;
+  return {
+    ...transition,
+    actionPlan: {
+      ...transition.actionPlan,
+      semanticPlan: {
+        ...semanticPlan,
+        actionFamily: motionSemanticFamilyForAction(step.actionType),
+        actionType: step.actionType,
+        contacts: semanticContactsForAction(step.actionType, transition.actionPrompt),
+        actionSkill: motionActionSkillSummary(step.actionType),
+        actionSequence: undefined
+      }
+    }
+  };
+}
+
+function sequenceStepBlendFade(step: MotionActionSequenceStep) {
+  const duration = Math.max(0.02, step.endRatio - step.startRatio);
+  return clampNumber(duration * 0.28, 0.08, 0.16);
+}
+
+function sequenceStepRawWeight(sequence: MotionActionSequenceStep[], step: MotionActionSequenceStep, index: number, t: number) {
+  const fade = sequenceStepBlendFade(step);
+  const start = index > 0 ? step.startRatio - fade * 0.75 : step.startRatio;
+  const end = index < sequence.length - 1 ? step.endRatio + fade * 0.75 : step.endRatio;
+  return stageWindow(t, Math.max(0, start), Math.min(1, end), fade);
+}
+
+function activeSequenceWeights(sequence: MotionActionSequenceStep[], t: number) {
+  const active = sequence
+    .map((step, index) => ({
+      step,
+      index,
+      weight: step.actionType === 'unknown' || step.actionType === 'idle' ? 0 : sequenceStepRawWeight(sequence, step, index, t)
+    }))
+    .filter((item) => item.weight > 0.001);
+  const total = active.reduce((sum, item) => sum + item.weight, 0);
+  if (total <= 1) return active;
+  return active.map((item) => ({ ...item, weight: item.weight / total }));
+}
+
+function sequenceBoundaryRatios(sequence: MotionActionSequenceStep[]) {
+  const ratios: number[] = [];
+  for (let index = 0; index < sequence.length - 1; index += 1) {
+    const current = sequence[index];
+    const next = sequence[index + 1];
+    const boundary = clamp01((current.endRatio + next.startRatio) / 2);
+    if (boundary > 0.001 && boundary < 0.999) ratios.push(boundary);
+  }
+  return ratios;
+}
+
+function sequenceTransitionPatch(previous: MotionSemanticActionType, next: MotionSemanticActionType, strength: number) {
+  const s = clamp01(strength);
+  const patch: Partial<StandardHumanRigPose> = {};
+
+  if (isLocomotionActionType(previous) && (next === 'push' || next === 'pull' || next === 'reach')) {
+    Object.assign(patch, {
+      pelvis: { x: 4 * s },
+      chest: { x: next === 'pull' ? -6 * s : 8 * s },
+      leftUpperArm: { x: next === 'pull' ? 46 * s : 62 * s, y: -8 * s, z: 14 * s },
+      rightUpperArm: { x: next === 'pull' ? 46 * s : 62 * s, y: 8 * s, z: -14 * s },
+      leftLowerArm: { x: next === 'pull' ? 34 * s : 18 * s },
+      rightLowerArm: { x: next === 'pull' ? 34 * s : 18 * s },
+      leftUpperLeg: { x: -8 * s },
+      rightUpperLeg: { x: 8 * s },
+      leftLowerLeg: { x: -10 * s },
+      rightLowerLeg: { x: -10 * s },
+      leftFoot: { x: -4 * s },
+      rightFoot: { x: -4 * s }
+    });
+  }
+
+  if (isLocomotionActionType(previous) && (next === 'punch' || next === 'kick' || next === 'side_kick' || next === 'throw')) {
+    Object.assign(patch, {
+      pelvis: { x: next === 'throw' ? -2 * s : 4 * s, y: -3 * s },
+      chest: { x: next === 'throw' ? -4 * s : 7 * s, y: next === 'throw' ? -12 * s : -7 * s },
+      leftUpperArm: { x: next === 'throw' ? 18 * s : 30 * s, y: 8 * s, z: 18 * s },
+      rightUpperArm: { x: next === 'throw' ? -26 * s : 38 * s, y: -14 * s, z: -22 * s },
+      leftLowerArm: { x: next === 'throw' ? 32 * s : 46 * s },
+      rightLowerArm: { x: next === 'throw' ? 68 * s : 44 * s },
+      leftUpperLeg: { x: -6 * s },
+      rightUpperLeg: { x: 6 * s },
+      leftLowerLeg: { x: -8 * s },
+      rightLowerLeg: { x: -8 * s },
+      leftFoot: { x: -3 * s },
+      rightFoot: { x: -3 * s }
+    });
+  }
+
+  if (previous === 'turn' && (next === 'push' || next === 'pull' || next === 'reach')) {
+    Object.assign(patch, {
+      pelvis: { y: -6 * s, x: 3 * s },
+      chest: { y: next === 'pull' ? 8 * s : -8 * s, x: next === 'pull' ? -4 * s : 7 * s },
+      leftUpperArm: { x: next === 'pull' ? 44 * s : 58 * s, y: -6 * s, z: 12 * s },
+      rightUpperArm: { x: next === 'pull' ? 44 * s : 58 * s, y: 6 * s, z: -12 * s },
+      leftLowerArm: { x: next === 'pull' ? 36 * s : 20 * s },
+      rightLowerArm: { x: next === 'pull' ? 36 * s : 20 * s },
+      leftLowerLeg: { x: -8 * s },
+      rightLowerLeg: { x: -8 * s }
+    });
+  }
+
+  if (previous === 'turn' && (next === 'throw' || next === 'punch' || next === 'kick' || next === 'side_kick')) {
+    Object.assign(patch, {
+      pelvis: { y: -8 * s },
+      chest: { y: next === 'throw' ? -18 * s : -10 * s, x: 4 * s },
+      rightUpperArm: { x: next === 'throw' ? -34 * s : 28 * s, y: -18 * s, z: -18 * s },
+      rightLowerArm: { x: next === 'throw' ? 74 * s : 44 * s },
+      leftUpperArm: { x: 24 * s, y: 10 * s, z: 18 * s },
+      leftLowerArm: { x: 36 * s },
+      leftUpperLeg: { x: -4 * s },
+      rightUpperLeg: { x: 8 * s },
+      leftLowerLeg: { x: -8 * s },
+      rightLowerLeg: { x: -10 * s }
+    });
+  }
+
+  if ((previous === 'crouch' || previous === 'block') && next === 'get_up') {
+    Object.assign(patch, {
+      pelvis: { x: 12 * (1 - s) },
+      chest: { x: 8 * (1 - s) },
+      leftUpperLeg: { x: -12 * (1 - s) },
+      rightUpperLeg: { x: -12 * (1 - s) },
+      leftLowerLeg: { x: -28 * (1 - s) },
+      rightLowerLeg: { x: -28 * (1 - s) },
+      leftUpperArm: { x: 30 * (1 - s), z: 24 * (1 - s) },
+      rightUpperArm: { x: 30 * (1 - s), z: -24 * (1 - s) },
+      leftLowerArm: { x: 46 * (1 - s) },
+      rightLowerArm: { x: 46 * (1 - s) }
+    });
+  }
+
+  if ((previous === 'crouch' || previous === 'block') && (next === 'punch' || next === 'kick' || next === 'side_kick' || next === 'throw')) {
+    Object.assign(patch, {
+      pelvis: { x: 10 * (1 - s) + 3 * s, y: -4 * s },
+      chest: { x: 8 * (1 - s) + 5 * s, y: next === 'throw' ? -12 * s : -6 * s },
+      leftUpperArm: { x: 28 * (1 - s) + 26 * s, z: 22 * (1 - s) + 16 * s },
+      rightUpperArm: { x: next === 'throw' ? -28 * s : 38 * s, y: -12 * s, z: -22 * s },
+      leftLowerArm: { x: 44 * (1 - s) + 26 * s },
+      rightLowerArm: { x: next === 'throw' ? 70 * s : 42 * s },
+      leftUpperLeg: { x: -10 * (1 - s) },
+      rightUpperLeg: { x: -10 * (1 - s) },
+      leftLowerLeg: { x: -24 * (1 - s) - 6 * s },
+      rightLowerLeg: { x: -24 * (1 - s) - 6 * s }
+    });
+  }
+
+  if (previous === 'get_up' && (next === 'punch' || next === 'kick' || next === 'side_kick' || next === 'throw')) {
+    Object.assign(patch, {
+      pelvis: { x: next === 'throw' ? -2 * s : 3 * s, y: -4 * s },
+      chest: { x: next === 'throw' ? -4 * s : 5 * s, y: next === 'throw' ? -12 * s : -6 * s },
+      leftUpperArm: { x: next === 'throw' ? 22 * s : 34 * s, y: 8 * s, z: 24 * s },
+      rightUpperArm: { x: next === 'throw' ? -30 * s : next === 'punch' ? 42 * s : 28 * s, y: -12 * s, z: -24 * s },
+      leftLowerArm: { x: 58 * s },
+      rightLowerArm: { x: next === 'throw' ? 72 * s : next === 'punch' ? 48 * s : 38 * s },
+      leftLowerLeg: { x: -8 * s },
+      rightLowerLeg: { x: -8 * s }
+    });
+  }
+
+  if (previous === 'fall' && next === 'get_up') {
+    Object.assign(patch, {
+      pelvis: { x: -16 * (1 - s) },
+      chest: { x: 20 * s },
+      leftUpperArm: { x: 46 * s, z: 18 * s },
+      rightUpperArm: { x: 46 * s, z: -18 * s },
+      leftLowerArm: { x: 52 * s },
+      rightLowerArm: { x: 52 * s },
+      leftUpperLeg: { x: -18 * (1 - s) },
+      rightUpperLeg: { x: -18 * (1 - s) },
+      leftLowerLeg: { x: -36 * (1 - s) },
+      rightLowerLeg: { x: -36 * (1 - s) }
+    });
+  }
+
+  return patch;
+}
+
+function applySequenceTransitionContinuity(
+  pose: StandardHumanRigPose,
+  transform: PoseTransform,
+  sequence: MotionActionSequenceStep[],
+  t: number
+) {
+  if (sequence.length <= 1) return pose;
+  let nextPose = pose;
+  sequence.forEach((step, index) => {
+    const following = sequence[index + 1];
+    if (!following) return;
+    const boundary = clamp01((step.endRatio + following.startRatio) / 2);
+    const window = clampNumber((sequenceStepBlendFade(step) + sequenceStepBlendFade(following)) * 0.55, 0.08, 0.18);
+    const distance = Math.abs(t - boundary);
+    if (distance > window) return;
+    const local = clamp01(1 - distance / Math.max(0.0001, window));
+    const smooth = easeCurve('ease_in_out', local);
+    const patch = sequenceTransitionPatch(step.actionType, following.actionType, smooth);
+    if (!Object.keys(patch).length) return;
+    nextPose = blendPose(nextPose, offsetPose(nextPose, patch), 0.42 * smooth);
+
+    if (isLocomotionActionType(step.actionType) && (following.actionType === 'push' || following.actionType === 'pull' || following.actionType === 'reach')) {
+      transform.position.y = Number((transform.position.y - 0.012 * smooth).toFixed(4));
+    }
+    if (isLocomotionActionType(step.actionType) && (following.actionType === 'punch' || following.actionType === 'kick' || following.actionType === 'side_kick' || following.actionType === 'throw')) {
+      transform.position.y = Number((transform.position.y - 0.009 * smooth).toFixed(4));
+      transform.rotation.y = Number((transform.rotation.y + (following.actionType === 'throw' ? 4.5 : 2.5) * smooth).toFixed(3));
+    }
+    if (step.actionType === 'turn' && (following.actionType === 'push' || following.actionType === 'pull' || following.actionType === 'reach' || following.actionType === 'throw' || following.actionType === 'punch' || following.actionType === 'kick' || following.actionType === 'side_kick')) {
+      transform.rotation.y = Number((transform.rotation.y + (following.actionType === 'push' || following.actionType === 'pull' || following.actionType === 'reach' ? 3.5 : 5.5) * smooth).toFixed(3));
+    }
+    if ((step.actionType === 'crouch' || step.actionType === 'block') && (following.actionType === 'punch' || following.actionType === 'kick' || following.actionType === 'side_kick' || following.actionType === 'throw')) {
+      transform.position.y = Number((transform.position.y - 0.008 * (1 - smooth)).toFixed(4));
+    }
+  });
+  return nextPose;
+}
+
+function applySemanticActionSequenceOverlay(
+  pose: StandardHumanRigPose,
+  transform: PoseTransform,
+  transition: PoseTransition,
+  t: number,
+  profile?: Scene3DJointAxisProfile
+) {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  if (!sequence?.length || sequence.length <= 1) {
+    return applySemanticActionStageOverlay(pose, transform, transition, t, profile);
+  }
+  const active = activeSequenceWeights(sequence, t);
+  if (!active.length) return pose;
+
+  const baseTransform = clonePoseTransform(transform);
+  let blendedPose: StandardHumanRigPose | null = null;
+  let blendedTransform: PoseTransform | null = null;
+  let totalWeight = 0;
+
+  active.forEach(({ step, weight }) => {
+    const localT = stageProgress(t, step.startRatio, step.endRatio);
+    const scopedTransition = transitionWithSequenceAction(transition, step);
+    const targetTransform = clonePoseTransform(baseTransform);
+    const targetPose = applySemanticActionStageOverlay(pose, targetTransform, scopedTransition, semanticActionTime(scopedTransition, localT), profile);
+    const mixWeight = totalWeight > 0 ? weight / (totalWeight + weight) : 1;
+    blendedPose = blendedPose ? blendPose(blendedPose, targetPose, mixWeight) : targetPose;
+    blendedTransform = blendedTransform ? blendPoseTransform(blendedTransform, targetTransform, mixWeight) : targetTransform;
+    totalWeight += weight;
+  });
+
+  if (!blendedPose || !blendedTransform) return pose;
+  const finalWeight = clamp01(totalWeight);
+  const finalPose = blendPose(pose, blendedPose, finalWeight);
+  const finalTransform = blendPoseTransform(baseTransform, blendedTransform, Math.min(0.88, finalWeight));
+  transform.position = finalTransform.position;
+  transform.rotation = finalTransform.rotation;
+  transform.scale = finalTransform.scale;
+  const continuityPose = applySequenceTransitionContinuity(finalPose, transform, sequence, t);
+  return profile ? clampPoseWithJointProfile(continuityPose, profile) : continuityPose;
 }
 
 function normalizedDirection(input: Vec3) {
@@ -4352,9 +6012,18 @@ function universalMotionFootLockStrategy(plan: UniversalMotionPlan | undefined, 
 function footLockPhaseActive(transition: PoseTransition, limb: 'left' | 'right', t: number) {
   if (!transition.constraints.footLock.enabled) return false;
   if (!transition.constraints.footLock[limb]) return false;
-  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  const actionType = sequenceLocomotionActionType(transition) || transition.actionPlan.semanticPlan?.actionType;
   if (isLocomotionActionType(actionType)) {
-    return gaitFootPlantStrength(actionType, limb, t, transition.durationSec) > 0.18;
+    if (!ratioInActionWindow(transition, actionType, t, 0.015)) return false;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    return gaitFootPlantStrength(
+      actionType,
+      limb,
+      motionT,
+      locomotionEffectiveDurationSec(transition, actionType),
+      locomotionGaitTempoScale(transition, actionType)
+    ) > 0.18;
   }
   const plan = transition.actionPlan.universal;
   if (universalMotionFootLockStrategy(plan, transition.actionPrompt) !== 'phased') return true;
@@ -4383,6 +6052,8 @@ function deriveUniversalMotionPlan(prompt: string, templates: PoseTransitionTemp
   const action = inferSemanticAction(prompt, templates);
   const speedLabel = promptSpeedLabel(prompt);
   const forceLabel = promptForceLabel(prompt);
+  const control = motionControlFromPrompt(prompt, { speedLabel, forceLabel });
+  const promptControl = motionPromptControlSummary(prompt, undefined, { speedLabel, forceLabel });
   const isDash = action.type === 'dash';
   const isRun = action.type === 'run' || isDash;
   const isWalk = action.type === 'walk';
@@ -4443,21 +6114,43 @@ function deriveUniversalMotionPlan(prompt: string, templates: PoseTransitionTemp
               : hasTurn
                 ? 0.18
                 : 0.08;
-  const plan: Omit<UniversalMotionPlan, 'families'> = {
-    direction: normalizedDirection(direction.x || direction.z ? direction : isRoll ? vec(0, 0, -1) : direction),
-    stride,
-    turn,
-    armSwing: forceLabel === '强' ? Math.min(0.85, armSwing + 0.12) : forceLabel === '轻' ? Math.max(0.08, armSwing - 0.12) : armSwing,
-    bodyLean: forceLabel === '强' ? Math.min(0.75, bodyLean + 0.08) : forceLabel === '轻' ? Math.max(0.04, bodyLean - 0.08) : bodyLean,
-    verticalLift: isJump ? (speedLabel === '快速' ? 0.28 : 0.22) : isKick ? 0.05 : isRoll ? 0.06 : 0,
-    crouch: isRoll || isFall ? 0.9 : isCrouch ? 0.7 : isCombat ? 0.28 : 0,
-    roll: isRoll ? 1 : 0,
-    rhythm: isCombat || isThrow || isFall ? 'impact' : isRoll || isPerform ? 'perform' : isRun ? 'run' : hasStep ? 'walk' : 'subtle',
-    contacts: action.type === 'push' || action.type === 'pull'
+  const controlledCrouch = promptControl.bodyTags.includes('低重心')
+    ? Math.max(isRoll || isFall ? 0.9 : isCrouch ? 0.7 : isCombat ? 0.28 : 0, 0.42)
+    : isRoll || isFall ? 0.9 : isCrouch ? 0.7 : isCombat ? 0.28 : 0;
+  const controlledBodyLean = clampNumber(
+    (promptControl.bodyTags.includes('身体前压') ? Math.max(bodyLean, 0.52) : promptControl.bodyTags.includes('身体后仰') ? Math.max(bodyLean, 0.34) : bodyLean)
+      * (0.8 + control.forceScale * 0.22),
+    0.04,
+    0.8
+  );
+  const controlledContacts = new Set<MotionContactHint>(
+    action.type === 'push' || action.type === 'pull'
       ? ['hands', 'feet']
       : isCombat || isThrow || isWalk || isRun || isCrouch
         ? ['feet']
-        : undefined
+        : []
+  );
+  if (promptControl.bodyTags.includes('双脚贴地')) controlledContacts.add('feet');
+  if (promptControl.bodyTags.includes('双手主导')) {
+    controlledContacts.add('hands');
+    controlledContacts.add('leftHand');
+    controlledContacts.add('rightHand');
+  }
+  if (promptControl.bodyTags.includes('左手主导')) controlledContacts.add('leftHand');
+  if (promptControl.bodyTags.includes('右手主导')) controlledContacts.add('rightHand');
+  if (promptControl.bodyTags.includes('看向目标')) controlledContacts.add('head');
+
+  const plan: Omit<UniversalMotionPlan, 'families'> = {
+    direction: normalizedDirection(direction.x || direction.z ? direction : isRoll ? vec(0, 0, -1) : direction),
+    stride: Number((stride * (isPushPull || isThrow || isCombat ? control.travelScale : 1)).toFixed(4)),
+    turn,
+    armSwing: clampNumber(armSwing * control.forceScale, 0.08, 0.92),
+    bodyLean: controlledBodyLean,
+    verticalLift: isJump ? (speedLabel === '快速' ? 0.28 : 0.22) : isKick ? 0.05 : isRoll ? 0.06 : 0,
+    crouch: controlledCrouch,
+    roll: isRoll ? 1 : 0,
+    rhythm: isCombat || isThrow || isFall ? 'impact' : isRoll || isPerform ? 'perform' : isRun ? 'run' : hasStep ? 'walk' : 'subtle',
+    contacts: controlledContacts.size ? Array.from(controlledContacts) : undefined
   };
   return {
     ...plan,
@@ -4495,6 +6188,326 @@ function motionIntentToUniversalPlan(intent: MotionIntent): UniversalMotionPlan 
     families: deriveMotionFamiliesFromText(`${intent.intent} ${intent.generatedMotionPrompt}`, plan)
   };
 }
+
+function universalFamiliesForSemanticAction(actionType?: MotionSemanticActionType): UniversalMotionFamily[] {
+  if (!actionType || actionType === 'unknown') return [];
+  if (isLocomotionActionType(actionType)) return ['locomotion'];
+  if (actionType === 'turn') return ['turn'];
+  if (actionType === 'fall') return ['fall'];
+  if (actionType === 'get_up') return ['get_up'];
+  if (actionType === 'crawl') return ['crawl'];
+  if (actionType === 'punch' || actionType === 'block' || actionType === 'kick' || actionType === 'side_kick') return ['combat'];
+  if (actionType === 'push' || actionType === 'pull' || actionType === 'throw' || actionType === 'reach') return ['reach'];
+  if (actionType === 'crouch') return ['locomotion'];
+  if (actionType === 'jump') return ['locomotion'];
+  return [];
+}
+
+function uniqueMotionContacts(contacts: MotionContactHint[]) {
+  return Array.from(new Set(contacts.filter(Boolean))).slice(0, 12);
+}
+
+function semanticContactsAsMotionContacts(plan: MotionSemanticPlan | undefined) {
+  return uniqueMotionContacts((plan?.contacts || []).map((item) => item.contact));
+}
+
+function actionTypesCompatibleForLocalCompiler(localAction?: MotionSemanticActionType, aiAction?: MotionSemanticActionType) {
+  if (!localAction || !aiAction || aiAction === 'unknown' || aiAction === 'idle') return true;
+  if (localAction === aiAction) return true;
+  if (isLocomotionActionType(localAction) && isLocomotionActionType(aiAction)) return true;
+  if ((localAction === 'push' || localAction === 'pull') && (aiAction === 'push' || aiAction === 'pull' || aiAction === 'reach')) return true;
+  if ((localAction === 'punch' || localAction === 'block') && (aiAction === 'punch' || aiAction === 'block' || aiAction === 'reach')) return true;
+  return false;
+}
+
+function promptLocksActionType(prompt: string, actionType?: MotionSemanticActionType) {
+  if (!actionType || actionType === 'unknown' || actionType === 'idle') return false;
+  const matches = promptActionMatches(prompt);
+  return matches.some((match) => match.type === actionType);
+}
+
+function motionIntentLocalCompilerContract(transition: PoseTransition, localPlan: PoseTransitionActionPlan) {
+  const semanticPlan = localPlan.semanticPlan;
+  const actionType = semanticPlan?.actionType;
+  const skill = motionActionSkill(actionType);
+  const promptLocked = promptLocksActionType(transition.actionPrompt, actionType);
+  const fixedPoseConstraints = motionFixedPoseConstraints(transition);
+  const middlePoseConstraintCount = fixedPoseConstraints.filter((frame) => frame.role === 'middle').length;
+  return {
+    actionFamily: semanticPlan?.actionFamily,
+    actionType,
+    actionLockedByPrompt: promptLocked,
+    actionLockReason: promptLocked && actionType
+      ? `用户提示词明确匹配“${MOTION_SEMANTIC_TYPE_LABELS[actionType] || actionType}”，AI 只能补充语义细节。`
+      : undefined,
+    actionSequence: semanticPlan?.actionSequence?.map((step) => ({
+      actionType: step.actionType,
+      label: step.label,
+      startRatio: step.startRatio,
+      endRatio: step.endRatio,
+      sourceText: step.sourceText
+    })) || [],
+    actionChains: semanticPlan?.actionChains?.map((chain) => ({
+      id: chain.id,
+      label: chain.label,
+      steps: chain.steps,
+      description: chain.description,
+      qualityExpectationIds: chain.qualityExpectationIds
+    })) || [],
+    poseStages: semanticPlan?.poseStages?.map((stage) => ({
+      id: stage.id,
+      label: stage.label,
+      timeRatio: stage.timeRatio,
+      poseHint: stage.poseHint,
+      rootMotionHint: stage.rootMotionHint,
+      contactHint: stage.contactHint
+    })) || [],
+    contacts: semanticContactsAsMotionContacts(semanticPlan),
+    targetObjectId: semanticPlan?.targetObjectId,
+    targetObjectName: semanticPlan?.targetObjectName,
+    fixedPoseConstraints,
+    middlePoseConstraintCount,
+    fixedPoseConstraintRule: middlePoseConstraintCount > 0
+      ? '起点、终点和所有中间帧都是硬关键姿势约束。AI 必须把动作理解为按时间经过这些姿势，只能解释和补全相邻关键姿势之间的动作阶段。'
+      : '起点和终点是硬关键姿势约束。AI 只能解释和补全两者之间的动作阶段。',
+    grounded: skill?.grounded,
+    allowAirborne: skill?.allowAirborne,
+    rootLimits: skill?.rootLimits,
+    maxHorizontalOverlay: skill?.maxHorizontalOverlay,
+    maxYawOverlay: skill?.maxYawOverlay,
+    maxTravel: skill?.maxTravel,
+    promptControl: motionPromptControlSummary(transition.actionPrompt, localPlan.universal, semanticPlan),
+    qualityExpectations: semanticPlan?.qualityExpectations?.map((item) => ({
+      id: item.id,
+      label: item.label,
+      metric: item.metric,
+      minValue: item.minValue,
+      maxValue: item.maxValue
+    })) || [],
+    forbiddenOutputFields: [
+      'samples',
+      'animationClip',
+      'transforms',
+      'keyframes',
+      'bonePose',
+      'boneRotations',
+      'jointRotations',
+      'rawFrames',
+      'constraints'
+    ]
+  };
+}
+
+function rhythmFromPromptControl(summary: ReturnType<typeof motionPromptControlSummary>): MotionIntent['rhythm'] | undefined {
+  if (summary.speedLabel === '缓慢') return 'slow';
+  if (summary.speedLabel === '快速') return 'fast';
+  if (summary.timingTags.includes('突然爆发')) return 'impact';
+  if (summary.timingTags.includes('持续保持')) return 'normal';
+  return undefined;
+}
+
+function intentDirectionConflictsPromptControl(intentDirection: Vec3, promptDirection: Vec3) {
+  const normalizedIntent = normalizedDirection(intentDirection);
+  const normalizedPrompt = normalizedDirection(promptDirection);
+  if (!normalizedPrompt.x && !normalizedPrompt.z) return false;
+  if (!normalizedIntent.x && !normalizedIntent.z) return true;
+  return normalizedIntent.x * normalizedPrompt.x + normalizedIntent.z * normalizedPrompt.z < 0.35;
+}
+
+function constrainMotionIntentForLocalCompiler(
+  transition: PoseTransition,
+  localPlan: PoseTransitionActionPlan,
+  intent: MotionIntent
+) {
+  const semanticPlan = localPlan.semanticPlan;
+  const actionType = semanticPlan?.actionType;
+  const skill = motionActionSkill(actionType);
+  const constrained: MotionIntent = {
+    ...intent,
+    direction: normalizedDirection(intent.direction),
+    bodyLean: { ...intent.bodyLean },
+    contacts: uniqueMotionContacts([...semanticContactsAsMotionContacts(semanticPlan), ...intent.contacts]),
+    warnings: [...intent.warnings]
+  };
+  const notes: string[] = [];
+  const tempTransition: PoseTransition = { ...transition, actionPlan: localPlan };
+  const allowsAirborne = transitionAllowsAirborneMotion(tempTransition);
+  const explicitActionLock = promptLocksActionType(transition.actionPrompt, actionType);
+  const promptControl = motionPromptControlSummary(transition.actionPrompt, localPlan.universal, semanticPlan);
+  const promptDirection = semanticDirectionFromPrompt(transition.actionPrompt, localPlan.universal).direction;
+  const promptRhythm = rhythmFromPromptControl(promptControl);
+
+  if (promptRhythm && constrained.rhythm !== promptRhythm) {
+    notes.push(`AI 节奏为“${constrained.rhythm}”，但提示词控制层要求“${promptControl.speedLabel}${promptControl.timingTags.length ? ' / ' + promptControl.timingTags.join('、') : ''}”，已按提示词节奏执行。`);
+    constrained.rhythm = promptRhythm;
+  }
+
+  if (intentDirectionConflictsPromptControl(constrained.direction, promptDirection)) {
+    notes.push(`AI 方向与提示词控制层“${promptControl.directionLabel}”不一致，已按提示词方向执行。`);
+    constrained.direction = normalizedDirection(promptDirection);
+  }
+
+  if (promptControl.bodyTags.includes('低重心') && constrained.crouch < 0.22) {
+    notes.push('提示词要求低重心，已提高本地动作意图的下沉控制。');
+    constrained.crouch = Math.max(constrained.crouch, 0.34);
+  }
+  if (promptControl.bodyTags.includes('身体前压')) {
+    constrained.bodyLean = {
+      ...constrained.bodyLean,
+      x: Math.min(constrained.bodyLean.x || 0, -0.24)
+    };
+  }
+  if (promptControl.bodyTags.includes('身体后仰')) {
+    constrained.bodyLean = {
+      ...constrained.bodyLean,
+      x: Math.max(constrained.bodyLean.x || 0, 0.22)
+    };
+  }
+
+  if (semanticPlan) {
+    const aiChangedLockedAction = explicitActionLock && intent.actionType && intent.actionType !== actionType;
+    if (intent.actionType && (aiChangedLockedAction || !actionTypesCompatibleForLocalCompiler(actionType, intent.actionType))) {
+      notes.push(`AI 识别为“${MOTION_SEMANTIC_TYPE_LABELS[intent.actionType] || intent.actionType}”，但本地解析为“${MOTION_SEMANTIC_TYPE_LABELS[actionType || 'unknown'] || actionType}”，已按本地动作技能执行。`);
+    }
+    constrained.actionType = actionType;
+    constrained.actionFamily = semanticPlan.actionFamily;
+    constrained.targetObjectId = semanticPlan.targetObjectId || constrained.targetObjectId;
+    if (semanticPlan.targetObjectId && intent.targetObjectId && intent.targetObjectId !== semanticPlan.targetObjectId) {
+      notes.push(`AI 选择的目标对象与本地解析目标不一致，已保留“${semanticPlan.targetObjectName || semanticPlan.targetObjectId}”。`);
+    }
+  }
+
+  if (skill) {
+    if (promptControl.bodyTags.includes('双脚贴地')) {
+      constrained.contacts = uniqueMotionContacts([...constrained.contacts, 'feet', 'leftFoot', 'rightFoot']);
+    }
+    if (promptControl.bodyTags.includes('双手主导')) {
+      constrained.contacts = uniqueMotionContacts([...constrained.contacts, 'hands', 'leftHand', 'rightHand']);
+    } else if (promptControl.bodyTags.includes('左手主导')) {
+      constrained.contacts = uniqueMotionContacts([...constrained.contacts, 'leftHand']);
+    } else if (promptControl.bodyTags.includes('右手主导')) {
+      constrained.contacts = uniqueMotionContacts([...constrained.contacts, 'rightHand']);
+    }
+
+    if (actionType === 'walk' || actionType === 'run' || actionType === 'dash') {
+      constrained.contacts = uniqueMotionContacts([...constrained.contacts, 'leftFoot', 'rightFoot', 'feet']);
+    }
+    if (actionType === 'push' || actionType === 'pull') {
+      constrained.contacts = inferPromptHand(transition.actionPrompt) === 'left'
+        ? uniqueMotionContacts([...constrained.contacts, 'leftHand', 'feet'])
+        : inferPromptHand(transition.actionPrompt) === 'right'
+          ? uniqueMotionContacts([...constrained.contacts, 'rightHand', 'feet'])
+          : uniqueMotionContacts([...constrained.contacts, 'hands', 'leftHand', 'rightHand', 'feet']);
+    }
+    if (actionType === 'throw') {
+      constrained.contacts = inferPromptHand(transition.actionPrompt) === 'left'
+        ? uniqueMotionContacts([...constrained.contacts, 'leftHand', 'feet'])
+        : uniqueMotionContacts([...constrained.contacts, 'rightHand', 'feet']);
+    }
+    if (actionType === 'punch' || actionType === 'block' || actionType === 'kick' || actionType === 'side_kick' || actionType === 'crouch' || actionType === 'turn') {
+      constrained.contacts = uniqueMotionContacts([...constrained.contacts, 'feet']);
+    }
+
+    if (!allowsAirborne || promptControl.bodyTags.includes('双脚贴地')) {
+      if (constrained.verticalLift > skill.rootLimits.maxLift || constrained.roll > 0.12) {
+        notes.push('AI 意图包含明显离地或翻滚，但当前本地动作技能不允许离地，已降级为贴地动作。');
+      }
+      constrained.verticalLift = Math.min(constrained.verticalLift, Math.max(0.02, skill.rootLimits.maxLift));
+      constrained.roll = Math.min(constrained.roll, 0.12);
+    }
+
+    const maxDistance = isLocomotionActionType(actionType)
+      ? Math.min(1.5, skill.maxTravel || 1.5)
+      : actionType === 'jump'
+        ? Math.min(1.2, skill.maxTravel || 1.2)
+        : Math.max(0.04, skill.maxHorizontalOverlay);
+    if (constrained.distance > maxDistance) {
+      notes.push(`AI 位移幅度超过“${MOTION_SEMANTIC_TYPE_LABELS[actionType || 'unknown'] || actionType}”动作技能范围，已按本地技能降幅。`);
+      constrained.distance = maxDistance;
+    }
+
+    const maxTurn = actionType === 'turn' ? Math.max(skill.maxYawOverlay, 55) : skill.maxYawOverlay;
+    if (Math.abs(constrained.turnDeg) > maxTurn && !promptAllowsExaggeratedMotion(transition.actionPrompt)) {
+      notes.push('AI 旋转幅度超过本地动作技能范围，已降低为可控旋转。');
+      constrained.turnDeg = clampMotionNumber(constrained.turnDeg, -maxTurn, maxTurn);
+    }
+  }
+
+  const localFamilies = universalFamiliesForSemanticAction(actionType);
+  const aiPlan = motionIntentToUniversalPlan(constrained);
+  const aiFamilies = intent.motionFamilies?.length ? intent.motionFamilies : aiPlan.families || [];
+  const allowedFamilies = new Set<UniversalMotionFamily>([
+    ...localFamilies,
+    ...deriveMotionFamiliesFromText(transition.actionPrompt, aiPlan)
+  ]);
+  if (allowsAirborne) {
+    aiFamilies.forEach((family) => allowedFamilies.add(family));
+  } else {
+    aiFamilies
+      .filter((family) => family !== 'roll')
+      .forEach((family) => allowedFamilies.add(family));
+  }
+  const families = Array.from(allowedFamilies);
+  if (localFamilies.length && !localFamilies.every((family) => aiFamilies.includes(family))) {
+    notes.push('AI 动作族与本地解析不完全一致，已保留用户提示词对应的本地动作族。');
+  }
+  const blockedFamilies = aiFamilies.filter((family) => !families.includes(family));
+  if (blockedFamilies.length) {
+    notes.push(`AI 返回了不属于本地动作技能的动作族（${blockedFamilies.join('、')}），已从落地编译中移除。`);
+  }
+
+  const universal: UniversalMotionPlan = {
+    ...aiPlan,
+    direction: promptDirection.x || promptDirection.z ? normalizedDirection(promptDirection) : aiPlan.direction,
+    rhythm: promptRhythm === 'slow'
+      ? 'subtle'
+      : promptRhythm === 'fast'
+        ? 'run'
+        : promptRhythm === 'impact'
+          ? 'impact'
+          : aiPlan.rhythm,
+    crouch: promptControl.bodyTags.includes('低重心') ? Math.max(aiPlan.crouch, 0.34) : aiPlan.crouch,
+    verticalLift: (!allowsAirborne || promptControl.bodyTags.includes('双脚贴地')) && skill
+      ? Math.min(aiPlan.verticalLift, skill.rootLimits.maxLift)
+      : aiPlan.verticalLift,
+    contacts: constrained.contacts,
+    targetObjectId: semanticPlan?.targetObjectId || constrained.targetObjectId,
+    families
+  };
+
+  return {
+    intent: { ...constrained, warnings: [...constrained.warnings, ...notes] },
+    universal,
+    notes
+  };
+}
+
+function aiSemanticStagesForLocalCompiler(
+  transition: PoseTransition,
+  localPlan: PoseTransitionActionPlan,
+  intent: MotionIntent
+) {
+  const semanticPlan = localPlan.semanticPlan;
+  const localStages = semanticPlan?.poseStages || [];
+  const hints = intent.keyframeHints || [];
+  if (!hints.length) return [];
+  const locked = promptLocksActionType(transition.actionPrompt, semanticPlan?.actionType);
+  return hints
+    .filter((hint) => {
+      if (!locked || !localStages.length) return true;
+      return localStages.some((stage) => Math.abs(stage.timeRatio - hint.timeRatio) <= 0.22);
+    })
+    .slice(0, 6)
+    .map((hint, index) => semanticStage(
+      `ai_${index}`,
+      hint.label,
+      hint.timeRatio,
+      hint.note || hint.label,
+      '由 AI 建议作为语义关键阶段，本地编译器只读取语义，不读取骨骼帧。',
+      hint.note || 'AI 关键姿势建议。'
+    ));
+}
+
 function applyUniversalMotionOverlay(
   pose: StandardHumanRigPose,
   transform: PoseTransform,
@@ -4712,9 +6725,277 @@ function promptAllowsExaggeratedMotion(prompt: string) {
   return promptAllowsLargePerformance(prompt);
 }
 
+const MOTION_ACTION_SKILLS: Partial<Record<MotionSemanticActionType, MotionActionSkill>> = {
+  walk: {
+    actionType: 'walk',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    gait: { cadenceHz: 0.92, rootBob: 0.01, weightShift: 2.1, footPlant: 0.82, strideDeg: 18, armDeg: 9, leanDeg: 2.5, stanceRatio: 0.64, swingLiftDeg: 9, lateralSway: 0.012 },
+    rootLimits: { minDrop: -0.08, maxLift: 0.035 },
+    smoothing: { root: 0.18, rotation: 0.22, pose: 0.08 },
+    maxHorizontalOverlay: 0.16,
+    maxYawOverlay: 18,
+    defaultTravelPerSec: 0.3,
+    maxTravel: 2.4,
+    quality: { maxRootStepDistance: 0.14, maxRootRotationDelta: 26, maxPoseStepDelta: 38, maxRootLift: 0.045, minLegSeparation: 10, minArmSwingSeparation: 10, minSupportSwitchesPerSec: 0.45, minFootContactsPerSec: 1.2, maxFootPlantDrift: 9, maxRootStepJitter: 0.62 }
+  },
+  run: {
+    actionType: 'run',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    gait: { cadenceHz: 1.55, rootBob: 0.018, weightShift: 3.1, footPlant: 0.72, strideDeg: 26, armDeg: 16, leanDeg: 5.5, stanceRatio: 0.48, swingLiftDeg: 17, lateralSway: 0.016 },
+    rootLimits: { minDrop: -0.08, maxLift: 0.035 },
+    smoothing: { root: 0.18, rotation: 0.22, pose: 0.08 },
+    maxHorizontalOverlay: 0.24,
+    maxYawOverlay: 18,
+    defaultTravelPerSec: 0.5,
+    maxTravel: 4.2,
+    quality: { maxRootStepDistance: 0.17, maxRootRotationDelta: 28, maxPoseStepDelta: 44, maxRootLift: 0.055, minLegSeparation: 16, minArmSwingSeparation: 19, minSupportSwitchesPerSec: 0.85, minFootContactsPerSec: 1.9, maxFootPlantDrift: 9, maxRootStepJitter: 0.58 }
+  },
+  dash: {
+    actionType: 'dash',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    gait: { cadenceHz: 1.9, rootBob: 0.021, weightShift: 3.6, footPlant: 0.66, strideDeg: 31, armDeg: 20, leanDeg: 8.5, stanceRatio: 0.42, swingLiftDeg: 22, lateralSway: 0.018 },
+    rootLimits: { minDrop: -0.08, maxLift: 0.035 },
+    smoothing: { root: 0.18, rotation: 0.22, pose: 0.08 },
+    maxHorizontalOverlay: 0.24,
+    maxYawOverlay: 18,
+    defaultTravelPerSec: 0.68,
+    maxTravel: 5.2,
+    quality: { maxRootStepDistance: 0.19, maxRootRotationDelta: 30, maxPoseStepDelta: 48, maxRootLift: 0.06, minLegSeparation: 19, minArmSwingSeparation: 22, minSupportSwitchesPerSec: 1.05, minFootContactsPerSec: 2.2, maxFootPlantDrift: 10, maxRootStepJitter: 0.56 }
+  },
+  turn: {
+    actionType: 'turn',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.14, maxLift: 0.04 },
+    smoothing: { root: 0.26, rotation: 0.24, pose: 0.12 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 55,
+    quality: { maxRootStepDistance: 0.12, maxRootRotationDelta: 34, maxPoseStepDelta: 36, maxRootLift: 0.04 }
+  },
+  crouch: {
+    actionType: 'crouch',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.24, maxLift: 0.025 },
+    smoothing: { root: 0.16, rotation: 0.16, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.1, maxRootRotationDelta: 20, maxPoseStepDelta: 36, maxRootLift: 0.025 }
+  },
+  jump: {
+    actionType: 'jump',
+    compileMode: 'semantic_only',
+    grounded: false,
+    allowAirborne: true,
+    rootLimits: { minDrop: -0.14, maxLift: 0.32 },
+    smoothing: { root: 0.16, rotation: 0.16, pose: 0.06 },
+    maxHorizontalOverlay: 0.18,
+    maxYawOverlay: 18,
+    defaultTravelPerSec: 0.22,
+    maxTravel: 1.4,
+    quality: { maxRootStepDistance: 0.2, maxRootRotationDelta: 28, maxPoseStepDelta: 46, maxRootLift: 0.36 }
+  },
+  push: {
+    actionType: 'push',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.09, maxLift: 0.02 },
+    smoothing: { root: 0.24, rotation: 0.24, pose: 0.1 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.11, maxRootRotationDelta: 24, maxPoseStepDelta: 38, maxRootLift: 0.03, minPrimaryJointDelta: 14 }
+  },
+  pull: {
+    actionType: 'pull',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.09, maxLift: 0.02 },
+    smoothing: { root: 0.24, rotation: 0.24, pose: 0.1 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.11, maxRootRotationDelta: 24, maxPoseStepDelta: 38, maxRootLift: 0.03, minPrimaryJointDelta: 14 }
+  },
+  throw: {
+    actionType: 'throw',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.14, maxLift: 0.04 },
+    smoothing: { root: 0.18, rotation: 0.18, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 26,
+    quality: { maxRootStepDistance: 0.13, maxRootRotationDelta: 28, maxPoseStepDelta: 48, maxRootLift: 0.045, minPrimaryJointDelta: 20 }
+  },
+  punch: {
+    actionType: 'punch',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.14, maxLift: 0.04 },
+    smoothing: { root: 0.18, rotation: 0.18, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 26,
+    quality: { maxRootStepDistance: 0.12, maxRootRotationDelta: 28, maxPoseStepDelta: 44, maxRootLift: 0.04, minPrimaryJointDelta: 18 }
+  },
+  block: {
+    actionType: 'block',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.14, maxLift: 0.04 },
+    smoothing: { root: 0.18, rotation: 0.18, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.1, maxRootRotationDelta: 22, maxPoseStepDelta: 38, maxRootLift: 0.04, minPrimaryJointDelta: 12 }
+  },
+  kick: {
+    actionType: 'kick',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.1, maxLift: 0.05 },
+    smoothing: { root: 0.18, rotation: 0.18, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.12, maxRootRotationDelta: 24, maxPoseStepDelta: 48, maxRootLift: 0.05, minPrimaryJointDelta: 16 }
+  },
+  side_kick: {
+    actionType: 'side_kick',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.1, maxLift: 0.05 },
+    smoothing: { root: 0.18, rotation: 0.18, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.12, maxRootRotationDelta: 24, maxPoseStepDelta: 48, maxRootLift: 0.05, minPrimaryJointDelta: 16 }
+  },
+  crawl: {
+    actionType: 'crawl',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.24, maxLift: 0.025 },
+    smoothing: { root: 0.16, rotation: 0.16, pose: 0.06 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.1, maxRootRotationDelta: 18, maxPoseStepDelta: 34, maxRootLift: 0.025 }
+  },
+  reach: {
+    actionType: 'reach',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.14, maxLift: 0.04 },
+    smoothing: { root: 0.26, rotation: 0.24, pose: 0.12 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.1, maxRootRotationDelta: 20, maxPoseStepDelta: 34, maxRootLift: 0.04, minPrimaryJointDelta: 12 }
+  },
+  idle: {
+    actionType: 'idle',
+    compileMode: 'semantic_only',
+    grounded: true,
+    allowAirborne: false,
+    rootLimits: { minDrop: -0.14, maxLift: 0.04 },
+    smoothing: { root: 0.26, rotation: 0.24, pose: 0.12 },
+    maxHorizontalOverlay: 0.12,
+    maxYawOverlay: 18,
+    quality: { maxRootStepDistance: 0.1, maxRootRotationDelta: 20, maxPoseStepDelta: 30, maxRootLift: 0.04 }
+  }
+};
+
+function motionActionSkill(actionType?: MotionSemanticActionType) {
+  return actionType ? MOTION_ACTION_SKILLS[actionType] : undefined;
+}
+
+function mergeMotionQualityTargets(targets: MotionSkillQualityTarget[]) {
+  const fallback: MotionSkillQualityTarget = {
+    maxRootStepDistance: 0.18,
+    maxRootRotationDelta: 32,
+    maxPoseStepDelta: 52,
+    maxRootLift: 0.08
+  };
+  return targets.reduce((merged, target) => ({
+    maxRootStepDistance: Math.min(merged.maxRootStepDistance, target.maxRootStepDistance),
+    maxRootRotationDelta: Math.min(merged.maxRootRotationDelta, target.maxRootRotationDelta),
+    maxPoseStepDelta: Math.min(merged.maxPoseStepDelta, target.maxPoseStepDelta),
+    maxRootLift: Math.min(merged.maxRootLift, target.maxRootLift),
+    minLegSeparation: Math.max(merged.minLegSeparation || 0, target.minLegSeparation || 0) || undefined,
+    minArmSwingSeparation: Math.max(merged.minArmSwingSeparation || 0, target.minArmSwingSeparation || 0) || undefined,
+    minSupportSwitchesPerSec: Math.max(merged.minSupportSwitchesPerSec || 0, target.minSupportSwitchesPerSec || 0) || undefined,
+    minFootContactsPerSec: Math.max(merged.minFootContactsPerSec || 0, target.minFootContactsPerSec || 0) || undefined,
+    maxFootPlantDrift: target.maxFootPlantDrift !== undefined
+      ? Math.min(merged.maxFootPlantDrift ?? target.maxFootPlantDrift, target.maxFootPlantDrift)
+      : merged.maxFootPlantDrift,
+    maxRootStepJitter: target.maxRootStepJitter !== undefined
+      ? Math.min(merged.maxRootStepJitter ?? target.maxRootStepJitter, target.maxRootStepJitter)
+      : merged.maxRootStepJitter,
+    minPrimaryJointDelta: Math.max(merged.minPrimaryJointDelta || 0, target.minPrimaryJointDelta || 0) || undefined
+  }), fallback);
+}
+
+function motionQualityTargetForTransition(transition: PoseTransition) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const actionTypes = Array.from(new Set<MotionSemanticActionType>([
+    semanticPlan?.actionType,
+    ...(semanticPlan?.actionSequence || []).map((step) => step.actionType)
+  ].filter((item): item is MotionSemanticActionType => Boolean(item && item !== 'unknown'))));
+  const targets = actionTypes
+    .map((actionType) => motionActionSkill(actionType)?.quality)
+    .filter((target): target is MotionSkillQualityTarget => Boolean(target));
+  return mergeMotionQualityTargets(targets);
+}
+
+function motionActionSkillSummary(actionType: MotionSemanticActionType): MotionSemanticPlan['actionSkill'] | undefined {
+  const skill = motionActionSkill(actionType);
+  if (!skill) return undefined;
+  const constraints = [
+    skill.grounded ? '默认贴地执行' : '',
+    skill.allowAirborne ? '允许离地' : '非跳跃不离地',
+    skill.gait ? `步态频率 ${skill.gait.cadenceHz.toFixed(2)}Hz` : '',
+    `根节点Y范围 ${skill.rootLimits.minDrop.toFixed(2)}~${skill.rootLimits.maxLift.toFixed(2)}`,
+    `平滑强度 ${skill.smoothing.root.toFixed(2)}/${skill.smoothing.pose.toFixed(2)}`,
+    skill.quality.minLegSeparation ? `腿部交替≥${skill.quality.minLegSeparation}°` : '',
+    skill.quality.minPrimaryJointDelta ? `主导肢体≥${skill.quality.minPrimaryJointDelta}°` : ''
+  ].filter(Boolean);
+  return {
+    label: MOTION_SEMANTIC_TYPE_LABELS[actionType] || actionType,
+    compileMode: skill.compileMode,
+    grounded: skill.grounded,
+    allowAirborne: skill.allowAirborne,
+    constraints
+  };
+}
+
+function serializableMotionActionSkills() {
+  return Object.values(MOTION_ACTION_SKILLS)
+    .filter((skill): skill is MotionActionSkill => Boolean(skill))
+    .map((skill) => ({
+      actionType: skill.actionType,
+      label: MOTION_SEMANTIC_TYPE_LABELS[skill.actionType] || skill.actionType,
+      grounded: skill.grounded,
+      allowAirborne: skill.allowAirborne,
+      rootLimits: skill.rootLimits,
+      gait: skill.gait,
+      quality: skill.quality
+    }));
+}
+
 function transitionAllowsAirborneMotion(transition: PoseTransition) {
   const actionType = transition.actionPlan.semanticPlan?.actionType;
-  return actionType === 'jump' || /跳|跃|飞|浮空|离地|jump|leap|airborne|fly/.test(transition.actionPrompt.toLowerCase());
+  const skill = motionActionSkill(actionType);
+  return Boolean(skill?.allowAirborne) || /跳|跃|飞|浮空|离地|jump|leap|airborne|fly/.test(transition.actionPrompt.toLowerCase());
 }
 
 function realismJointLimit(key: PoseJointKey, transition: PoseTransition, exaggerated: boolean) {
@@ -4758,7 +7039,8 @@ function applyRealisticMotionGuard(
   const actionType = transition.actionPlan.semanticPlan?.actionType;
   const airborneAllowed = transitionAllowsAirborneMotion(transition);
   const groundAction = !airborneAllowed && actionType !== 'fall' && actionType !== 'get_up';
-  const maxHorizontalOverlay = exaggerated ? 1.2 : actionType === 'run' || actionType === 'dash' ? 0.24 : actionType === 'walk' ? 0.16 : 0.12;
+  const skill = motionActionSkill(actionType);
+  const maxHorizontalOverlay = exaggerated ? 1.2 : skill?.maxHorizontalOverlay ?? 0.12;
   transform.position.x = baseTransform.position.x + clampMotionNumber(transform.position.x - baseTransform.position.x, -maxHorizontalOverlay, maxHorizontalOverlay);
   transform.position.z = baseTransform.position.z + clampMotionNumber(transform.position.z - baseTransform.position.z, -maxHorizontalOverlay, maxHorizontalOverlay);
   if (groundAction) {
@@ -4766,7 +7048,7 @@ function applyRealisticMotionGuard(
   } else if (!airborneAllowed) {
     transform.position.y = baseTransform.position.y + clampMotionNumber(transform.position.y - baseTransform.position.y, -0.35, 0.08);
   }
-  const maxYaw = exaggerated ? 180 : actionType === 'turn' ? 55 : actionType === 'throw' || actionType === 'punch' ? 26 : 18;
+  const maxYaw = exaggerated ? 180 : skill?.maxYawOverlay ?? 18;
   transform.rotation.x = baseTransform.rotation.x + clampMotionNumber(transform.rotation.x - baseTransform.rotation.x, -18, 18);
   transform.rotation.y = baseTransform.rotation.y + clampMotionNumber(transform.rotation.y - baseTransform.rotation.y, -maxYaw, maxYaw);
   transform.rotation.z = baseTransform.rotation.z + clampMotionNumber(transform.rotation.z - baseTransform.rotation.z, -18, 18);
@@ -4785,44 +7067,288 @@ function isLocomotionActionType(actionType?: MotionSemanticActionType) {
 }
 
 function isBasicMotionActionType(actionType?: MotionSemanticActionType) {
-  return actionType === 'walk'
-    || actionType === 'run'
-    || actionType === 'dash'
-    || actionType === 'turn'
-    || actionType === 'crouch'
-    || actionType === 'jump'
-    || actionType === 'idle';
+  return motionActionSkill(actionType)?.compileMode === 'semantic_only';
 }
 
 function locomotionGaitConfig(actionType?: MotionSemanticActionType) {
-  if (actionType === 'walk') return { cadenceHz: 0.92, rootBob: 0.012, weightShift: 2.2, footPlant: 0.78, strideDeg: 17, armDeg: 9, leanDeg: 2.5 };
-  if (actionType === 'dash') return { cadenceHz: 1.9, rootBob: 0.024, weightShift: 4.2, footPlant: 0.62, strideDeg: 31, armDeg: 20, leanDeg: 8.5 };
-  if (actionType === 'run') return { cadenceHz: 1.55, rootBob: 0.02, weightShift: 3.5, footPlant: 0.68, strideDeg: 25, armDeg: 16, leanDeg: 5.5 };
-  return null;
+  return motionActionSkill(actionType)?.gait || null;
 }
 
-function gaitPhase(actionType: MotionSemanticActionType | undefined, t: number, durationSec: number, limb?: 'left' | 'right') {
-  const config = locomotionGaitConfig(actionType);
-  if (!config) return 0;
-  return (t * Math.max(0.1, durationSec) * config.cadenceHz + (limb === 'right' ? 0.5 : 0)) % 1;
+function locomotionGaitTempoScale(transition: PoseTransition, actionType?: MotionSemanticActionType) {
+  if (!isLocomotionActionType(actionType)) return 1;
+  const control = motionControlFromPrompt(transition.actionPrompt, transition.actionPlan.semanticPlan);
+  const actionBias = actionType === 'walk'
+    ? 0.9
+    : actionType === 'dash'
+      ? 1.06
+      : 1;
+  return clampNumber(control.speedScale * actionBias, 0.74, 1.32);
 }
 
-function gaitFootPlantStrength(actionType: MotionSemanticActionType | undefined, limb: 'left' | 'right', t: number, durationSec = 1) {
+function locomotionGaitCycleCount(actionType: MotionSemanticActionType | undefined, durationSec: number, tempoScale = 1) {
   const config = locomotionGaitConfig(actionType);
   if (!config) return 0;
-  const phase = gaitPhase(actionType, t, durationSec, limb);
-  if (phase < 0.08) return ramp(phase, 0, 0.08) * config.footPlant;
-  if (phase < 0.55) return config.footPlant;
-  if (phase < 0.76) return (1 - ramp(phase, 0.55, 0.76)) * config.footPlant;
+  const naturalCycles = Math.max(0, durationSec) * config.cadenceHz * clampNumber(tempoScale, 0.5, 1.6);
+  const minimumCycles = actionType === 'walk' ? 0.78 : actionType === 'run' ? 1.08 : actionType === 'dash' ? 1.22 : 0;
+  return Math.max(naturalCycles, minimumCycles);
+}
+
+function gaitPhase(actionType: MotionSemanticActionType | undefined, t: number, durationSec: number, limb?: 'left' | 'right', tempoScale = 1) {
+  const config = locomotionGaitConfig(actionType);
+  if (!config) return 0;
+  return (t * locomotionGaitCycleCount(actionType, durationSec, tempoScale) + (limb === 'right' ? 0.5 : 0)) % 1;
+}
+
+function gaitFootPlantStrength(actionType: MotionSemanticActionType | undefined, limb: 'left' | 'right', t: number, durationSec = 1, tempoScale = 1) {
+  const config = locomotionGaitConfig(actionType);
+  if (!config) return 0;
+  const phase = gaitPhase(actionType, t, durationSec, limb, tempoScale);
+  const stanceRatio = clampNumber(config.stanceRatio, 0.32, 0.72);
+  const fadeIn = clampNumber(stanceRatio * 0.16, 0.045, 0.095);
+  const fadeOut = clampNumber(stanceRatio * 0.28, 0.09, 0.18);
+  if (phase < fadeIn) return ramp(phase, 0, fadeIn) * config.footPlant;
+  if (phase < stanceRatio - fadeOut) return config.footPlant;
+  if (phase < stanceRatio) return (1 - ramp(phase, stanceRatio - fadeOut, stanceRatio)) * config.footPlant;
   return 0;
 }
 
+function locomotionFootPlantEvents(actionType: MotionSemanticActionType | undefined, durationSec: number, tempoScale = 1) {
+  const gait = locomotionGaitConfig(actionType);
+  if (!gait) return [];
+  const events: Array<{ ratio: number; limb: 'leftFoot' | 'rightFoot'; strength: number }> = [];
+  const pushEvent = (ratio: number, limb: 'leftFoot' | 'rightFoot', strength: number) => {
+    const clampedRatio = clamp01(ratio);
+    if (events.some((event) => event.limb === limb && Math.abs(event.ratio - clampedRatio) < 0.035)) return;
+    events.push({ ratio: Number(clampedRatio.toFixed(3)), limb, strength: Number(strength.toFixed(3)) });
+  };
+  const maybePushEvent = (ratio: number, limb: 'leftFoot' | 'rightFoot', strength: number) => {
+    if (strength > gait.footPlant * 0.4) pushEvent(ratio, limb, strength);
+  };
+  const gaitCycles = locomotionGaitCycleCount(actionType, durationSec, tempoScale);
+  const steps = Math.max(24, Math.round(gaitCycles * 36));
+  (['left', 'right'] as const).forEach((side) => {
+    let wasPlanted = false;
+    for (let index = 0; index <= steps; index += 1) {
+      const ratio = index / steps;
+      const strength = gaitFootPlantStrength(actionType, side, ratio, durationSec, tempoScale);
+      const planted = strength > gait.footPlant * 0.52;
+      if (planted && !wasPlanted) pushEvent(ratio, side === 'left' ? 'leftFoot' : 'rightFoot', strength);
+      wasPlanted = planted;
+    }
+  });
+  maybePushEvent(0, 'leftFoot', gaitFootPlantStrength(actionType, 'left', 0, durationSec, tempoScale));
+  maybePushEvent(0, 'rightFoot', gaitFootPlantStrength(actionType, 'right', 0, durationSec, tempoScale));
+  maybePushEvent(1, 'leftFoot', gaitFootPlantStrength(actionType, 'left', 1, durationSec, tempoScale));
+  maybePushEvent(1, 'rightFoot', gaitFootPlantStrength(actionType, 'right', 1, durationSec, tempoScale));
+  return events.sort((a, b) => a.ratio === b.ratio ? a.limb.localeCompare(b.limb) : a.ratio - b.ratio);
+}
+
+function locomotionFootPlantEventsForWindow(
+  actionType: MotionSemanticActionType | undefined,
+  durationSec: number,
+  startRatio = 0,
+  endRatio = 1,
+  tempoScale = 1
+) {
+  const start = clamp01(startRatio);
+  const end = clamp01(Math.max(start, endRatio));
+  const windowRatio = Math.max(0.001, end - start);
+  const windowDuration = Math.max(0.1, durationSec * windowRatio);
+  return locomotionFootPlantEvents(actionType, windowDuration, tempoScale).map((event) => ({
+    ...event,
+    ratio: Number((start + windowRatio * event.ratio).toFixed(3))
+  })).filter((event) => event.ratio >= start && event.ratio <= end);
+}
+
 function locomotionEnvelope(t: number) {
-  return Math.min(ramp(t, 0, 0.08), 1 - ramp(t, 0.94, 1));
+  return Math.min(ramp(t, 0, 0.16), 1 - ramp(t, 0.86, 1));
+}
+
+function locomotionRootProgress(actionType: MotionSemanticActionType | undefined, t: number, motionT: number) {
+  const timed = clamp01(motionT);
+  const smooth = easeCurve('ease_in_out', t);
+  const settleIn = ramp(t, 0, actionType === 'dash' ? 0.1 : 0.14);
+  const settleOut = 1 - ramp(t, actionType === 'dash' ? 0.9 : 0.86, 1);
+  const natural = actionType === 'walk'
+    ? lerp(t, smooth, 0.34)
+    : actionType === 'dash'
+      ? lerp(t, smooth, 0.2)
+      : lerp(t, smooth, 0.28);
+  const paced = actionType === 'walk'
+    ? lerp(natural, timed, 0.52)
+    : actionType === 'dash'
+      ? lerp(natural, timed, 0.68)
+      : lerp(natural, timed, 0.6);
+  const easedPaced = lerp(smooth, paced, settleIn * settleOut + 0.18);
+  return clamp01(easedPaced);
+}
+
+function planarTravelDirection(transition: PoseTransition, first: AnimationClipSample, last: AnimationClipSample) {
+  const travelX = last.transform.position.x - first.transform.position.x;
+  const travelZ = last.transform.position.z - first.transform.position.z;
+  const travelDistance = Math.hypot(travelX, travelZ);
+  if (travelDistance > 0.0001) return vec(travelX / travelDistance, 0, travelZ / travelDistance);
+  return normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
+}
+
+function locomotionPlanarTargetPosition(
+  transition: PoseTransition,
+  first: AnimationClipSample,
+  last: AnimationClipSample,
+  actionType: MotionSemanticActionType | undefined,
+  ratio: number,
+  motionT: number,
+  lateralOffset = 0
+) {
+  const hasSequenceWindow = Boolean(
+    actionType
+    && isLocomotionActionType(actionType)
+    && transition.actionPlan.semanticPlan?.actionSequence?.some((step) => step.actionType === actionType)
+  );
+  const localRatio = hasSequenceWindow ? sequenceActionLocalRatio(transition, actionType, ratio) : ratio;
+  const progress = locomotionRootProgress(actionType, localRatio, motionT);
+  const direction = planarTravelDirection(transition, first, last);
+  const perpendicular = vec(-direction.z, 0, direction.x);
+  return {
+    x: lerp(first.transform.position.x, last.transform.position.x, progress) + perpendicular.x * lateralOffset,
+    y: lerp(first.transform.position.y, last.transform.position.y, ratio),
+    z: lerp(first.transform.position.z, last.transform.position.z, progress) + perpendicular.z * lateralOffset
+  };
+}
+
+function gaitLimbSample(actionType: MotionSemanticActionType | undefined, limb: 'left' | 'right', t: number, durationSec: number, tempoScale = 1) {
+  const gait = locomotionGaitConfig(actionType);
+  if (!gait) return { upperLegX: 0, lowerLegX: 0, footX: 0, swing: 0, plant: 0 };
+  const phase = gaitPhase(actionType, t, durationSec, limb, tempoScale);
+  const plant = gaitFootPlantStrength(actionType, limb, t, durationSec, tempoScale);
+  const stanceRatio = clampNumber(gait.stanceRatio, 0.32, 0.72);
+  const stanceT = clamp01(phase / stanceRatio);
+  const swingT = clamp01((phase - stanceRatio) / Math.max(0.001, 1 - stanceRatio));
+  const swing = phase > stanceRatio ? Math.sin(swingT * Math.PI) : 0;
+  const toeOff = stageWindow(phase, Math.max(0, stanceRatio - 0.16), Math.min(1, stanceRatio + 0.05), 0.045);
+  const heelStrike = phase < stanceRatio ? Math.max(0, 1 - stanceT) : 0;
+  const stanceUpper = lerp(gait.strideDeg * 0.46, -gait.strideDeg * 0.42, easeCurve('ease_in_out', stanceT));
+  const swingUpper = lerp(-gait.strideDeg * 0.46, gait.strideDeg * 0.62, easeCurve('ease_in_out', swingT));
+  const upperLegX = phase <= stanceRatio ? stanceUpper : swingUpper;
+  const lowerLegX = phase <= stanceRatio
+    ? Math.max(0, -stanceUpper) * 0.22 + toeOff * gait.swingLiftDeg * 0.18
+    : swing * (gait.swingLiftDeg + gait.strideDeg * 0.28);
+  const footX = phase <= stanceRatio
+    ? -Math.max(0, -stanceUpper) * 0.12 + heelStrike * 2.4 - toeOff * 3.2
+    : -swing * clampNumber(gait.swingLiftDeg * 0.22, 3.5, 7.5);
+  return { upperLegX, lowerLegX, footX, swing, plant };
+}
+
+function locomotionGaitFrame(
+  transition: PoseTransition,
+  actionType: MotionSemanticActionType,
+  t: number,
+  forceScale = 1,
+  speedScale = 1
+) {
+  const gait = locomotionGaitConfig(actionType);
+  const drive = locomotionEnvelope(t) * forceScale * speedScale;
+  const gaitDurationSec = locomotionEffectiveDurationSec(transition, actionType);
+  const tempoScale = locomotionGaitTempoScale(transition, actionType);
+  const leftStep = gaitLimbSample(actionType, 'left', t, gaitDurationSec, tempoScale);
+  const rightStep = gaitLimbSample(actionType, 'right', t, gaitDurationSec, tempoScale);
+  const phase = gaitPhase(actionType, t, gaitDurationSec, undefined, tempoScale);
+  const counter = Math.sin(phase * Math.PI * 2 + Math.PI);
+  const strideBasis = Math.max(8, (gait?.strideDeg || 18) * 1.05);
+  const legCounter = clampNumber((rightStep.upperLegX - leftStep.upperLegX) / strideBasis, -1, 1);
+  const armCounter = lerp(counter, legCounter, 0.72);
+  const arm = gait?.armDeg || 10;
+  const lean = gait?.leanDeg || 3;
+  const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
+  const lateral = Math.abs(direction.x) > Math.abs(direction.z) ? direction.x : 0;
+  const forward = Math.abs(direction.z) >= Math.abs(direction.x) ? (direction.z || -1) : 0;
+  const weightShift = clampMotionNumber((rightStep.plant - leftStep.plant) * (gait?.weightShift || 2.2), -(gait?.weightShift || 2.2), gait?.weightShift || 2.2);
+  const swingLift = (leftStep.swing + rightStep.swing) * 0.5;
+  const supportBias = gait ? clampNumber((rightStep.plant - leftStep.plant) / Math.max(0.001, gait.footPlant), -1, 1) : 0;
+  const leftPlant = clamp01(leftStep.plant / Math.max(0.001, gait?.footPlant || 1));
+  const rightPlant = clamp01(rightStep.plant / Math.max(0.001, gait?.footPlant || 1));
+  const groundedWeight = Math.max(leftPlant, rightPlant);
+  const shoulderCounter = armCounter * (actionType === 'walk' ? 0.82 : actionType === 'run' ? 1 : 1.08);
+  const gaitPosePatch = {
+    pelvis: { x: -lean * drive, y: supportBias * 0.7 * drive, z: weightShift * drive },
+    chest: { x: -lean * 0.65 * drive, y: -supportBias * 0.45 * drive, z: -weightShift * 0.45 * drive },
+    head: { x: -lean * 0.18 * drive },
+    leftUpperLeg: { x: leftStep.upperLegX * drive * (forward ? 1 : 0.45), z: lateral ? leftStep.upperLegX * 0.72 * lateral * drive : 0 },
+    rightUpperLeg: { x: rightStep.upperLegX * drive * (forward ? 1 : 0.45), z: lateral ? rightStep.upperLegX * 0.72 * lateral * drive : 0 },
+    leftLowerLeg: { x: leftStep.lowerLegX * drive },
+    rightLowerLeg: { x: rightStep.lowerLegX * drive },
+    leftFoot: { x: leftStep.footX * drive * (1 - leftPlant * 0.38), z: lateral ? -2 * lateral * leftStep.swing * drive : 0 },
+    rightFoot: { x: rightStep.footX * drive * (1 - rightPlant * 0.38), z: lateral ? 2 * lateral * rightStep.swing * drive : 0 },
+    leftUpperArm: { x: -shoulderCounter * arm * drive, y: -2.5 * supportBias * drive, z: (-5 - lateral * 4) * drive },
+    rightUpperArm: { x: shoulderCounter * arm * drive, y: -2.5 * supportBias * drive, z: (5 - lateral * 4) * drive },
+    leftLowerArm: { x: Math.max(0, shoulderCounter) * arm * 0.54 * drive + arm * 0.16 * drive },
+    rightLowerArm: { x: Math.max(0, -shoulderCounter) * arm * 0.54 * drive + arm * 0.16 * drive }
+  } satisfies Partial<Record<PoseJointKey, Partial<RigRotation>>>;
+  return {
+    drive,
+    rootBob: swingLift * (gait?.rootBob || 0.012) * drive * (1 - groundedWeight * 0.28),
+    rootLateral: supportBias * (gait?.lateralSway || 0) * drive,
+    leftStep,
+    rightStep,
+    posePatch: composePoseOffsets(gaitPosePatch, locomotionStagePatch(actionType, t, forceScale))
+  };
+}
+
+function locomotionStagePatch(actionType: MotionSemanticActionType, t: number, forceScale = 1) {
+  if (!isLocomotionActionType(actionType)) return {};
+  const runLike = actionType === 'run' || actionType === 'dash';
+  const dashBoost = actionType === 'dash' ? 1.18 : 1;
+  const prep = runLike ? stageWindow(t, 0.02, 0.2, 0.08) : 0;
+  const launch = runLike ? stageWindow(t, 0.16, 0.34, 0.08) : stageWindow(t, 0.08, 0.28, 0.1);
+  const settle = stageWindow(t, runLike ? 0.76 : 0.82, 0.98, 0.1);
+  const prepStrength = prep * forceScale * dashBoost;
+  const launchStrength = launch * forceScale * dashBoost;
+  const settleStrength = settle * (runLike ? 0.72 : 0.42);
+  if (!runLike) {
+    return {
+      pelvis: { x: -2 * launchStrength + 1.5 * settleStrength },
+      chest: { x: -2.5 * launchStrength + 1.2 * settleStrength },
+      head: { x: -0.8 * launchStrength }
+    } satisfies Partial<Record<PoseJointKey, Partial<RigRotation>>>;
+  }
+  return {
+    pelvis: { x: -8 * prepStrength - 5 * launchStrength + 3 * settleStrength },
+    chest: { x: -10 * prepStrength - 6 * launchStrength + 4 * settleStrength },
+    head: { x: -3 * prepStrength - 2 * launchStrength + 1.5 * settleStrength },
+    leftUpperArm: { x: 18 * prepStrength - 12 * launchStrength + 8 * settleStrength, z: -14 * prepStrength },
+    rightUpperArm: { x: -12 * prepStrength + 14 * launchStrength - 8 * settleStrength, z: 14 * prepStrength },
+    leftLowerArm: { x: 42 * prepStrength + 18 * launchStrength },
+    rightLowerArm: { x: 46 * prepStrength + 18 * launchStrength },
+    leftUpperLeg: { x: -18 * prepStrength - 8 * launchStrength + 4 * settleStrength },
+    rightUpperLeg: { x: 12 * prepStrength + 10 * launchStrength - 4 * settleStrength },
+    leftLowerLeg: { x: 28 * prepStrength + 12 * launchStrength },
+    rightLowerLeg: { x: 18 * prepStrength + 10 * launchStrength },
+    leftFoot: { x: -5 * prepStrength },
+    rightFoot: { x: -3 * prepStrength }
+  } satisfies Partial<Record<PoseJointKey, Partial<RigRotation>>>;
+}
+
+function locomotionStableBasePose(baselinePose: StandardHumanRigPose, actionType: MotionSemanticActionType | undefined) {
+  const standPose = posePresetForId('stand')?.pose;
+  if (!standPose || !isLocomotionActionType(actionType)) return clonePose(baselinePose);
+  const neutralPull = actionType === 'walk' ? 0.26 : actionType === 'run' ? 0.32 : 0.36;
+  return blendPose(baselinePose, standPose, neutralPull);
+}
+
+function locomotionBaselineStrength(actionType: MotionSemanticActionType | undefined, correction = false) {
+  const base = actionType === 'walk' ? 0.58 : actionType === 'run' ? 0.66 : actionType === 'dash' ? 0.72 : 0.54;
+  return correction ? Math.min(0.84, base + 0.12) : base;
 }
 
 function shouldCompileBasicMotionWithSemanticLayer(transition: PoseTransition) {
   return isBasicMotionActionType(transition.actionPlan.semanticPlan?.actionType);
+}
+
+function semanticMotionUsesRigPose(transition: PoseTransition) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan) return false;
+  if (semanticPlan.actionType && semanticPlan.actionType !== 'idle' && semanticPlan.actionType !== 'unknown') return true;
+  return Boolean(semanticPlan.actionSequence?.some((step) => step.actionType !== 'idle' && step.actionType !== 'unknown'));
 }
 
 function templateAppliesToBasicMotion(template: PoseTransitionTemplate, transition: PoseTransition) {
@@ -4830,6 +7356,7 @@ function templateAppliesToBasicMotion(template: PoseTransitionTemplate, transiti
   if (!isBasicMotionActionType(actionType)) return true;
   if (isLocomotionActionType(actionType) && (template.id === 'step_forward' || template.id === 'step_back')) return false;
   if (actionType === 'turn' && template.id === 'turn_to') return false;
+  if (['push', 'pull', 'throw', 'punch', 'block', 'kick', 'side_kick', 'reach', 'crawl'].includes(actionType || '')) return false;
   return true;
 }
 
@@ -4837,25 +7364,258 @@ function promptRequestsInPlaceMotion(prompt: string) {
   return /原地|不移动|站在原地|in place|stationary|without moving/.test(prompt.trim().toLowerCase());
 }
 
-function promptLocomotionTravelDistance(transition: PoseTransition) {
+function sequenceLocomotionActionType(transition: PoseTransition) {
   const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (isLocomotionActionType(actionType)) return actionType;
+  return transition.actionPlan.semanticPlan?.actionSequence?.find((step) => isLocomotionActionType(step.actionType))?.actionType;
+}
+
+function sequenceActionWindow(transition: PoseTransition, actionType?: MotionSemanticActionType) {
+  if (!actionType) return { startRatio: 0, endRatio: 1 };
+  const step = transition.actionPlan.semanticPlan?.actionSequence?.find((item) => item.actionType === actionType);
+  if (!step) return { startRatio: 0, endRatio: 1 };
+  return {
+    startRatio: clamp01(step.startRatio),
+    endRatio: clamp01(Math.max(step.startRatio, step.endRatio))
+  };
+}
+
+function sequenceActionLocalRatio(transition: PoseTransition, actionType: MotionSemanticActionType | undefined, ratio: number) {
+  const window = sequenceActionWindow(transition, actionType);
+  return clamp01((ratio - window.startRatio) / Math.max(0.001, window.endRatio - window.startRatio));
+}
+
+function ratioInActionWindow(transition: PoseTransition, actionType: MotionSemanticActionType | undefined, ratio: number, padding = 0) {
+  const window = sequenceActionWindow(transition, actionType);
+  return ratio >= window.startRatio - padding && ratio <= window.endRatio + padding;
+}
+
+function sequenceActionDurationRatio(transition: PoseTransition, actionType?: MotionSemanticActionType) {
+  if (!actionType) return 1;
+  const window = sequenceActionWindow(transition, actionType);
+  return clampNumber(window.endRatio - window.startRatio, 0.12, 1);
+}
+
+function locomotionEffectiveDurationSec(transition: PoseTransition, actionType?: MotionSemanticActionType) {
+  return Math.max(0.1, transition.durationSec * sequenceActionDurationRatio(transition, actionType));
+}
+
+function motionClipSampleRateForTransition(transition: PoseTransition) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const actionType = semanticPlan?.actionType;
+  const hasLocomotion = isLocomotionActionType(actionType)
+    || Boolean(semanticPlan?.actionSequence?.some((step) => isLocomotionActionType(step.actionType)));
+  const hasContact = Boolean(semanticPlan?.contacts.some((item) => (
+    item.contact === 'hands'
+    || item.contact === 'leftHand'
+    || item.contact === 'rightHand'
+  ))) || Boolean(semanticPlan?.targetObjectId);
+  const hasSequence = Boolean(semanticPlan?.actionSequence && semanticPlan.actionSequence.length > 1);
+  const hasCameraMotion = transition.cameraMotion.enabled && transition.cameraMotion.type !== 'none';
+  let sampleRate = hasLocomotion ? 36 : hasContact || hasSequence || hasCameraMotion ? 32 : 30;
+  if (transition.durationSec > 20) sampleRate = Math.min(sampleRate, 24);
+  if (transition.durationSec > 40) sampleRate = Math.min(sampleRate, 20);
+  return sampleRate;
+}
+
+function motionClipSampleCountForTransition(transition: PoseTransition, durationSec: number) {
+  const sampleRate = motionClipSampleRateForTransition(transition);
+  let sampleCount = Math.max(3, Math.round(durationSec * sampleRate));
+  const locomotionAction = sequenceLocomotionActionType(transition);
+  const gait = locomotionGaitConfig(locomotionAction);
+  if (gait && isLocomotionActionType(locomotionAction)) {
+    const gaitDurationSec = locomotionEffectiveDurationSec(transition, locomotionAction);
+    const supportSamples = Math.ceil(locomotionGaitCycleCount(locomotionAction, gaitDurationSec, locomotionGaitTempoScale(transition, locomotionAction)) * 24);
+    sampleCount = Math.max(sampleCount, supportSamples);
+  }
+  return Math.min(sampleCount, 1800);
+}
+
+function promptLocomotionTravelDistance(transition: PoseTransition) {
+  const actionType = sequenceLocomotionActionType(transition);
   if (!isLocomotionActionType(actionType) || promptRequestsInPlaceMotion(transition.actionPrompt)) return 0;
-  const duration = Math.max(0.1, transition.durationSec);
-  if (actionType === 'walk') return Math.min(2.4, duration * 0.3);
-  if (actionType === 'dash') return Math.min(5.2, duration * 0.68);
-  return Math.min(4.2, duration * 0.5);
+  const skill = motionActionSkill(actionType);
+  if (!skill?.defaultTravelPerSec || !skill.maxTravel) return 0;
+  const duration = locomotionEffectiveDurationSec(transition, actionType);
+  const control = motionControlFromPrompt(transition.actionPrompt, transition.actionPlan.semanticPlan);
+  const travelScale = clampNumber(control.travelScale, 0.68, 1.28);
+  return Math.min(skill.maxTravel * travelScale, duration * skill.defaultTravelPerSec * travelScale);
+}
+
+function sequenceContactActionType(transition: PoseTransition) {
+  const contactActions: MotionSemanticActionType[] = ['push', 'pull', 'throw', 'reach'];
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (contactActions.includes(actionType || 'unknown')) return actionType;
+  return transition.actionPlan.semanticPlan?.actionSequence?.find((step) => contactActions.includes(step.actionType))?.actionType;
+}
+
+function targetApproachStandDistance(actionType?: MotionSemanticActionType) {
+  if (actionType === 'throw') return 0.92;
+  if (actionType === 'pull') return 0.58;
+  if (actionType === 'reach') return 0.52;
+  return 0.64;
+}
+
+function targetApproachPositionForTransition(transition: PoseTransition, target: { position: Vec3; scale?: Vec3 } | null | undefined) {
+  if (!target || !transition.startTransform) return null;
+  const start = transition.startTransform.position;
+  const contactPoint = contactPositionForObject(target, start);
+  const targetVector = vec(contactPoint.x - start.x, 0, contactPoint.z - start.z);
+  const targetDirection = normalizedDirection(targetVector);
+  const promptDirection = normalizedDirection(transition.actionPlan.universal?.direction || vec());
+  const approachDirection = targetDirection.x || targetDirection.z ? targetDirection : promptDirection;
+  if (!approachDirection.x && !approachDirection.z) return null;
+  const actionType = sequenceContactActionType(transition);
+  const standDistance = targetApproachStandDistance(actionType);
+  return vec(
+    Number((contactPoint.x - approachDirection.x * standDistance).toFixed(4)),
+    Number(start.y.toFixed(4)),
+    Number((contactPoint.z - approachDirection.z * standDistance).toFixed(4))
+  );
+}
+
+function transitionWithPromptTargetApproachRootMotion(scene: Scene3DState, transition: PoseTransition) {
+  const locomotionAction = sequenceLocomotionActionType(transition);
+  const contactAction = sequenceContactActionType(transition);
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (
+    !isLocomotionActionType(locomotionAction)
+    || !contactAction
+    || !semanticPlan?.targetObjectId
+    || promptRequestsInPlaceMotion(transition.actionPrompt)
+    || transition.keyframes.length
+    || !transition.startTransform
+    || !transition.endTransform
+  ) {
+    return transition;
+  }
+  const existingDistance = Math.hypot(
+    transition.endTransform.position.x - transition.startTransform.position.x,
+    transition.endTransform.position.z - transition.startTransform.position.z
+  );
+  if (existingDistance > 0.12) return transition;
+  const target = findSceneObject(scene, semanticPlan.targetObjectId);
+  const approachPosition = targetApproachPositionForTransition(transition, target);
+  if (!approachPosition) return transition;
+  const approachDistance = Math.hypot(
+    approachPosition.x - transition.startTransform.position.x,
+    approachPosition.z - transition.startTransform.position.z
+  );
+  if (approachDistance < 0.08) return transition;
+  const approachDirection = normalizedDirection(vec(
+    approachPosition.x - transition.startTransform.position.x,
+    0,
+    approachPosition.z - transition.startTransform.position.z
+  ));
+  return {
+    ...transition,
+    endTransform: {
+      ...transition.endTransform,
+      position: {
+        ...transition.endTransform.position,
+        x: approachPosition.x,
+        y: transition.endTransform.position.y,
+        z: approachPosition.z
+      }
+    },
+    actionPlan: {
+      ...transition.actionPlan,
+      universal: transition.actionPlan.universal
+        ? {
+            ...transition.actionPlan.universal,
+            direction: approachDirection.x || approachDirection.z ? approachDirection : transition.actionPlan.universal.direction
+          }
+        : transition.actionPlan.universal,
+      notes: [
+        ...transition.actionPlan.notes,
+        `已根据目标对象为组合动作自动计算接触前站位，距离目标约 ${targetApproachStandDistance(contactAction).toFixed(2)}m。`
+      ]
+    }
+  };
+}
+
+function stabilizeTargetApproachSequenceSamples(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[]) {
+  const locomotionAction = sequenceLocomotionActionType(transition);
+  const contactAction = sequenceContactActionType(transition);
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (
+    !isLocomotionActionType(locomotionAction)
+    || !contactAction
+    || !semanticPlan?.targetObjectId
+    || transition.keyframes.length
+    || samples.length <= 3
+  ) {
+    return samples;
+  }
+  const target = findSceneObject(scene, semanticPlan.targetObjectId);
+  const approachPosition = targetApproachPositionForTransition(transition, target);
+  if (!approachPosition) return samples;
+
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const locomotionWindow = sequenceActionWindow(transition, locomotionAction);
+  const contactWindow = sequenceActionWindow(transition, contactAction);
+  const first = samples[0];
+  const next = samples.map(cloneAnimationSample);
+  const startPosition = first.transform.position;
+  const travel = vec(approachPosition.x - startPosition.x, 0, approachPosition.z - startPosition.z);
+  const travelDistance = Math.hypot(travel.x, travel.z);
+  if (travelDistance < 0.04) return samples;
+  const direction = vec(travel.x / travelDistance, 0, travel.z / travelDistance);
+  const perpendicular = vec(-direction.z, 0, direction.x);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < locomotionWindow.startRatio) continue;
+
+    if (t <= locomotionWindow.endRatio + 0.001) {
+      const localT = sequenceActionLocalRatio(transition, locomotionAction, t);
+      const motionT = semanticActionTime(transition, localT);
+      const progress = locomotionRootProgress(locomotionAction, localT, motionT);
+      const gaitFrame = locomotionGaitFrame(transition, locomotionAction, motionT);
+      const targetPosition = vec(
+        startPosition.x + direction.x * travelDistance * progress + perpendicular.x * gaitFrame.rootLateral,
+        sample.transform.position.y,
+        startPosition.z + direction.z * travelDistance * progress + perpendicular.z * gaitFrame.rootLateral
+      );
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, targetPosition.x, 0.78).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, targetPosition.z, 0.78).toFixed(4));
+      continue;
+    }
+
+    if (t >= contactWindow.startRatio - 0.04) {
+      const holdStrength = t <= contactWindow.endRatio + 0.08 ? 0.72 : 0.52;
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, approachPosition.x, holdStrength).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, approachPosition.z, holdStrength).toFixed(4));
+    }
+  }
+
+  return alignSampleEndpoints(next, transition);
+}
+
+function locomotionTravelVector(transition: PoseTransition, samples?: AnimationClipSample[]) {
+  const first = samples?.[0]?.transform.position || transition.startTransform?.position || vec();
+  const last = samples?.[samples.length - 1]?.transform.position || transition.endTransform?.position || first;
+  const delta = vec(last.x - first.x, 0, last.z - first.z);
+  const distance = Math.hypot(delta.x, delta.z);
+  const semanticDirection = normalizedDirection(transition.actionPlan.universal?.direction || vec());
+  const direction = distance > 0.0001
+    ? vec(delta.x / distance, 0, delta.z / distance)
+    : semanticDirection;
+  return { first, last, delta, distance, direction };
 }
 
 function promptJumpTravelDistance(transition: PoseTransition) {
   if (transition.actionPlan.semanticPlan?.actionType !== 'jump' || promptRequestsInPlaceMotion(transition.actionPrompt)) return 0;
+  const skill = motionActionSkill('jump');
   const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec());
   if (!direction.x && !direction.z) return 0;
   const duration = Math.max(0.1, transition.durationSec);
-  return Math.min(1.4, duration * 0.22);
+  return Math.min(skill?.maxTravel || 1.4, duration * (skill?.defaultTravelPerSec || 0.22));
 }
 
 function transitionWithPromptLocomotionRootMotion(transition: PoseTransition) {
-  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  const actionType = sequenceLocomotionActionType(transition);
   if (!isLocomotionActionType(actionType) || transition.keyframes.length || !transition.startTransform || !transition.endTransform) return transition;
   const direction = normalizedDirection(transition.actionPlan.universal?.direction || vec());
   if (!direction.x && !direction.z) return transition;
@@ -4971,11 +7731,7 @@ function transitionWithPromptBasicMotionEndpoints(transition: PoseTransition) {
 }
 
 function groundedRootLimitsForAction(actionType?: MotionSemanticActionType) {
-  if (actionType === 'crouch' || actionType === 'crawl') return { minDrop: -0.24, maxLift: 0.025 };
-  if (actionType === 'kick' || actionType === 'side_kick') return { minDrop: -0.1, maxLift: 0.05 };
-  if (actionType === 'run' || actionType === 'dash' || actionType === 'walk') return { minDrop: -0.08, maxLift: 0.035 };
-  if (actionType === 'push' || actionType === 'pull') return { minDrop: -0.09, maxLift: 0.02 };
-  return { minDrop: -0.14, maxLift: 0.04 };
+  return motionActionSkill(actionType)?.rootLimits || { minDrop: -0.14, maxLift: 0.04 };
 }
 
 function applyGroundedBalanceAndFooting(
@@ -4994,7 +7750,9 @@ function applyGroundedBalanceAndFooting(
   let nextPose = clonePose(pose);
   let rootDeltaY = transform.position.y - baseTransform.position.y;
   if (gait) {
-    const wave = Math.sin(gaitPhase(actionType, t, transition.durationSec) * Math.PI * 2);
+    const gaitDurationSec = locomotionEffectiveDurationSec(transition, actionType);
+    const tempoScale = locomotionGaitTempoScale(transition, actionType);
+    const wave = Math.sin(gaitPhase(actionType, t, gaitDurationSec, undefined, tempoScale) * Math.PI * 2);
     const footPulse = Math.abs(wave);
     const rootBob = -footPulse * gait.rootBob;
     rootDeltaY = clampMotionNumber(rootDeltaY + rootBob, limits.minDrop, limits.maxLift);
@@ -5004,8 +7762,8 @@ function applyGroundedBalanceAndFooting(
       chest: { z: -shift * 0.5 },
       head: { z: -shift * 0.18 }
     });
-    const leftPlant = gaitFootPlantStrength(actionType, 'left', t, transition.durationSec);
-    const rightPlant = gaitFootPlantStrength(actionType, 'right', t, transition.durationSec);
+    const leftPlant = gaitFootPlantStrength(actionType, 'left', t, gaitDurationSec, tempoScale);
+    const rightPlant = gaitFootPlantStrength(actionType, 'right', t, gaitDurationSec, tempoScale);
     nextPose.leftFoot = slerpRotation(nextPose.leftFoot, basePose.leftFoot, leftPlant);
     nextPose.rightFoot = slerpRotation(nextPose.rightFoot, basePose.rightFoot, rightPlant);
   } else {
@@ -5036,6 +7794,11 @@ function inferSemanticAction(prompt: string, templates: PoseTransitionTemplate[]
   const matches = promptActionMatches(normalized);
   const explicitJumpAttack = matches.some((item) => item.type === 'jump') && matches.some((item) => item.type === 'punch');
   if (explicitJumpAttack) return { family: 'jump', type: 'jump' };
+  if (promptNeedsImplicitGetUpBeforeAttack(normalized)) {
+    const powerAction = promptActionMatchesByPosition(normalized)
+      .find((item) => item.type === 'punch' || item.type === 'kick' || item.type === 'side_kick' || item.type === 'throw');
+    if (powerAction) return { family: powerAction.family, type: powerAction.type };
+  }
   const explicitCrouchDodge = matches.some((item) => item.type === 'crouch') && /躲避|闪避|下潜|duck|evade/.test(normalized);
   if (explicitCrouchDodge) return { family: 'posture', type: 'crouch' };
   const primary = matches[0];
@@ -5053,13 +7816,14 @@ function semanticContactsForAction(actionType: MotionSemanticActionType, prompt:
   const normalized = prompt.trim().toLowerCase();
   const contacts: MotionSemanticPlan['contacts'] = [];
   const add = (label: string, contact: MotionContactHint, required = true) => contacts.push({ label, contact, required });
-  const hand = inferPromptHand(prompt);
 
   if (['push', 'pull'].includes(actionType)) {
-    add(hand === 'left' ? '左手接触目标' : hand === 'right' ? '右手接触目标' : '双手接触目标', hand === 'left' ? 'leftHand' : hand === 'right' ? 'rightHand' : 'hands');
+    const limbs = semanticContactLimbsForAction(actionType, prompt);
+    add(limbs.length > 1 ? '双手接触目标' : limbs[0] === 'leftHand' ? '左手接触目标' : '右手接触目标', limbs.length > 1 ? 'hands' : limbs[0]);
     add('双脚贴地支撑', 'feet');
   } else if (actionType === 'throw') {
-    add(hand === 'left' ? '左手投掷' : hand === 'both' ? '双手投掷' : '右手投掷', hand === 'left' ? 'leftHand' : hand === 'both' ? 'hands' : 'rightHand');
+    const limbs = semanticContactLimbsForAction(actionType, prompt);
+    add(limbs.length > 1 ? '双手投掷' : limbs[0] === 'leftHand' ? '左手投掷' : '右手投掷', limbs.length > 1 ? 'hands' : limbs[0]);
     add('支撑脚贴地', 'feet');
   } else if (['punch', 'block', 'kick', 'side_kick', 'walk', 'run', 'dash', 'crouch', 'turn'].includes(actionType)) {
     add(actionType === 'kick' || actionType === 'side_kick' ? '支撑脚贴地' : '双脚贴地', 'feet');
@@ -5074,6 +7838,363 @@ function semanticContactsForAction(actionType: MotionSemanticActionType, prompt:
 
   if (/贴地|踩地|脚.*地|ground|floor/.test(normalized) && !contacts.some((item) => item.contact === 'feet')) add('提示词要求脚部贴地', 'feet');
   return contacts.slice(0, 6);
+}
+
+function mergeSequenceContacts(sequence: MotionActionSequenceStep[], prompt: string, fallbackActionType: MotionSemanticActionType) {
+  const contacts: MotionSemanticPlan['contacts'] = [];
+  const pushUnique = (item: MotionSemanticPlan['contacts'][number]) => {
+    if (contacts.some((existing) => existing.contact === item.contact && existing.label === item.label)) return;
+    contacts.push(item);
+  };
+  const source = sequence.length ? sequence : [{ actionType: fallbackActionType }] as Array<Pick<MotionActionSequenceStep, 'actionType'>>;
+  source.forEach((step) => {
+    semanticContactsForAction(step.actionType, prompt).forEach(pushUnique);
+  });
+  return contacts.slice(0, 10);
+}
+
+function motionQualityExpectationPriority(expectation: MotionQualityExpectation) {
+  const priorities: Record<string, number> = {
+    sequence_order: 100,
+    target_approach: 98,
+    sequence_bridge: 96,
+    approach_contact_bridge: 95,
+    hand_contact: 94,
+    contact_window: 92,
+    turn_throw_bridge: 91,
+    throw_release: 90,
+    throw_prop_motion: 88,
+    low_recovery_attack_bridge: 87,
+    prop_contact_motion: 86,
+    prompt_both_hands: 84,
+    locomotion_gait: 82,
+    locomotion_support: 80,
+    locomotion_travel: 78,
+    locomotion_smoothness: 76,
+    locomotion_arm_sync: 74,
+    contact_body_drive: 72,
+    contact_foot_anchor: 70,
+    throw_body_windup: 68,
+    punch_extension: 66,
+    punch_recovery: 64,
+    punch_body_drive: 62,
+    prompt_grounded_feet: 60,
+    prompt_forward_lean: 58,
+    prompt_low_center: 56
+  };
+  return priorities[expectation.id] ?? (expectation.required ? 40 : 10);
+}
+
+function motionQualityExpectationsForPlan(
+  prompt: string,
+  actionType: MotionSemanticActionType,
+  sequence: MotionActionSequenceStep[],
+  targetObjectId?: string
+): MotionQualityExpectation[] {
+  const expectations: MotionQualityExpectation[] = [];
+  const pushUnique = (expectation: MotionQualityExpectation) => {
+    if (expectations.some((item) => item.id === expectation.id)) return;
+    expectations.push(expectation);
+  };
+  const actionTypes = new Set<MotionSemanticActionType>([
+    actionType,
+    ...sequence.map((step) => step.actionType)
+  ]);
+  const hasAction = (...types: MotionSemanticActionType[]) => types.some((type) => actionTypes.has(type));
+  const control = motionControlFromPrompt(prompt);
+  const promptControl = motionPromptControlSummary(prompt, undefined, { speedLabel: control.speedLabel, forceLabel: control.forceLabel });
+
+  if (promptControl.bodyTags.includes('低重心')) {
+    pushUnique({
+      id: 'prompt_low_center',
+      metric: 'pose',
+      label: '低重心控制',
+      description: '提示词要求低重心时，需要明显下沉骨盆并弯曲腿部。',
+      minValue: 14,
+      required: true
+    });
+  }
+  if (promptControl.bodyTags.includes('身体前压')) {
+    pushUnique({
+      id: 'prompt_forward_lean',
+      metric: 'pose',
+      label: '身体前压',
+      description: '提示词要求身体前压时，躯干和骨盆需要形成明确前倾发力。',
+      minValue: 7,
+      required: true
+    });
+  }
+  if (promptControl.bodyTags.includes('双脚贴地')) {
+    pushUnique({
+      id: 'prompt_grounded_feet',
+      metric: 'foot_lock',
+      label: '双脚贴地',
+      description: '提示词要求双脚贴地时，地面动作不能明显离地，并需要脚部接触帧。',
+      minValue: 2,
+      required: true
+    });
+  }
+  if (promptControl.bodyTags.includes('双手主导')) {
+    pushUnique({
+      id: 'prompt_both_hands',
+      metric: 'contact',
+      label: '双手主导',
+      description: '提示词要求双手时，左右手都需要参与接触或主要动作轨迹。',
+      minValue: 2,
+      required: true
+    });
+  }
+
+  if (hasAction('walk', 'run', 'dash')) {
+    pushUnique({
+      id: 'locomotion_gait',
+      metric: 'pose',
+      label: '走跑步态',
+      description: '需要左右腿交替、手臂反向摆动和稳定根节点推进。',
+      minValue: hasAction('dash') ? 19 : hasAction('run') ? 16 : 10,
+      required: true
+    });
+    pushUnique({
+      id: 'locomotion_support',
+      metric: 'foot_lock',
+      label: '支撑脚交替',
+      description: '走跑冲刺需要清晰的左右脚支撑相位，避免滑行。',
+      minValue: hasAction('walk') ? 0.42 : hasAction('run') ? 0.32 : 0.28,
+      required: true
+    });
+    pushUnique({
+      id: 'locomotion_smoothness',
+      metric: 'speed',
+      label: '步速平滑',
+      description: '根节点推进需要连续稳定，避免忽快忽慢、卡顿或回抽。',
+      maxValue: hasAction('walk') ? 0.58 : hasAction('run') ? 0.62 : 0.66,
+      required: true
+    });
+    pushUnique({
+      id: 'locomotion_arm_sync',
+      metric: 'pose',
+      label: '手脚同步',
+      description: '走跑冲刺需要手臂反摆与腿部交替同步，接近真人或3D游戏角色步态。',
+      minValue: hasAction('walk') ? 0.34 : 0.38,
+      required: true
+    });
+    if (!promptRequestsInPlaceMotion(prompt)) {
+      pushUnique({
+        id: 'locomotion_travel',
+        metric: 'speed',
+        label: '根节点位移',
+        description: '移动类动作需要根据提示词形成可见的前进距离。',
+        minValue: hasAction('walk') ? 0.58 : hasAction('run') ? 0.64 : 0.68,
+        required: true
+      });
+    }
+  }
+
+  if (hasAction('push', 'pull', 'reach')) {
+    pushUnique({
+      id: 'contact_window',
+      metric: 'contact',
+      label: '接触窗口',
+      description: '接触型动作需要持续接触窗口，不能只在单帧瞬间碰到目标。',
+      minValue: hasAction('push', 'pull') ? 4 : 2,
+      required: true
+    });
+    pushUnique({
+      id: 'hand_contact',
+      metric: 'contact',
+      label: '手部接触',
+      description: '接触型动作需要手部稳定贴近目标点。',
+      minValue: control.forceLabel === '轻' ? 0.46 : 0.5,
+      required: true
+    });
+    pushUnique({
+      id: 'contact_body_drive',
+      metric: 'pose',
+      label: '身体发力',
+      description: '推拉动作需要躯干、重心和手部协同发力。',
+      minValue: control.forceLabel === '强' ? 11 : control.forceLabel === '轻' ? 5.5 : 8,
+      required: true
+    });
+    pushUnique({
+      id: 'contact_foot_anchor',
+      metric: 'foot_lock',
+      label: '脚部支撑',
+      description: '推拉接触时脚部需要稳定锁地，不能为了够到目标而脚步漂移。',
+      minValue: control.forceLabel === '强' ? 0.48 : 0.42,
+      required: true
+    });
+    if (targetObjectId) {
+      pushUnique({
+        id: 'prop_contact_motion',
+        metric: 'contact',
+        label: '目标物体响应',
+        description: '被推拉的目标物体需要跟随动作产生对应位移。',
+        minValue: control.forceLabel === '强' ? 0.18 : control.forceLabel === '轻' ? 0.08 : 0.12,
+        required: true
+      });
+    }
+  }
+
+  if (hasAction('throw')) {
+    pushUnique({
+      id: 'contact_window',
+      metric: 'contact',
+      label: '接触窗口',
+      description: '投掷需要抓握、蓄力和释放接触事件，不能只生成一个出手点。',
+      minValue: 3,
+      required: true
+    });
+    pushUnique({
+      id: 'throw_body_windup',
+      metric: 'pose',
+      label: '投掷蓄力',
+      description: '投掷需要先由躯干和肩臂形成蓄力，再进入出手释放。',
+      minValue: control.forceLabel === '强' ? 12 : control.forceLabel === '轻' ? 7 : 9,
+      required: true
+    });
+    pushUnique({
+      id: 'throw_release',
+      metric: 'contact',
+      label: '投掷释放',
+      description: '投掷动作需要蓄力、出手释放点和飞出轨迹。',
+      minValue: control.forceLabel === '强' ? 0.72 : control.forceLabel === '轻' ? 0.48 : 0.62,
+      required: true
+    });
+    if (targetObjectId) {
+      pushUnique({
+        id: 'throw_prop_motion',
+        metric: 'contact',
+        label: '投掷物轨迹',
+        description: '投掷目标需要在释放后形成明显离手轨迹。',
+        minValue: control.forceLabel === '强' ? 0.42 : control.forceLabel === '轻' ? 0.22 : 0.32,
+        required: true
+      });
+    }
+  }
+
+  if (hasAction('punch')) {
+    pushUnique({
+      id: 'punch_extension',
+      metric: 'pose',
+      label: '出拳伸展',
+      description: '出拳需要主手肩臂明确向前发力，不能只有身体晃动。',
+      minValue: control.forceLabel === '强' ? 22 : control.forceLabel === '轻' ? 13 : 17,
+      required: true
+    });
+    pushUnique({
+      id: 'punch_recovery',
+      metric: 'pose',
+      label: '出拳回收',
+      description: '出拳后需要回收至护架或稳定收势，避免手臂停在抽象位置。',
+      minValue: control.forceLabel === '强' ? 0.36 : 0.42,
+      required: true
+    });
+    pushUnique({
+      id: 'punch_body_drive',
+      metric: 'pose',
+      label: '出拳身体协同',
+      description: '出拳需要躯干、重心和主手协同发力，形成可读的攻击方向。',
+      minValue: control.forceLabel === '强' ? 10 : control.forceLabel === '轻' ? 5 : 7,
+      required: true
+    });
+  }
+
+  if (sequence.length > 1) {
+    pushUnique({
+      id: 'sequence_order',
+      metric: 'sequence',
+      label: '动作顺序',
+      description: '组合动作需要符合提示词阶段顺序，并在段落边界平滑过渡。',
+      required: true
+    });
+    pushUnique({
+      id: 'sequence_bridge',
+      metric: 'sequence',
+      label: '阶段承接',
+      description: '组合动作的相邻阶段需要共享重心、支撑脚和主导肢体，避免突然切换。',
+      minValue: 0.68,
+      required: true
+    });
+    if (hasPromptApproachBeforeContact(prompt.trim().toLowerCase())) {
+      pushUnique({
+        id: 'target_approach',
+        metric: 'contact',
+        label: '接触前靠近目标',
+        description: '跑过去/靠近后再接触目标，不能隔空推拉或攻击。',
+        maxValue: 0.55,
+        required: true
+      });
+      if (hasAction('push') || hasAction('pull')) {
+        pushUnique({
+          id: 'approach_contact_bridge',
+          metric: 'sequence',
+          label: '靠近后接触承接',
+          description: '跑/走/冲到目标后，需要先减速贴近，再进入双手接触和发力阶段。',
+          minValue: 0.72,
+          required: true
+        });
+      }
+    }
+    if (hasPromptTurnBeforeAction(prompt.trim().toLowerCase()) && hasAction('throw')) {
+      pushUnique({
+        id: 'turn_throw_bridge',
+        metric: 'sequence',
+        label: '转身投掷承接',
+        description: '转身后投掷需要躯干扭转、肩臂蓄力和出手释放连续发生。',
+        minValue: 0.72,
+        required: true
+      });
+    }
+    if (promptNeedsImplicitGetUpBeforeAttack(prompt.trim().toLowerCase())) {
+      pushUnique({
+        id: 'low_recovery_attack_bridge',
+        metric: 'sequence',
+        label: '下沉恢复后攻击',
+        description: '蹲下/躲避后攻击需要先从低重心恢复，再进入出拳、踢腿或投掷阶段。',
+        minValue: 0.7,
+        required: true
+      });
+    }
+  }
+
+  return expectations
+    .map((expectation, index) => ({ expectation, index }))
+    .sort((a, b) => motionQualityExpectationPriority(b.expectation) - motionQualityExpectationPriority(a.expectation) || a.index - b.index)
+    .slice(0, 16)
+    .map((item) => item.expectation);
+}
+
+function sequencePoseStages(sequence: MotionActionSequenceStep[], fallbackActionType: MotionSemanticActionType) {
+  if (!sequence.length) return motionStagesForAction(fallbackActionType);
+  const stages = sequence.flatMap((step, index) => {
+    const localStages = motionStagesForAction(step.actionType);
+    if (!localStages.length) {
+      return [semanticStage(step.id, step.label, step.startRatio, step.label, '按动作序列推进', '')];
+    }
+    return localStages.map((stage) => {
+      const localRatio = clamp01(stage.timeRatio);
+      return {
+        ...stage,
+        id: `${step.id}_${stage.id}`,
+        label: `${index + 1}. ${step.label}-${stage.label}`,
+        timeRatio: Number(lerp(step.startRatio, step.endRatio, localRatio).toFixed(3))
+      };
+    });
+  });
+  if (stages.length <= 10) return stages;
+  const preserved = new Map<string, MotionSemanticStage>();
+  sequence.forEach((step) => {
+    const stepStages = stages.filter((stage) => stage.id.startsWith(`${step.id}_`));
+    const first = stepStages[0];
+    const peak = stepStages[Math.floor(stepStages.length / 2)];
+    const last = stepStages[stepStages.length - 1];
+    [first, peak, last].filter(Boolean).forEach((stage) => preserved.set(stage.id, stage));
+  });
+  stages.forEach((stage) => {
+    if (preserved.size >= 10) return;
+    preserved.set(stage.id, stage);
+  });
+  return Array.from(preserved.values()).sort((a, b) => a.timeRatio - b.timeRatio).slice(0, 10);
 }
 
 function resolvePromptTargetObject(scene: Scene3DState, prompt: string, actionType: MotionSemanticActionType) {
@@ -5092,7 +8213,23 @@ function resolvePromptTargetObject(scene: Scene3DState, prompt: string, actionTy
     const matched = scene.objects.props.find((item) => alias.prop.test(item.name));
     if (matched) return matched;
   }
-  if (['push', 'pull', 'throw', 'reach'].includes(actionType) && scene.objects.props.length) return scene.objects.props[0];
+  if (['push', 'pull', 'throw', 'reach'].includes(actionType) && scene.objects.props.length) {
+    const character = scene.objects.characters.find((item) => item.id === scene.selectedObjectId) || scene.objects.characters[0];
+    if (!character) return scene.objects.props[0];
+    const yawRad = rad(character.rotation.y || 0);
+    const forward = normalizedDirection(vec(Math.sin(yawRad), 0, -Math.cos(yawRad)));
+    const scored = scene.objects.props
+      .map((prop) => {
+        const dx = prop.position.x - character.position.x;
+        const dz = prop.position.z - character.position.z;
+        const distance = Math.hypot(dx, dz);
+        const directionScore = distance > 0.001 ? (dx / distance) * forward.x + (dz / distance) * forward.z : 0;
+        const forwardBonus = directionScore > 0.15 ? 1.2 : 0;
+        return { prop, score: distance - forwardBonus - directionScore * 0.18 };
+      })
+      .sort((a, b) => a.score - b.score);
+    return scored[0]?.prop || scene.objects.props[0];
+  }
   return null;
 }
 
@@ -5104,6 +8241,15 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
   const handPreference = inferPromptHand(prompt);
   const promptCamera = cameraMotionFromPrompt(prompt, durationSec, undefined, cameraMotion);
   const targetObject = resolvePromptTargetObject(scene, prompt, action.type);
+  const targetRequired = action.type === 'push' || action.type === 'pull' || action.type === 'throw' || action.type === 'reach';
+  const actionSkill = motionActionSkillSummary(action.type);
+  const speedLabel = promptSpeedLabel(prompt);
+  const forceLabel = promptForceLabel(prompt);
+  const control = motionControlFromPrompt(prompt, { speedLabel, forceLabel });
+  const promptControl = motionPromptControlSummary(prompt, universal, { speedLabel, forceLabel });
+  const actionSequence = buildPromptActionSequence(prompt, action.type);
+  const actionChains = motionActionChainsForPrompt(prompt, actionSequence);
+  const qualityExpectations = motionQualityExpectationsForPlan(prompt, action.type, actionSequence, targetObject?.id);
   const bodyFocus = new Set<string>();
   if (['push', 'pull'].includes(action.type)) ['双手', '躯干', '双脚'].forEach((item) => bodyFocus.add(item));
   if (action.type === 'throw') ['主手', '躯干', '支撑脚'].forEach((item) => bodyFocus.add(item));
@@ -5125,7 +8271,14 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
   const explain = [
     '识别为“' + MOTION_SEMANTIC_TYPE_LABELS[action.type] + '”，动作族为“' + MOTION_SEMANTIC_FAMILY_LABELS[action.family] + '”。',
     secondaryTypes.length ? '同时识别到辅助动作：' + secondaryTypes.slice(0, 3).map((type) => MOTION_SEMANTIC_TYPE_LABELS[type]).join('、') + '。' : '',
+    motionActionSequenceSummary(actionSequence),
+    motionActionChainSummary(actionChains),
     semanticDirectionLabel(prompt, universal) + '，' + (universal.rhythm === 'run' ? '快速节奏' : universal.rhythm === 'impact' ? '冲击节奏' : '常规节奏') + '。',
+    semanticTimingExplain(prompt, speedLabel),
+    motionPromptControlExplain(promptControl),
+    `动作控制：力度 ${forceLabel}，速度 ${speedLabel}，发力倍率 ${control.forceScale.toFixed(2)}，保持倍率 ${control.holdScale.toFixed(2)}，位移倍率 ${control.travelScale.toFixed(2)}。`,
+    qualityExpectations.length ? '质量期望：' + qualityExpectations.map((item) => item.label).join('、') + '。' : '',
+    actionSkill ? '本地动作技能：' + actionSkill.label + '，' + actionSkill.constraints.join('，') + '。' : '',
     targetObject ? '识别到目标对象：' + targetObject.name + '。' : '',
     promptCamera.matched ? '提示词包含运镜：' + CAMERA_MOTION_LABELS[promptCamera.motion.type] + '。' : cameraMotion?.enabled ? '未识别提示词运镜，将使用下方运镜类型：' + CAMERA_MOTION_LABELS[cameraMotion.type] + '。' : '未识别运镜，默认不加入运镜。'
   ].filter(Boolean);
@@ -5136,12 +8289,16 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
     actionFamily: action.family,
     actionType: action.type,
     directionLabel: semanticDirectionLabel(prompt, universal),
-    speedLabel: promptSpeedLabel(prompt),
-    forceLabel: promptForceLabel(prompt),
+    speedLabel,
+    forceLabel,
     bodyFocus: Array.from(bodyFocus),
     rootMotion,
-    poseStages: motionStagesForAction(action.type),
-    contacts: semanticContactsForAction(action.type, prompt),
+    poseStages: sequencePoseStages(actionSequence, action.type),
+    actionSequence: actionSequence.length ? actionSequence : undefined,
+    actionChains: actionChains.length ? actionChains : undefined,
+    contacts: mergeSequenceContacts(actionSequence, prompt, action.type),
+    qualityExpectations,
+    actionSkill,
     cameraIntent: promptCamera.matched
       ? { label: CAMERA_MOTION_LABELS[promptCamera.motion.type], type: promptCamera.motion.type, priority: 'prompt', description: '动作提示词中的运镜优先于下方运镜类型。' }
       : cameraMotion?.enabled && cameraMotion.type !== 'none'
@@ -5151,7 +8308,10 @@ function buildLocalMotionSemanticPlan(scene: Scene3DState, prompt: string, unive
     targetObjectName: targetObject?.name,
     confidence: action.type === 'unknown' ? 0.35 : targetObject || templates.length || action.type !== 'idle' ? Math.min(0.9, 0.72 + matches.length * 0.04) : 0.55,
     explain,
-    warnings: action.type === 'unknown' ? ['未识别具体动作，请补充动作动词或目标。'] : []
+    warnings: [
+      action.type === 'unknown' ? '未识别具体动作，请补充动作动词或目标。' : '',
+      targetRequired && !targetObject ? '该动作需要可接触目标，但当前场景没有可用道具，将使用角色前方虚拟目标。' : ''
+    ].filter(Boolean)
   };
 }
 
@@ -5175,12 +8335,12 @@ function motionPipelineStatus(transition: PoseTransition | null | undefined, mot
   const localStale = Boolean(semanticPlan && semanticPlan.promptHash !== currentHash);
   const aiDone = Boolean(transition?.motionIntent && transition.actionPlan.mode === 'motion_intent');
   const generated = Boolean(transition?.animationClip);
+  const parseDone = Boolean(localDone && aiDone);
   return {
     hash: currentHash,
-    local: (!transition ? 'blocked' : transition.error && !localDone ? 'failed' : localStale ? 'stale' : localDone ? 'done' : 'ready') as MotionPipelineStepState,
-    ai: (!transition || !localDone || localStale ? 'blocked' : motionResolving ? 'running' : transition.error && !aiDone ? 'failed' : aiDone ? 'done' : 'ready') as MotionPipelineStepState,
     generate: (!transition || !localDone || localStale || !aiDone ? 'blocked' : motionGenerating ? 'running' : transition.error && !generated ? 'failed' : generated ? 'done' : 'ready') as MotionPipelineStepState,
-    canResolveAi: Boolean(transition && localDone && !localStale && !motionResolving),
+    parse: (!transition ? 'blocked' : motionResolving ? 'running' : localStale ? 'stale' : parseDone ? 'done' : transition.error && !parseDone ? 'failed' : 'ready') as MotionPipelineStepState,
+    canResolve: Boolean(transition && !motionResolving),
     canGenerate: Boolean(transition && localDone && !localStale && aiDone && !motionGenerating),
     isGenerated: generated,
     isStale: Boolean(localStale || (transition?.animationClip && transition.motionIntent && transition.actionPlan.semanticPlan?.promptHash !== currentHash))
@@ -5254,7 +8414,12 @@ function resolveActionPlan(scene: Scene3DState, prompt: string, options?: { dura
       if (!item.targetObjectId && (item.id === 'point_at' || item.id === 'pick_up' || item.id === 'put_down')) item.targetObjectId = semanticPlan.targetObjectId;
     });
   }
-  return { templates, notes: [...notes, ...semanticPlan.explain, ...semanticPlan.warnings], mode, universal, semanticPlan };
+  const semanticSkillNotes = !templates.length && normalized && semanticPlan.actionType !== 'unknown' && semanticPlan.actionType !== 'idle'
+    ? [`已命中本地动作技能：${MOTION_SEMANTIC_TYPE_LABELS[semanticPlan.actionType] || semanticPlan.actionType}，使用语义动态编译。`]
+    : [];
+  const planNotes = [...notes, ...semanticSkillNotes, ...semanticPlan.explain, ...semanticPlan.warnings]
+    .filter((note) => !(semanticSkillNotes.length && note === '未命中具体动作模板，使用通用动态规划。'));
+  return { templates, notes: planNotes, mode, universal, semanticPlan };
 }
 
 // SECTION: Dynamic compilation, contact frames, and quality checks
@@ -5289,10 +8454,44 @@ function findSceneObject(scene: Scene3DState, id?: string) {
     || null;
 }
 
-function contactPositionForObject(object: { position: Vec3; scale?: Vec3 } | null | undefined) {
+function contactPositionForObject(object: { position: Vec3; scale?: Vec3 } | null | undefined, origin?: Vec3) {
   if (!object) return vec();
   const height = object.scale?.y || 0.4;
-  return vec(object.position.x, object.position.y + Math.max(0.08, height * 0.5), object.position.z);
+  const surfaceY = object.position.y + Math.max(0.08, height * 0.5);
+  if (!origin) return vec(object.position.x, surfaceY, object.position.z);
+  const dx = origin.x - object.position.x;
+  const dz = origin.z - object.position.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance < 0.001) return vec(object.position.x, surfaceY, object.position.z);
+  const radius = Math.max(object.scale?.x || 0.3, object.scale?.z || 0.3) * 0.48;
+  return vec(
+    Number((object.position.x + (dx / distance) * radius).toFixed(4)),
+    Number(surfaceY.toFixed(4)),
+    Number((object.position.z + (dz / distance) * radius).toFixed(4))
+  );
+}
+
+function semanticContactAnchorPosition(
+  object: { position: Vec3; scale?: Vec3 } | null | undefined,
+  origin?: Vec3,
+  actionType?: MotionSemanticActionType
+) {
+  if (!object) return vec();
+  const surface = contactPositionForObject(object, origin);
+  const height = Math.max(0.08, object.scale?.y || 0.4);
+  const gripRatio = actionType === 'throw'
+    ? 0.62
+    : actionType === 'pull'
+      ? 0.54
+      : actionType === 'push'
+        ? 0.58
+        : 0.56;
+  const y = object.position.y + clampNumber(height * gripRatio, 0.1, 1.18);
+  return vec(
+    surface.x,
+    Number(y.toFixed(4)),
+    surface.z
+  );
 }
 
 function cameraFocusTargetPosition(scene: Scene3DState, cameraObject?: CameraObject | null) {
@@ -5306,8 +8505,7 @@ function cameraFocusTargetPosition(scene: Scene3DState, cameraObject?: CameraObj
   return prop ? contactPositionForObject(prop) : null;
 }
 
-function cameraEffectiveTargetPosition(scene: Scene3DState, cameraObject?: CameraObject | null) {
-  void scene;
+function cameraEffectiveTargetPosition(cameraObject?: CameraObject | null) {
   return cameraObject?.targetPosition || vec(0, 1, 0);
 }
 
@@ -5334,8 +8532,20 @@ function groundContactPosition(transition: PoseTransition, t: number, lateral = 
   return vec(Number((base.x + lateral).toFixed(4)), Number(start.y.toFixed(4)), Number((base.z + forward).toFixed(4)));
 }
 
-function handContactLimbFromPrompt(prompt: string, fallback: 'left' | 'right' = 'right'): 'leftHand' | 'rightHand' {
-  return inferPromptHand(prompt) === 'left' ? 'leftHand' : fallback === 'left' ? 'leftHand' : 'rightHand';
+function semanticContactLimbsForAction(actionType: MotionSemanticActionType | undefined, prompt: string): Array<'leftHand' | 'rightHand'> {
+  const hand = inferPromptHand(prompt);
+  if (actionType === 'push' || actionType === 'pull') {
+    if (hand === 'left') return ['leftHand'];
+    if (hand === 'right') return ['rightHand'];
+    return ['leftHand', 'rightHand'];
+  }
+  if (actionType === 'throw') {
+    if (hand === 'both') return ['leftHand', 'rightHand'];
+    return [hand === 'left' ? 'leftHand' : 'rightHand'];
+  }
+  if (hand === 'both') return ['leftHand', 'rightHand'];
+  if (hand === 'left') return ['leftHand'];
+  return ['rightHand'];
 }
 
 function semanticTargetPosition(scene: Scene3DState, transition: PoseTransition, fallbackRatio = 0.45) {
@@ -5357,8 +8567,21 @@ function releasePositionForThrow(transition: PoseTransition) {
   );
 }
 
+function transitionTransformAtRatio(transition: PoseTransition, ratio: number): PoseTransform {
+  const start = transition.startTransform || { position: vec(), rotation: vec(), scale: vec(1, 1, 1) };
+  const end = transition.endTransform || start;
+  const t = clamp01(ratio);
+  return {
+    position: lerpVec3(start.position, end.position, t),
+    rotation: slerpRotation(start.rotation, end.rotation, t),
+    scale: lerpVec3(start.scale, end.scale, t)
+  };
+}
+
 function buildContactFrames(scene: Scene3DState, transition: PoseTransition, durationSec: number): AnimationContactFrame[] {
   const frames: AnimationContactFrame[] = [];
+  const locomotionContactAction = sequenceLocomotionActionType(transition);
+  const hasLocomotionGait = isLocomotionActionType(locomotionContactAction);
   const pushUnique = (frame: AnimationContactFrame) => {
     const key = `${frame.kind}:${frame.limb}:${frame.targetObjectId || ''}:${frame.timeSec.toFixed(2)}`;
     if (frames.some((item) => `${item.kind}:${item.limb}:${item.targetObjectId || ''}:${item.timeSec.toFixed(2)}` === key)) return;
@@ -5366,16 +8589,34 @@ function buildContactFrames(scene: Scene3DState, transition: PoseTransition, dur
   };
   const semanticPlan = transition.actionPlan.semanticPlan;
   if (semanticPlan) {
+    const sequenceActionTypes = new Set<MotionSemanticActionType>([
+      semanticPlan.actionType,
+      ...(semanticPlan.actionSequence || []).map((step) => step.actionType)
+    ]);
+    const sequenceHasAction = (...types: MotionSemanticActionType[]) => types.some((type) => sequenceActionTypes.has(type));
+    const actionRatio = (actionType: MotionSemanticActionType, localRatio: number) => {
+      const step = semanticPlan.actionSequence?.find((item) => item.actionType === actionType);
+      return step ? lerp(step.startRatio, step.endRatio, clamp01(localRatio)) : localRatio;
+    };
     const target = findSceneObject(scene, semanticPlan.targetObjectId);
-    const targetPosition = target ? contactPositionForObject(target) : semanticTargetPosition(scene, transition);
-    const promptHand = inferPromptHand(transition.actionPrompt);
+    const targetPosition = target ? semanticContactAnchorPosition(target, transitionTransformAtRatio(transition, 0.45).position, semanticPlan.actionType) : semanticTargetPosition(scene, transition);
+    const control = motionControlFromPrompt(transition.actionPrompt, semanticPlan);
+    const semanticPositionAt = (timeRatio: number, fallback = targetPosition) => {
+      const transformAtTime = transitionTransformAtRatio(transition, timeRatio);
+      const actionTypeAtTime = semanticContactActionAtTime(transition, timeRatio) || semanticPlan.actionType;
+      return semanticHandTargetSample(scene, transition, transformAtTime, timeRatio)?.position
+        || (target ? semanticContactAnchorPosition(target, transformAtTime.position, actionTypeAtTime) : fallback);
+    };
     const addHandReach = (timeRatio: number, limb: 'leftHand' | 'rightHand', note: string, kind: AnimationContactFrame['kind'] = 'reach', position = targetPosition) => {
+      const transformAtTime = transitionTransformAtRatio(transition, timeRatio);
+      const actionTypeAtTime = semanticContactActionAtTime(transition, timeRatio) || semanticPlan.actionType;
+      const contactForward = semanticContactForwardDirection(scene, transition, transformAtTime.position, timeRatio, actionTypeAtTime);
       pushUnique({
         timeSec: Number((durationSec * timeRatio).toFixed(3)),
         kind,
         targetObjectId: semanticPlan.targetObjectId,
         limb,
-        position,
+        position: contactTargetForHand(position, contactForward, limb, semanticContactHandWidth(scene, transition, actionTypeAtTime)),
         note
       });
     };
@@ -5390,51 +8631,78 @@ function buildContactFrames(scene: Scene3DState, transition: PoseTransition, dur
       });
     };
     if (semanticPlan.contacts.some((item) => item.contact === 'feet')) {
-      addFootLock(0, 'leftFoot', '语义计划锁定左脚贴地');
-      addFootLock(0, 'rightFoot', '语义计划锁定右脚贴地');
-      const gait = locomotionGaitConfig(semanticPlan.actionType);
+      const locomotionActionType = sequenceLocomotionActionType(transition);
+      const gait = locomotionGaitConfig(locomotionActionType);
       if (gait) {
-        const contactCount = Math.max(
-          semanticPlan.actionType === 'walk' ? 4 : 6,
-          Math.round(durationSec * gait.cadenceHz * 2)
-        );
-        for (let index = 1; index < contactCount; index += 1) {
-          const ratio = index / contactCount;
-          addFootLock(ratio, index % 2 === 0 ? 'leftFoot' : 'rightFoot', `${index % 2 === 0 ? '左脚' : '右脚'}步态落地点`);
-        }
-      } else if (semanticPlan.actionType === 'push' || semanticPlan.actionType === 'pull' || semanticPlan.actionType === 'crouch' || semanticPlan.actionType === 'block') {
-        [0.32, 0.62, 0.86].forEach((ratio) => {
-          addFootLock(ratio, 'leftFoot', '地面动作左脚稳定支撑');
-          addFootLock(ratio, 'rightFoot', '地面动作右脚稳定支撑');
+        const locomotionStep = semanticPlan.actionSequence?.find((step) => step.actionType === locomotionActionType);
+        const startRatio = locomotionStep ? locomotionStep.startRatio : 0;
+        const endRatio = locomotionStep ? locomotionStep.endRatio : 1;
+        locomotionFootPlantEventsForWindow(
+          locomotionActionType,
+          durationSec,
+          startRatio,
+          endRatio,
+          locomotionGaitTempoScale(transition, locomotionActionType)
+        ).forEach((event) => {
+          addFootLock(event.ratio, event.limb, `${event.limb === 'leftFoot' ? '左脚' : '右脚'}步态相位落地点`);
         });
+        if (endRatio < 1 && (semanticPlan.actionType === 'push' || semanticPlan.actionType === 'pull' || sequenceHasAction('push', 'pull', 'throw', 'punch', 'block'))) {
+          [endRatio, lerp(endRatio, 1, 0.42), lerp(endRatio, 1, 0.78)].forEach((ratio) => {
+            addFootLock(ratio, 'leftFoot', '移动后左脚稳定支撑');
+            addFootLock(ratio, 'rightFoot', '移动后右脚稳定支撑');
+          });
+        }
+      } else {
+        addFootLock(0, 'leftFoot', '语义计划锁定左脚贴地');
+        addFootLock(0, 'rightFoot', '语义计划锁定右脚贴地');
+        if (semanticPlan.actionType === 'push' || semanticPlan.actionType === 'pull' || semanticPlan.actionType === 'crouch' || semanticPlan.actionType === 'block') {
+          [0.32, 0.62, 0.86].forEach((ratio) => {
+            addFootLock(ratio, 'leftFoot', '地面动作左脚稳定支撑');
+            addFootLock(ratio, 'rightFoot', '地面动作右脚稳定支撑');
+          });
+        }
+        addFootLock(1, 'leftFoot', '语义计划在结束时保持左脚贴地');
+        addFootLock(1, 'rightFoot', '语义计划在结束时保持右脚贴地');
       }
-      addFootLock(1, 'leftFoot', '语义计划在结束时保持左脚贴地');
-      addFootLock(1, 'rightFoot', '语义计划在结束时保持右脚贴地');
     }
-    if (semanticPlan.actionType === 'push') {
-      const limbs: Array<'leftHand' | 'rightHand'> = promptHand === 'left'
-        ? ['leftHand']
-        : promptHand === 'right'
-          ? ['rightHand']
-          : ['leftHand', 'rightHand'];
+    if (sequenceHasAction('push')) {
+      const limbs = semanticContactLimbsForAction('push', transition.actionPrompt);
       limbs.forEach((limb) => {
-        addHandReach(0.28, limb, `${MOTION_CONTACT_LABELS[limb]}准备推向目标`, 'reach');
-        addHandReach(0.46, limb, `${MOTION_CONTACT_LABELS[limb]}接触并推动目标`, 'reach');
-        addHandReach(0.86, limb, `${MOTION_CONTACT_LABELS[limb]}保持推力`, 'reach');
+        const braceRatio = actionRatio('push', control.speedLabel === '快速' ? 0.14 : 0.18);
+        const reachRatio = actionRatio('push', control.speedLabel === '快速' ? 0.24 : 0.28);
+        const contactRatio = actionRatio('push', control.burst ? 0.42 : 0.46);
+        const driveRatio = actionRatio('push', control.sustained ? 0.74 : 0.68);
+        const holdRatio = actionRatio('push', control.sustained ? 0.92 : 0.86);
+        addHandReach(braceRatio, limb, `${MOTION_CONTACT_LABELS[limb]}预备贴近目标`, 'reach', semanticPositionAt(braceRatio));
+        addHandReach(reachRatio, limb, `${MOTION_CONTACT_LABELS[limb]}准备推向目标`, 'reach', semanticPositionAt(reachRatio));
+        addHandReach(contactRatio, limb, `${MOTION_CONTACT_LABELS[limb]}接触并推动目标`, 'grasp', semanticPositionAt(contactRatio));
+        addHandReach(driveRatio, limb, `${MOTION_CONTACT_LABELS[limb]}持续发力推动目标`, 'grasp', semanticPositionAt(driveRatio));
+        addHandReach(holdRatio, limb, `${MOTION_CONTACT_LABELS[limb]}保持推力`, 'grasp', semanticPositionAt(holdRatio));
       });
-    } else if (semanticPlan.actionType === 'pull') {
-      const limb = handContactLimbFromPrompt(transition.actionPrompt);
-      const start = transition.startTransform?.position || vec();
-      const pullReleasePosition = vec(start.x, start.y + 0.82, start.z - 0.18);
-      addHandReach(0.18, limb, `${MOTION_CONTACT_LABELS[limb]}伸向目标`, 'reach');
-      addHandReach(0.36, limb, `${MOTION_CONTACT_LABELS[limb]}抓住目标`, 'grasp');
-      addHandReach(0.88, limb, `${MOTION_CONTACT_LABELS[limb]}拉回后释放目标`, 'release', pullReleasePosition);
-    } else if (semanticPlan.actionType === 'throw') {
-      const limb = handContactLimbFromPrompt(transition.actionPrompt);
-      const releasePosition = releasePositionForThrow(transition);
-      addHandReach(0, limb, `${MOTION_CONTACT_LABELS[limb]}握住投掷目标`, 'grasp', targetPosition);
-      addHandReach(0.34, limb, `${MOTION_CONTACT_LABELS[limb]}带动目标蓄力`, 'reach', targetPosition);
-      addHandReach(0.62, limb, '投掷动作的出手释放点', 'release', releasePosition);
+    } else if (sequenceHasAction('pull')) {
+      const limbs = semanticContactLimbsForAction('pull', transition.actionPrompt);
+      const reachRatio = actionRatio('pull', control.speedLabel === '快速' ? 0.14 : 0.18);
+      const graspRatio = actionRatio('pull', control.burst ? 0.32 : 0.36);
+      const pullRatio = actionRatio('pull', control.sustained ? 0.7 : 0.62);
+      const releaseRatio = actionRatio('pull', control.sustained ? 0.94 : 0.88);
+      limbs.forEach((limb) => {
+        addHandReach(reachRatio, limb, `${MOTION_CONTACT_LABELS[limb]}伸向目标`, 'reach', semanticPositionAt(reachRatio));
+        addHandReach(graspRatio, limb, `${MOTION_CONTACT_LABELS[limb]}抓住目标`, 'grasp', semanticPositionAt(graspRatio));
+        addHandReach(pullRatio, limb, `${MOTION_CONTACT_LABELS[limb]}保持抓握并回拉目标`, 'grasp', semanticPositionAt(pullRatio));
+        addHandReach(releaseRatio, limb, `${MOTION_CONTACT_LABELS[limb]}拉回后释放目标`, 'release', semanticPositionAt(releaseRatio));
+      });
+    } else if (sequenceHasAction('throw')) {
+      const limbs = semanticContactLimbsForAction('throw', transition.actionPrompt);
+      const graspRatio = actionRatio('throw', 0);
+      const windupRatio = actionRatio('throw', control.burst ? 0.38 : 0.34);
+      const driveRatio = actionRatio('throw', control.burst ? 0.54 : 0.5);
+      const releaseRatio = actionRatio('throw', control.speedLabel === '缓慢' ? 0.72 : 0.62);
+      limbs.forEach((limb) => {
+        addHandReach(graspRatio, limb, `${MOTION_CONTACT_LABELS[limb]}握住投掷目标`, 'grasp', semanticPositionAt(graspRatio));
+        addHandReach(windupRatio, limb, `${MOTION_CONTACT_LABELS[limb]}带动目标蓄力`, 'grasp', semanticPositionAt(windupRatio));
+        addHandReach(driveRatio, limb, `${MOTION_CONTACT_LABELS[limb]}向前加速带出目标`, 'grasp', semanticPositionAt(driveRatio));
+        addHandReach(releaseRatio, limb, `${MOTION_CONTACT_LABELS[limb]}投掷出手释放点`, 'release', semanticPositionAt(releaseRatio, releasePositionForThrow(transition)));
+      });
     } else {
       if (semanticPlan.contacts.some((item) => item.contact === 'hands' || item.contact === 'leftHand')) {
         addHandReach(0.45, 'leftHand', '语义计划要求左手接触目标');
@@ -5448,7 +8716,7 @@ function buildContactFrames(scene: Scene3DState, transition: PoseTransition, dur
     const target = findSceneObject(scene, template.targetObjectId || transition.constraints.handTarget.targetObjectId);
     const hand = template.hand || transition.constraints.handTarget.hand || 'right';
     const limb = hand === 'left' ? 'leftHand' : 'rightHand';
-    const targetPosition = contactPositionForObject(target);
+    const targetPosition = contactPositionForObject(target, transitionTransformAtRatio(transition, 0.5).position);
     if (template.id === 'point_at') {
       pushUnique({
         timeSec: Number((durationSec * 0.55).toFixed(3)),
@@ -5536,12 +8804,12 @@ function buildContactFrames(scene: Scene3DState, transition: PoseTransition, dur
       pushSupport(0.58, 'leftHand', 'left hand crawl contact', -0.22, 0.05);
       pushSupport(0.78, 'rightHand', 'right hand crawl contact', 0.22, 0.15);
     }
-    if (hasFamily('kneel') || contacts.has('leftFoot') || contacts.has('rightFoot') || contacts.has('feet') || contacts.has('hip') || contacts.has('shoulder')) {
+    if (!hasLocomotionGait && (hasFamily('kneel') || contacts.has('leftFoot') || contacts.has('rightFoot') || contacts.has('feet') || contacts.has('hip') || contacts.has('shoulder'))) {
       pushSupport(0.3, 'leftFoot', '左脚支撑接触', -0.14, 0.06);
       pushSupport(0.3, 'rightFoot', '右脚支撑接触', 0.14, 0.06);
     }
   }
-  if (transition.constraints.footLock.enabled) {
+  if (transition.constraints.footLock.enabled && !hasLocomotionGait) {
     const start = transition.startTransform?.position || vec();
     if (transition.constraints.footLock.left) {
       pushUnique({
@@ -5682,6 +8950,18 @@ function sampleClipAtTime(clip: SerializedAnimationClip | undefined, timeSec: nu
   return clip.samples[clip.samples.length - 1];
 }
 
+function sampleAnimationSamplesAtTime(samples: AnimationClipSample[], timeSec: number) {
+  if (!samples.length) return null;
+  if (timeSec <= samples[0].timeSec) return samples[0];
+  if (timeSec >= samples[samples.length - 1].timeSec) return samples[samples.length - 1];
+  for (let index = 0; index < samples.length - 1; index += 1) {
+    const current = samples[index];
+    const next = samples[index + 1];
+    if (timeSec >= current.timeSec && timeSec <= next.timeSec) return sampleBetween(current, next, timeSec);
+  }
+  return samples[samples.length - 1];
+}
+
 function sampleCameraMotionAtTime(samples: CameraMotionSample[], timeSec: number): CameraMotionSample | undefined {
   if (!samples.length) return undefined;
   if (timeSec <= samples[0].timeSec) return samples[0];
@@ -5718,6 +8998,22 @@ function blendVec3(current: Vec3, target: Vec3, strength: number): Vec3 {
   return lerpVec3(current, target, clamp01(strength));
 }
 
+function blendPose(current: StandardHumanRigPose, target: StandardHumanRigPose, strength: number): StandardHumanRigPose {
+  const pose = clonePose(current);
+  const clampedStrength = clamp01(strength);
+  for (const key of POSE_KEYS) pose[key] = slerpRotation(current[key], target[key], clampedStrength);
+  return pose;
+}
+
+function blendPoseTransform(current: PoseTransform, target: PoseTransform, strength: number): PoseTransform {
+  const clampedStrength = clamp01(strength);
+  return {
+    position: blendVec3(current.position, target.position, clampedStrength),
+    rotation: slerpRotation(current.rotation, target.rotation, clampedStrength),
+    scale: blendVec3(current.scale, target.scale, clampedStrength)
+  };
+}
+
 function smoothRotationSample(previous: RigRotation, current: RigRotation, next: RigRotation, strength: number) {
   const midpoint = slerpRotation(previous, next, 0.5);
   return slerpRotation(current, midpoint, clamp01(strength));
@@ -5733,11 +9029,7 @@ function averageVec3(previous: Vec3, next: Vec3): Vec3 {
 
 function motionSmoothingStrength(transition: PoseTransition) {
   const actionType = transition.actionPlan.semanticPlan?.actionType;
-  if (actionType === 'run' || actionType === 'dash' || actionType === 'walk') return { root: 0.18, rotation: 0.22, pose: 0.08 };
-  if (actionType === 'push' || actionType === 'pull') return { root: 0.24, rotation: 0.24, pose: 0.1 };
-  if (actionType === 'throw' || actionType === 'punch' || actionType === 'kick' || actionType === 'side_kick') return { root: 0.18, rotation: 0.18, pose: 0.06 };
-  if (actionType === 'jump' || actionType === 'fall' || actionType === 'crawl') return { root: 0.16, rotation: 0.16, pose: 0.06 };
-  return { root: 0.26, rotation: 0.24, pose: 0.12 };
+  return motionActionSkill(actionType)?.smoothing || { root: 0.26, rotation: 0.24, pose: 0.12 };
 }
 
 function shouldPreserveJointDuringSmoothing(transition: PoseTransition, joint: PoseJointKey, sample: AnimationClipSample) {
@@ -5797,6 +9089,109 @@ function smoothMotionSamples(transition: PoseTransition, samples: AnimationClipS
   }));
 }
 
+function smoothRootVelocityContinuity(transition: PoseTransition, samples: AnimationClipSample[]) {
+  if (samples.length <= 4) return samples;
+  const qualityTarget = motionQualityTargetForTransition(transition);
+  const next = samples.map(cloneAnimationSample);
+  const passes = isLocomotionActionType(sequenceLocomotionActionType(transition)) ? 2 : 1;
+  const strength = isLocomotionActionType(sequenceLocomotionActionType(transition)) ? 0.34 : 0.24;
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const source = next.map(cloneAnimationSample);
+    for (let index = 1; index < source.length - 1; index += 1) {
+      const previous = source[index - 1];
+      const current = source[index];
+      const following = source[index + 1];
+      const dtPrevious = Math.max(0.0001, current.timeSec - previous.timeSec);
+      const dtNext = Math.max(0.0001, following.timeSec - current.timeSec);
+      const previousStep = vecDistance(previous.transform.position, current.transform.position) / dtPrevious;
+      const nextStep = vecDistance(current.transform.position, following.transform.position) / dtNext;
+      const meanStep = (previousStep + nextStep) * 0.5;
+      const spike = meanStep > 0.0001 ? Math.abs(previousStep - nextStep) / meanStep : 0;
+      const localStrength = clamp01((spike - 0.18) / 0.82) * strength;
+      if (localStrength <= 0.001) continue;
+      const rootAverage = averageVec3(previous.transform.position, following.transform.position);
+      next[index].transform.position.x = Number(lerp(current.transform.position.x, rootAverage.x, localStrength).toFixed(4));
+      next[index].transform.position.z = Number(lerp(current.transform.position.z, rootAverage.z, localStrength).toFixed(4));
+      if (!transitionAllowsAirborneMotion(transition)) {
+        const baseY = lerp(samples[0].transform.position.y, samples[samples.length - 1].transform.position.y, clamp01(current.timeSec / Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1)));
+        next[index].transform.position.y = Number(clampNumber(
+          lerp(current.transform.position.y, rootAverage.y, localStrength * 0.22),
+          baseY - Math.abs(groundedRootLimitsForAction(transition.actionPlan.semanticPlan?.actionType).minDrop),
+          baseY + qualityTarget.maxRootLift
+        ).toFixed(4));
+      }
+    }
+  }
+
+  next[0] = cloneAnimationSample(samples[0]);
+  next[next.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return next;
+}
+
+function sampleFromMotionSamples(samples: AnimationClipSample[], timeSec: number) {
+  if (!samples.length) return null;
+  if (timeSec <= samples[0].timeSec) return cloneAnimationSample(samples[0]);
+  const last = samples[samples.length - 1];
+  if (timeSec >= last.timeSec) return cloneAnimationSample(last);
+  for (let index = 0; index < samples.length - 1; index += 1) {
+    const current = samples[index];
+    const next = samples[index + 1];
+    if (timeSec >= current.timeSec && timeSec <= next.timeSec) return sampleBetween(current, next, timeSec);
+  }
+  return cloneAnimationSample(last);
+}
+
+function enforceLocomotionRootProgression(transition: PoseTransition, samples: AnimationClipSample[], strength = 0.68) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 3) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const window = sequenceActionWindow(transition, actionType);
+  const startSec = durationSec * window.startRatio;
+  const endSec = durationSec * window.endRatio;
+  const startSample = sampleFromMotionSamples(samples, startSec) || samples[0];
+  const endSample = sampleFromMotionSamples(samples, endSec) || samples[samples.length - 1];
+  const travelX = endSample.transform.position.x - startSample.transform.position.x;
+  const travelZ = endSample.transform.position.z - startSample.transform.position.z;
+  const travelDistance = Math.hypot(travelX, travelZ);
+  if (travelDistance <= 0.04) return samples;
+
+  const direction = vec(travelX / travelDistance, 0, travelZ / travelDistance);
+  const perpendicular = vec(-direction.z, 0, direction.x);
+  const next = samples.map(cloneAnimationSample);
+  let previousProjection = 0;
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const progress = locomotionRootProgress(actionType, localT, motionT);
+    const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+    const relativeX = sample.transform.position.x - startSample.transform.position.x;
+    const relativeZ = sample.transform.position.z - startSample.transform.position.z;
+    const projection = relativeX * direction.x + relativeZ * direction.z;
+    const lateral = relativeX * perpendicular.x + relativeZ * perpendicular.z;
+    const targetProjection = travelDistance * progress;
+    const minProjection = Math.max(previousProjection - travelDistance * 0.015, travelDistance * Math.max(0, progress - 0.055));
+    const maxProjection = travelDistance * Math.min(1, progress + 0.055);
+    const correctedProjection = clampNumber(lerp(projection, targetProjection, strength), minProjection, maxProjection);
+    const correctedLateral = lerp(lateral, gaitFrame.rootLateral, Math.min(0.72, strength * 0.62));
+    previousProjection = Math.max(previousProjection, correctedProjection);
+
+    sample.transform.position.x = Number((startSample.transform.position.x + direction.x * correctedProjection + perpendicular.x * correctedLateral).toFixed(4));
+    sample.transform.position.z = Number((startSample.transform.position.z + direction.z * correctedProjection + perpendicular.z * correctedLateral).toFixed(4));
+    const baseY = lerp(startSample.transform.position.y, endSample.transform.position.y, localT);
+    const maxBob = actionType === 'walk' ? 0.016 : actionType === 'run' ? 0.024 : 0.028;
+    sample.transform.position.y = Number((baseY + clampNumber(sample.transform.position.y - baseY, -0.012, maxBob)).toFixed(4));
+  }
+
+  next[0] = cloneAnimationSample(samples[0]);
+  next[next.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return next;
+}
+
 function stabilizeGroundedMotionSamples(transition: PoseTransition, samples: AnimationClipSample[]) {
   if (!groundedMotionActionType(transition) || samples.length <= 2) return samples;
   const actionType = transition.actionPlan.semanticPlan?.actionType;
@@ -5814,6 +9209,8 @@ function stabilizeGroundedMotionSamples(transition: PoseTransition, samples: Ani
   const travelDirection = travelDistance > 0.0001
     ? vec(travel.x / travelDistance, 0, travel.z / travelDistance)
     : normalizedDirection(transition.actionPlan.universal?.direction || vec());
+  const gaitDurationSec = locomotionEffectiveDurationSec(transition, actionType);
+  const tempoScale = locomotionGaitTempoScale(transition, actionType);
 
   for (let index = 1; index < next.length - 1; index += 1) {
     const sample = next[index];
@@ -5822,8 +9219,10 @@ function stabilizeGroundedMotionSamples(transition: PoseTransition, samples: Ani
     sample.transform.position.y = Number((baseY + clampMotionNumber(sample.transform.position.y - baseY, limits.minDrop, limits.maxLift)).toFixed(4));
 
     if (gait) {
-      const leftPlant = gaitFootPlantStrength(actionType, 'left', t, transition.durationSec);
-      const rightPlant = gaitFootPlantStrength(actionType, 'right', t, transition.durationSec);
+      const localT = sequenceActionLocalRatio(transition, actionType, t);
+      const motionT = semanticActionTime(transition, localT);
+      const leftPlant = gaitFootPlantStrength(actionType, 'left', motionT, gaitDurationSec, tempoScale);
+      const rightPlant = gaitFootPlantStrength(actionType, 'right', motionT, gaitDurationSec, tempoScale);
       sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, first.pose.leftFoot, leftPlant * 0.55);
       sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, first.pose.rightFoot, rightPlant * 0.55);
     } else if (transition.actionPlan.semanticPlan?.contacts.some((item) => item.contact === 'feet')) {
@@ -5832,15 +9231,17 @@ function stabilizeGroundedMotionSamples(transition: PoseTransition, samples: Ani
     }
 
     if (gait && travelDistance > 0.05 && (travelDirection.x || travelDirection.z)) {
-      const expectedX = lerp(first.transform.position.x, last.transform.position.x, t);
-      const expectedZ = lerp(first.transform.position.z, last.transform.position.z, t);
-      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedX, 0.18).toFixed(4));
-      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedZ, 0.18).toFixed(4));
+      const motionT = semanticActionTime(transition, t);
+      const gaitFrame = actionType ? locomotionGaitFrame(transition, actionType, motionT) : { rootLateral: 0 };
+      const expectedPosition = locomotionPlanarTargetPosition(transition, first, last, actionType, t, motionT, gaitFrame.rootLateral);
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedPosition.x, 0.24).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedPosition.z, 0.24).toFixed(4));
       const relativeX = sample.transform.position.x - first.transform.position.x;
       const relativeZ = sample.transform.position.z - first.transform.position.z;
       const projection = relativeX * travelDirection.x + relativeZ * travelDirection.z;
-      const minProjection = travelDistance * Math.max(0, t - 0.12);
-      const maxProjection = travelDistance * Math.min(1, t + 0.12);
+      const progress = locomotionRootProgress(actionType, t, motionT);
+      const minProjection = travelDistance * Math.max(0, progress - 0.12);
+      const maxProjection = travelDistance * Math.min(1, progress + 0.12);
       const clampedProjection = clampNumber(projection, minProjection, maxProjection);
       if (Math.abs(clampedProjection - projection) > 0.001) {
         sample.transform.position.x = Number((sample.transform.position.x + (clampedProjection - projection) * travelDirection.x).toFixed(4));
@@ -5870,13 +9271,14 @@ function applyBasicMotionContinuity(transition: PoseTransition, samples: Animati
   for (let index = 1; index < next.length - 1; index += 1) {
     const sample = next[index];
     const t = clamp01(sample.timeSec / durationSec);
+    const motionT = semanticActionTime(transition, t);
 
     if (isLocomotionActionType(actionType)) {
-      const expectedX = lerp(first.transform.position.x, last.transform.position.x, t);
-      const expectedZ = lerp(first.transform.position.z, last.transform.position.z, t);
+      const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+      const expectedPosition = locomotionPlanarTargetPosition(transition, first, last, actionType, t, motionT, gaitFrame.rootLateral);
       const blendStrength = travelDistance > 0.05 ? 0.68 : 0.92;
-      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedX, blendStrength).toFixed(4));
-      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedZ, blendStrength).toFixed(4));
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedPosition.x, blendStrength).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedPosition.z, blendStrength).toFixed(4));
       const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
       const bob = Math.max(0, sample.transform.position.y - baseY);
       sample.transform.position.y = Number((baseY + Math.min(bob, actionType === 'walk' ? 0.018 : 0.03)).toFixed(4));
@@ -5899,6 +9301,28 @@ function applyBasicMotionContinuity(transition: PoseTransition, samples: Animati
       sample.transform.position.x = Number(lerp(sample.transform.position.x, baseX, 0.62).toFixed(4));
       sample.transform.position.z = Number(lerp(sample.transform.position.z, baseZ, 0.62).toFixed(4));
       sample.transform.position.y = Number((baseY + Math.sin(t * Math.PI) * lift - compress - landing).toFixed(4));
+    }
+
+    if (actionType && isBasicMotionActionType(actionType) && actionType !== 'jump') {
+      const expectedPosition = isLocomotionActionType(actionType)
+        ? locomotionPlanarTargetPosition(transition, first, last, actionType, t, motionT)
+        : {
+            x: lerp(first.transform.position.x, last.transform.position.x, t),
+            y: lerp(first.transform.position.y, last.transform.position.y, t),
+            z: lerp(first.transform.position.z, last.transform.position.z, t)
+          };
+      const expectedX = expectedPosition.x;
+      const expectedY = lerp(first.transform.position.y, last.transform.position.y, t);
+      const expectedZ = expectedPosition.z;
+      const limits = groundedRootLimitsForAction(actionType);
+      const pathBlend = isLocomotionActionType(actionType) ? 0.34 : 0.48;
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, expectedX, pathBlend).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedZ, pathBlend).toFixed(4));
+      sample.transform.position.y = Number((expectedY + clampNumber(sample.transform.position.y - expectedY, limits.minDrop, limits.maxLift)).toFixed(4));
+      if (['push', 'pull', 'punch', 'block', 'throw', 'reach'].includes(actionType)) {
+        sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, first.pose.leftFoot, 0.46);
+        sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, first.pose.rightFoot, 0.46);
+      }
     }
   }
 
@@ -5933,28 +9357,94 @@ function smoothCameraMotionSamples(samples: CameraMotionSample[] | undefined) {
 }
 
 function motionQualityNeedsAutoCorrection(report: MotionQualityReport) {
-  return report.issues.some((issue) => (
+  const diagnosis = diagnoseMotionQuality(report);
+  return diagnosis.needsCorrection || report.issues.some((issue) => (
     issue.severity === 'error'
     || issue.metric === 'speed'
     || issue.metric === 'rotation'
     || issue.metric === 'foot_lock'
+    || issue.metric === 'contact'
+    || issue.metric === 'sequence'
     || (issue.metric === 'pose' && issue.severity === 'warning')
-  ));
+  ))
+    || (report.metrics.semanticContactBodyDrive !== undefined && report.metrics.semanticContactBodyDrive < 8)
+    || (report.metrics.semanticContactFootStability !== undefined && report.metrics.semanticContactFootStability < 0.42)
+    || (report.metrics.semanticPropMotionDistance !== undefined && report.metrics.semanticPropMotionDistance < 0.14)
+    || (report.metrics.semanticThrowReleaseDistance !== undefined && report.metrics.semanticThrowReleaseDistance < 0.62);
+}
+
+function diagnoseMotionQuality(report: MotionQualityReport) {
+  const hasMessage = (text: string) => report.issues.some((issue) => issue.message.includes(text));
+  const hasMetric = (metric: MotionQualityIssue['metric']) => report.issues.some((issue) => issue.metric === metric);
+  const locomotionNeedsGait = hasMessage('左右腿交替')
+    || hasMessage('手臂反向摆动')
+    || hasMessage('手臂反摆')
+    || hasMessage('支撑脚交替')
+    || hasMessage('脚步接触帧不足')
+    || hasMessage('脚步接触帧与步态相位不匹配')
+    || (report.metrics.locomotionLegSeparation !== undefined && report.metrics.locomotionLegSeparation < 10)
+    || (report.metrics.locomotionLegSignChanges !== undefined && report.metrics.locomotionLegSignChanges < 1)
+    || (report.metrics.locomotionSupportSwitchCount !== undefined && report.metrics.locomotionSupportSwitchCount < 1)
+    || (report.metrics.locomotionArmLegSyncScore !== undefined && report.metrics.locomotionArmLegSyncScore < 0.34);
+  const locomotionNeedsRoot = hasMessage('根节点步速不稳定')
+    || hasMessage('根节点出现反向回抽')
+    || hasMessage('根节点位移没有达到提示词要求')
+    || hasMessage('根节点速度出现尖峰')
+    || hasMessage('采样密度不足')
+    || (report.metrics.locomotionRootStepJitter !== undefined && report.metrics.locomotionRootStepJitter > 0.56)
+    || Boolean(report.metrics.locomotionRootBacktrackCount)
+    || (report.metrics.rootVelocitySpikeRatio !== undefined && report.metrics.rootVelocitySpikeRatio > 2.8)
+    || (report.metrics.locomotionPaceCoverageRatio !== undefined && report.metrics.locomotionExpectedTravelDistance !== undefined && report.metrics.locomotionExpectedTravelDistance > 0.08 && report.metrics.locomotionPaceCoverageRatio < 0.66);
+  const contactNeedsCorrection = hasMetric('contact')
+    || (report.metrics.semanticHandContactSuccessRatio !== undefined && report.metrics.semanticHandContactSuccessRatio < 0.65)
+    || (report.metrics.semanticHandReachDistance !== undefined && report.metrics.semanticHandReachDistance > 0.62)
+    || (report.metrics.semanticContactBodyDrive !== undefined && report.metrics.semanticContactBodyDrive < 8)
+    || (report.metrics.semanticContactFootStability !== undefined && report.metrics.semanticContactFootStability < 0.42)
+    || (report.metrics.semanticContactWindowCoverage !== undefined && report.metrics.semanticContactWindowCoverage < 0.65)
+    || (report.metrics.semanticPropMotionDistance !== undefined && report.metrics.semanticPropMotionDistance < 0.14)
+    || (report.metrics.semanticPropDirectionAlignment !== undefined && report.metrics.semanticPropDirectionAlignment < 0.45)
+    || (report.metrics.semanticThrowReleaseDistance !== undefined && report.metrics.semanticThrowReleaseDistance < 0.62);
+  const sequenceNeedsSmoothing = hasMetric('sequence')
+    || (report.metrics.sequenceBoundarySmoothnessRatio !== undefined && report.metrics.sequenceBoundarySmoothnessRatio < 0.72)
+    || (report.metrics.sequenceBoundaryMaxPoseDelta !== undefined && report.metrics.sequenceBoundaryMaxPoseDelta > 34)
+    || (report.metrics.sequenceBoundaryMaxRootDelta !== undefined && report.metrics.sequenceBoundaryMaxRootDelta > 0.13)
+    || (report.metrics.sequenceBoundaryMaxVelocityRatio !== undefined && report.metrics.sequenceBoundaryMaxVelocityRatio > 2.55);
+  const airborneNeedsClamp = hasMessage('离地');
+  const excessivePoseNeedsDamping = hasMessage('幅度过大')
+    || hasMessage('关节跳变')
+    || hasMessage('关节速度出现尖峰')
+    || hasMetric('rotation')
+    || (report.metrics.poseVelocitySpikeRatio !== undefined && report.metrics.poseVelocitySpikeRatio > 3.25);
+  return {
+    locomotionNeedsGait,
+    locomotionNeedsRoot,
+    contactNeedsCorrection,
+    sequenceNeedsSmoothing,
+    airborneNeedsClamp,
+    excessivePoseNeedsDamping,
+    needsCorrection: locomotionNeedsGait
+      || locomotionNeedsRoot
+      || contactNeedsCorrection
+      || sequenceNeedsSmoothing
+      || airborneNeedsClamp
+      || excessivePoseNeedsDamping
+  };
 }
 
 function alignSampleEndpoints(samples: AnimationClipSample[], transition: PoseTransition) {
   if (!samples.length) return samples;
   const next = samples.map(cloneAnimationSample);
+  const preserveEndpointBonePose = !semanticMotionUsesRigPose(transition);
   if (transition.startTransform) next[0].transform = clonePoseTransform(transition.startTransform);
   if (transition.startPose) next[0].pose = clonePose(transition.startPose);
-  if (transition.startBonePose) next[0].bonePose = cloneBonePose(transition.startBonePose);
+  next[0].bonePose = preserveEndpointBonePose ? cloneBonePose(transition.startBonePose) : undefined;
   if (transition.startFingerPose) next[0].fingerPose = cloneFingerPose(transition.startFingerPose);
   if (transition.startToePose) next[0].toePose = cloneToePose(transition.startToePose);
   if (transition.startLibTvJointAngles) next[0].libTvJointAngles = cloneLibTvJointAngles(transition.startLibTvJointAngles);
   const last = next.length - 1;
   if (transition.endTransform) next[last].transform = clonePoseTransform(transition.endTransform);
   if (transition.endPose) next[last].pose = clonePose(transition.endPose);
-  if (transition.endBonePose) next[last].bonePose = cloneBonePose(transition.endBonePose);
+  next[last].bonePose = preserveEndpointBonePose ? cloneBonePose(transition.endBonePose) : undefined;
   if (transition.endFingerPose) next[last].fingerPose = cloneFingerPose(transition.endFingerPose);
   if (transition.endToePose) next[last].toePose = cloneToePose(transition.endToePose);
   if (transition.endLibTvJointAngles) next[last].libTvJointAngles = cloneLibTvJointAngles(transition.endLibTvJointAngles);
@@ -5964,13 +9454,17 @@ function alignSampleEndpoints(samples: AnimationClipSample[], transition: PoseTr
 function clampNonAirborneRootMotion(samples: AnimationClipSample[], transition: PoseTransition) {
   if (transitionAllowsAirborneMotion(transition) || samples.length <= 2) return samples;
   const startY = transition.startTransform?.position.y ?? samples[0].transform.position.y;
+  const endY = transition.endTransform?.position.y ?? samples[samples.length - 1].transform.position.y;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
   const actionType = transition.actionPlan.semanticPlan?.actionType;
-  const maxLift = actionType === 'kick' || actionType === 'side_kick' ? 0.055 : 0.045;
-  const minDrop = actionType === 'fall' ? -0.36 : actionType === 'crouch' || actionType === 'crawl' ? -0.24 : -0.16;
+  const skillLimits = motionActionSkill(actionType)?.rootLimits;
+  const maxLift = skillLimits ? Math.max(0.02, skillLimits.maxLift) : 0.045;
+  const minDrop = actionType === 'fall' ? -0.36 : skillLimits ? skillLimits.minDrop : -0.16;
   return samples.map((sample, index) => {
     if (index === 0 || index === samples.length - 1) return cloneAnimationSample(sample);
     const next = cloneAnimationSample(sample);
-    next.transform.position.y = Number(clampNumber(next.transform.position.y, startY + minDrop, startY + maxLift).toFixed(4));
+    const baseY = lerp(startY, endY, clamp01(sample.timeSec / durationSec));
+    next.transform.position.y = Number(clampNumber(next.transform.position.y, baseY + minDrop, baseY + maxLift).toFixed(4));
     return next;
   });
 }
@@ -5992,8 +9486,300 @@ function dampExcessivePoseDeltas(samples: AnimationClipSample[], transition: Pos
   return next;
 }
 
+function reapplyLocomotionPlantPoseLocks(samples: AnimationClipSample[], transition: PoseTransition) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 2) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const gaitDurationSec = locomotionEffectiveDurationSec(transition, actionType);
+  const tempoScale = locomotionGaitTempoScale(transition, actionType);
+  const window = sequenceActionWindow(transition, actionType);
+  const plantRefs: Record<'left' | 'right', RigRotation | null> = { left: null, right: null };
+  next.forEach((sample, index) => {
+    if (index === 0 || index === next.length - 1) return;
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) return;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    (['left', 'right'] as const).forEach((limb) => {
+      const poseKey: PoseJointKey = limb === 'left' ? 'leftFoot' : 'rightFoot';
+      const plant = gaitFootPlantStrength(actionType, limb, motionT, gaitDurationSec, tempoScale);
+      if (plant < 0.38) {
+        plantRefs[limb] = null;
+        return;
+      }
+      if (!plantRefs[limb]) {
+        plantRefs[limb] = { ...sample.pose[poseKey] };
+        return;
+      }
+      const strength = clamp01((plant - 0.38) / 0.42) * 0.9;
+      sample.pose[poseKey] = slerpRotation(sample.pose[poseKey], plantRefs[limb], strength);
+    });
+  });
+  return alignSampleEndpoints(next, transition);
+}
+
+function stabilizeLocomotionFootPhases(transition: PoseTransition, samples: AnimationClipSample[]) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 2) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const first = samples[0];
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const gaitDurationSec = locomotionEffectiveDurationSec(transition, actionType);
+  const tempoScale = locomotionGaitTempoScale(transition, actionType);
+  const window = sequenceActionWindow(transition, actionType);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const left = gaitLimbSample(actionType, 'left', motionT, gaitDurationSec, tempoScale);
+    const right = gaitLimbSample(actionType, 'right', motionT, gaitDurationSec, tempoScale);
+    const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+    const stableBasePose = locomotionStableBasePose(first.pose, actionType);
+    const targetPose = offsetPose(stableBasePose, gaitFrame.posePatch);
+    const envelope = locomotionEnvelope(motionT);
+
+    ([
+      { upper: 'leftUpperLeg' as PoseJointKey, lower: 'leftLowerLeg' as PoseJointKey, foot: 'leftFoot' as PoseJointKey, step: left },
+      { upper: 'rightUpperLeg' as PoseJointKey, lower: 'rightLowerLeg' as PoseJointKey, foot: 'rightFoot' as PoseJointKey, step: right }
+    ]).forEach(({ upper, lower, foot, step }) => {
+      const plantStrength = clamp01(step.plant);
+      const swingStrength = clamp01(step.swing);
+      const plantPoseStrength = plantStrength * (actionType === 'walk' ? 0.82 : actionType === 'run' ? 0.72 : 0.64) * envelope;
+      const swingPoseStrength = swingStrength * (actionType === 'walk' ? 0.48 : actionType === 'run' ? 0.56 : 0.62) * envelope;
+      sample.pose[foot] = slerpRotation(sample.pose[foot], first.pose[foot], plantPoseStrength);
+      sample.pose[upper] = slerpRotation(sample.pose[upper], targetPose[upper], Math.max(plantPoseStrength * 0.26, swingPoseStrength));
+      sample.pose[lower] = slerpRotation(sample.pose[lower], targetPose[lower], Math.max(plantPoseStrength * 0.22, swingPoseStrength));
+      if (swingStrength > 0.04) {
+        sample.pose[foot] = slerpRotation(sample.pose[foot], targetPose[foot], swingPoseStrength * 0.82);
+      }
+    });
+
+    sample.pose.leftUpperArm = slerpRotation(sample.pose.leftUpperArm, targetPose.leftUpperArm, 0.48 * envelope);
+    sample.pose.rightUpperArm = slerpRotation(sample.pose.rightUpperArm, targetPose.rightUpperArm, 0.48 * envelope);
+    sample.pose.leftLowerArm = slerpRotation(sample.pose.leftLowerArm, targetPose.leftLowerArm, 0.34 * envelope);
+    sample.pose.rightLowerArm = slerpRotation(sample.pose.rightLowerArm, targetPose.rightLowerArm, 0.34 * envelope);
+    sample.pose.pelvis = slerpRotation(sample.pose.pelvis, targetPose.pelvis, 0.22 * envelope);
+    sample.pose.chest = slerpRotation(sample.pose.chest, targetPose.chest, 0.18 * envelope);
+  }
+
+  next[0] = cloneAnimationSample(samples[0]);
+  next[next.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return next;
+}
+
+function applyLocomotionPhaseConsistency(transition: PoseTransition, samples: AnimationClipSample[], strength = 0.44) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 3) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const window = sequenceActionWindow(transition, actionType);
+  const startSample = sampleFromMotionSamples(samples, durationSec * window.startRatio) || samples[0];
+  const endSample = sampleFromMotionSamples(samples, durationSec * window.endRatio) || samples[samples.length - 1];
+  const travelDistance = Math.hypot(
+    endSample.transform.position.x - startSample.transform.position.x,
+    endSample.transform.position.z - startSample.transform.position.z
+  );
+  const next = samples.map(cloneAnimationSample);
+  const stableBasePose = locomotionStableBasePose(startSample.pose, actionType);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const envelope = locomotionEnvelope(motionT);
+    if (envelope <= 0.001) continue;
+    const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+    const targetPose = offsetPose(stableBasePose, gaitFrame.posePatch);
+    const phaseStrength = clamp01(strength * envelope);
+
+    if (travelDistance > 0.04) {
+      const targetPosition = locomotionPlanarTargetPosition(transition, startSample, endSample, actionType, t, motionT, gaitFrame.rootLateral);
+      const rootStrength = phaseStrength * (actionType === 'walk' ? 0.42 : actionType === 'run' ? 0.48 : 0.52);
+      sample.transform.position.x = Number(lerp(sample.transform.position.x, targetPosition.x, rootStrength).toFixed(4));
+      sample.transform.position.z = Number(lerp(sample.transform.position.z, targetPosition.z, rootStrength).toFixed(4));
+      const baseY = lerp(startSample.transform.position.y, endSample.transform.position.y, localT);
+      const targetY = baseY + gaitFrame.rootBob;
+      sample.transform.position.y = Number(lerp(sample.transform.position.y, targetY, rootStrength * 0.34).toFixed(4));
+    }
+
+    sample.pose.leftUpperLeg = slerpRotation(sample.pose.leftUpperLeg, targetPose.leftUpperLeg, phaseStrength * 0.58);
+    sample.pose.rightUpperLeg = slerpRotation(sample.pose.rightUpperLeg, targetPose.rightUpperLeg, phaseStrength * 0.58);
+    sample.pose.leftLowerLeg = slerpRotation(sample.pose.leftLowerLeg, targetPose.leftLowerLeg, phaseStrength * 0.52);
+    sample.pose.rightLowerLeg = slerpRotation(sample.pose.rightLowerLeg, targetPose.rightLowerLeg, phaseStrength * 0.52);
+    sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, targetPose.leftFoot, phaseStrength * (gaitFrame.leftStep.swing > 0.04 ? 0.42 : 0.16));
+    sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, targetPose.rightFoot, phaseStrength * (gaitFrame.rightStep.swing > 0.04 ? 0.42 : 0.16));
+    sample.pose.leftUpperArm = slerpRotation(sample.pose.leftUpperArm, targetPose.leftUpperArm, phaseStrength * 0.66);
+    sample.pose.rightUpperArm = slerpRotation(sample.pose.rightUpperArm, targetPose.rightUpperArm, phaseStrength * 0.66);
+    sample.pose.leftLowerArm = slerpRotation(sample.pose.leftLowerArm, targetPose.leftLowerArm, phaseStrength * 0.44);
+    sample.pose.rightLowerArm = slerpRotation(sample.pose.rightLowerArm, targetPose.rightLowerArm, phaseStrength * 0.44);
+    sample.pose.pelvis = slerpRotation(sample.pose.pelvis, targetPose.pelvis, phaseStrength * 0.26);
+    sample.pose.chest = slerpRotation(sample.pose.chest, targetPose.chest, phaseStrength * 0.22);
+  }
+
+  next[0] = cloneAnimationSample(samples[0]);
+  next[next.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return next;
+}
+
+function applyLocomotionGoldenStandard(transition: PoseTransition, samples: AnimationClipSample[], strength = 0.5) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 3) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const window = sequenceActionWindow(transition, actionType);
+  const startSample = sampleFromMotionSamples(samples, durationSec * window.startRatio) || samples[0];
+  const endSample = sampleFromMotionSamples(samples, durationSec * window.endRatio) || samples[samples.length - 1];
+  const stableBasePose = locomotionStableBasePose(startSample.pose, actionType);
+  const gait = locomotionGaitConfig(actionType);
+  const maxBob = actionType === 'walk' ? 0.014 : actionType === 'run' ? 0.022 : 0.026;
+  const next = samples.map(cloneAnimationSample);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const envelope = locomotionEnvelope(motionT);
+    if (envelope <= 0.001) continue;
+    const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+    const targetPose = offsetPose(stableBasePose, gaitFrame.posePatch);
+    const rootStrength = clamp01(strength * envelope * (actionType === 'walk' ? 0.82 : actionType === 'run' ? 0.9 : 0.96));
+    const poseStrength = clamp01(strength * envelope);
+    const targetPosition = locomotionPlanarTargetPosition(transition, startSample, endSample, actionType, t, motionT, gaitFrame.rootLateral);
+    const baseY = lerp(startSample.transform.position.y, endSample.transform.position.y, localT);
+    const targetY = baseY + clampMotionNumber(gaitFrame.rootBob, 0, maxBob);
+    sample.transform.position.x = Number(lerp(sample.transform.position.x, targetPosition.x, rootStrength).toFixed(4));
+    sample.transform.position.z = Number(lerp(sample.transform.position.z, targetPosition.z, rootStrength).toFixed(4));
+    sample.transform.position.y = Number(lerp(sample.transform.position.y, targetY, rootStrength * 0.72).toFixed(4));
+    sample.transform.position.y = Number((baseY + clampMotionNumber(sample.transform.position.y - baseY, -0.006, maxBob)).toFixed(4));
+
+    const leftPlant = gait ? clamp01(gaitFrame.leftStep.plant / Math.max(0.001, gait.footPlant)) : 0;
+    const rightPlant = gait ? clamp01(gaitFrame.rightStep.plant / Math.max(0.001, gait.footPlant)) : 0;
+    sample.pose.leftUpperLeg = slerpRotation(sample.pose.leftUpperLeg, targetPose.leftUpperLeg, poseStrength * 0.7);
+    sample.pose.rightUpperLeg = slerpRotation(sample.pose.rightUpperLeg, targetPose.rightUpperLeg, poseStrength * 0.7);
+    sample.pose.leftLowerLeg = slerpRotation(sample.pose.leftLowerLeg, targetPose.leftLowerLeg, poseStrength * 0.64);
+    sample.pose.rightLowerLeg = slerpRotation(sample.pose.rightLowerLeg, targetPose.rightLowerLeg, poseStrength * 0.64);
+    sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, leftPlant > 0.34 ? stableBasePose.leftFoot : targetPose.leftFoot, poseStrength * (leftPlant > 0.34 ? 0.72 : 0.52));
+    sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, rightPlant > 0.34 ? stableBasePose.rightFoot : targetPose.rightFoot, poseStrength * (rightPlant > 0.34 ? 0.72 : 0.52));
+    sample.pose.leftUpperArm = slerpRotation(sample.pose.leftUpperArm, targetPose.leftUpperArm, poseStrength * 0.74);
+    sample.pose.rightUpperArm = slerpRotation(sample.pose.rightUpperArm, targetPose.rightUpperArm, poseStrength * 0.74);
+    sample.pose.leftLowerArm = slerpRotation(sample.pose.leftLowerArm, targetPose.leftLowerArm, poseStrength * 0.52);
+    sample.pose.rightLowerArm = slerpRotation(sample.pose.rightLowerArm, targetPose.rightLowerArm, poseStrength * 0.52);
+    sample.pose.pelvis = slerpRotation(sample.pose.pelvis, targetPose.pelvis, poseStrength * 0.34);
+    sample.pose.chest = slerpRotation(sample.pose.chest, targetPose.chest, poseStrength * 0.28);
+    sample.pose.head = slerpRotation(sample.pose.head, targetPose.head, poseStrength * 0.14);
+  }
+
+  return reapplyLocomotionPlantPoseLocks(alignSampleEndpoints(next, transition), transition);
+}
+
+function easeLocomotionEndpointPoseTransitions(transition: PoseTransition, samples: AnimationClipSample[]) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 4) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const window = sequenceActionWindow(transition, actionType);
+  const startSample = sampleFromMotionSamples(samples, durationSec * window.startRatio) || samples[0];
+  const endSample = sampleFromMotionSamples(samples, durationSec * window.endRatio) || samples[samples.length - 1];
+  const next = samples.map(cloneAnimationSample);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const ratio = clamp01(sample.timeSec / durationSec);
+    if (ratio < window.startRatio || ratio > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, ratio);
+    const enterHold = 1 - ramp(localT, actionType === 'walk' ? 0.02 : 0.04, actionType === 'walk' ? 0.18 : 0.22);
+    const exitHold = ramp(localT, actionType === 'walk' ? 0.82 : 0.76, actionType === 'walk' ? 0.98 : 0.96);
+    if (enterHold > 0.001) {
+      sample.pose = blendPose(sample.pose, startSample.pose, enterHold * 0.68);
+    }
+    if (exitHold > 0.001) {
+      sample.pose = blendPose(sample.pose, endSample.pose, exitHold * 0.62);
+    }
+  }
+
+  return alignSampleEndpoints(next, transition);
+}
+
+function finalizeLocomotionGoldenStandard(transition: PoseTransition, samples: AnimationClipSample[], strength = 0.66) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 3) return alignSampleEndpoints(samples, transition);
+  const clampedStrength = clamp01(strength);
+  let next = samples.map(cloneAnimationSample);
+  next = applyLocomotionGaitBaseline(transition, next);
+  next = applyLocomotionPhaseConsistency(transition, next, 0.48 + clampedStrength * 0.18);
+  next = stabilizeLocomotionFootPhases(transition, next);
+  next = applyLocomotionGoldenStandard(transition, next, 0.56 + clampedStrength * 0.16);
+  next = easeLocomotionEndpointPoseTransitions(transition, next);
+  next = enforceLocomotionRootProgression(transition, next, 0.78 + clampedStrength * 0.16);
+  next = smoothRootVelocityContinuity(transition, next);
+  next = stabilizeGroundedMotionSamples(transition, next);
+  next = clampNonAirborneRootMotion(next, transition);
+  next = dampExcessivePoseDeltas(next, transition);
+  next = reapplyLocomotionPlantPoseLocks(next, transition);
+  return alignSampleEndpoints(next, transition);
+}
+
+function applyPromptControlPoseReinforcement(transition: PoseTransition, samples: AnimationClipSample[]) {
+  if (samples.length <= 2) return samples;
+  const promptControl = motionPromptControlSummary(transition.actionPrompt, transition.actionPlan.universal, transition.actionPlan.semanticPlan);
+  const needsLowCenter = promptControl.bodyTags.includes('低重心');
+  const needsForwardLean = promptControl.bodyTags.includes('身体前压');
+  const needsBackLean = promptControl.bodyTags.includes('身体后仰');
+  if (!needsLowCenter && !needsForwardLean && !needsBackLean) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const next = samples.map(cloneAnimationSample);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    const envelope = Math.sin(t * Math.PI);
+    if (envelope <= 0.001) continue;
+    const patch: Partial<StandardHumanRigPose> = {};
+    if (needsLowCenter) {
+      Object.assign(patch, {
+        pelvis: { x: -8 * envelope },
+        chest: { x: 5 * envelope },
+        leftUpperLeg: { x: -18 * envelope },
+        rightUpperLeg: { x: -18 * envelope },
+        leftLowerLeg: { x: 28 * envelope },
+        rightLowerLeg: { x: 28 * envelope },
+        leftFoot: { x: -5 * envelope },
+        rightFoot: { x: -5 * envelope }
+      });
+      sample.transform.position.y = Number((sample.transform.position.y - 0.025 * envelope).toFixed(4));
+    }
+    if (needsForwardLean) {
+      Object.assign(patch, {
+        pelvis: { ...(patch.pelvis || {}), x: (patch.pelvis?.x || 0) - 4 * envelope },
+        chest: { ...(patch.chest || {}), x: (patch.chest?.x || 0) - 7 * envelope },
+        head: { x: -2 * envelope }
+      });
+    }
+    if (needsBackLean) {
+      Object.assign(patch, {
+        pelvis: { ...(patch.pelvis || {}), x: (patch.pelvis?.x || 0) + 4 * envelope },
+        chest: { ...(patch.chest || {}), x: (patch.chest?.x || 0) + 8 * envelope },
+        head: { x: 2 * envelope }
+      });
+    }
+    sample.pose = offsetPose(sample.pose, patch);
+  }
+
+  next[0] = cloneAnimationSample(samples[0]);
+  next[next.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return next;
+}
+
 function reapplyFootLockPoses(samples: AnimationClipSample[], transition: PoseTransition) {
   if (!transition.constraints.footLock.enabled || !samples.length) return samples;
+  if (isLocomotionActionType(sequenceLocomotionActionType(transition))) {
+    return reapplyLocomotionPlantPoseLocks(stabilizeLocomotionFootPhases(transition, samples), transition);
+  }
   const next = samples.map(cloneAnimationSample);
   const leftRef = samples[0].pose.leftFoot;
   const rightRef = samples[0].pose.rightFoot;
@@ -6005,31 +9791,654 @@ function reapplyFootLockPoses(samples: AnimationClipSample[], transition: PoseTr
   return next;
 }
 
-function autoCorrectMotionSamples(transition: PoseTransition, samples: AnimationClipSample[], report: MotionQualityReport) {
+function applyLocomotionGaitBaseline(transition: PoseTransition, samples: AnimationClipSample[]) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 2) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const durationSec = Math.max(0.0001, transition.durationSec || last.timeSec || 1);
+  const travel = locomotionTravelVector(transition, samples);
+  const strength = locomotionBaselineStrength(actionType);
+  const window = sequenceActionWindow(transition, actionType);
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const envelope = locomotionEnvelope(motionT);
+    if (envelope <= 0.001) continue;
+
+    const baseline = sampleBetween(first, last, sample.timeSec);
+    const stableBasePose = locomotionStableBasePose(baseline.pose, actionType);
+    const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+    const targetPose = offsetPose(stableBasePose, gaitFrame.posePatch);
+    targetPose.leftFoot = slerpRotation(targetPose.leftFoot, baseline.pose.leftFoot, gaitFrame.leftStep.plant * 0.74);
+    targetPose.rightFoot = slerpRotation(targetPose.rightFoot, baseline.pose.rightFoot, gaitFrame.rightStep.plant * 0.74);
+    targetPose.leftUpperLeg = slerpRotation(targetPose.leftUpperLeg, stableBasePose.leftUpperLeg, gaitFrame.leftStep.plant * 0.16);
+    targetPose.rightUpperLeg = slerpRotation(targetPose.rightUpperLeg, stableBasePose.rightUpperLeg, gaitFrame.rightStep.plant * 0.16);
+    targetPose.leftLowerLeg = slerpRotation(targetPose.leftLowerLeg, stableBasePose.leftLowerLeg, gaitFrame.leftStep.plant * 0.14);
+    targetPose.rightLowerLeg = slerpRotation(targetPose.rightLowerLeg, stableBasePose.rightLowerLeg, gaitFrame.rightStep.plant * 0.14);
+    sample.pose = blendPose(sample.pose, targetPose, strength * envelope);
+
+    const targetPosition = locomotionPlanarTargetPosition(transition, first, last, actionType, t, motionT, gaitFrame.rootLateral);
+    const rootStrength = (actionType === 'walk' ? 0.52 : actionType === 'run' ? 0.58 : 0.64) * envelope;
+    sample.transform.position.x = Number(lerp(sample.transform.position.x, targetPosition.x, rootStrength).toFixed(4));
+    sample.transform.position.z = Number(lerp(sample.transform.position.z, targetPosition.z, rootStrength).toFixed(4));
+    if (travel.distance > 0.08 && (travel.direction.x || travel.direction.z)) {
+      const relativeX = sample.transform.position.x - first.transform.position.x;
+      const relativeZ = sample.transform.position.z - first.transform.position.z;
+      const projection = relativeX * travel.direction.x + relativeZ * travel.direction.z;
+      const progress = locomotionRootProgress(actionType, t, motionT);
+      const minProjection = travel.distance * Math.max(0, progress - 0.08);
+      const maxProjection = travel.distance * Math.min(1, progress + 0.08);
+      const clampedProjection = clampNumber(projection, minProjection, maxProjection);
+      sample.transform.position.x = Number((sample.transform.position.x + (clampedProjection - projection) * travel.direction.x).toFixed(4));
+      sample.transform.position.z = Number((sample.transform.position.z + (clampedProjection - projection) * travel.direction.z).toFixed(4));
+    }
+    const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
+    sample.transform.position.y = Number((baseY + Math.min(gaitFrame.rootBob, actionType === 'walk' ? 0.016 : 0.026)).toFixed(4));
+  }
+
+  return alignSampleEndpoints(next, transition);
+}
+
+function reinforceLocomotionGaitSamples(transition: PoseTransition, samples: AnimationClipSample[], report: MotionQualityReport) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 2) return { samples, applied: false };
+  const needsGaitCorrection = report.issues.some((issue) => (
+    issue.metric === 'pose'
+    || issue.metric === 'foot_lock'
+    || issue.metric === 'speed'
+  ));
+  if (!needsGaitCorrection) return { samples, applied: false };
+
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const durationSec = Math.max(0.0001, transition.durationSec || last.timeSec || 1);
+  const next = samples.map(cloneAnimationSample);
+  const window = sequenceActionWindow(transition, actionType);
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const envelope = locomotionEnvelope(motionT);
+    if (envelope <= 0.001) continue;
+
+    const baseline = sampleBetween(first, last, sample.timeSec);
+    const stableBasePose = locomotionStableBasePose(baseline.pose, actionType);
+    const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+    const targetPose = offsetPose(stableBasePose, gaitFrame.posePatch);
+    targetPose.leftFoot = slerpRotation(targetPose.leftFoot, baseline.pose.leftFoot, gaitFrame.leftStep.plant * 0.72);
+    targetPose.rightFoot = slerpRotation(targetPose.rightFoot, baseline.pose.rightFoot, gaitFrame.rightStep.plant * 0.72);
+    const targetTransform = clonePoseTransform(baseline.transform);
+    targetTransform.position = locomotionPlanarTargetPosition(transition, first, last, actionType, t, motionT, gaitFrame.rootLateral);
+    targetTransform.position.y += gaitFrame.rootBob;
+
+    const strength = locomotionBaselineStrength(actionType, true);
+    sample.pose = blendPose(sample.pose, targetPose, strength * envelope);
+    sample.transform = blendPoseTransform(sample.transform, targetTransform, Math.min(0.7, strength * 0.72 * envelope));
+  }
+
+  return { samples: alignSampleEndpoints(next, transition), applied: true };
+}
+
+function reinforceSemanticSkillSamples(transition: PoseTransition, samples: AnimationClipSample[], report: MotionQualityReport) {
+  const actionType = transition.actionPlan.semanticPlan?.actionType;
+  if (!actionType || !isBasicMotionActionType(actionType) || samples.length <= 2) {
+    return { samples, applied: false };
+  }
+  if (isLocomotionActionType(actionType)) return { samples, applied: false };
+  const needsSemanticReinforcement = report.issues.some((issue) => (
+    issue.metric === 'pose'
+    || issue.metric === 'contact'
+    || issue.metric === 'foot_lock'
+  ));
+  if (!needsSemanticReinforcement) return { samples, applied: false };
+
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const baseStrength = isLocomotionActionType(actionType)
+    ? 0.48
+    : actionType === 'push' || actionType === 'pull' || actionType === 'throw'
+      ? 0.42
+      : 0.36;
+  const next = samples.map(cloneAnimationSample);
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    const motionT = semanticActionTime(transition, t);
+    const envelope = isLocomotionActionType(actionType) ? locomotionEnvelope(motionT) : Math.min(ramp(motionT, 0.02, 0.12), 1 - ramp(motionT, 0.94, 1));
+    if (envelope <= 0.001) continue;
+    const reinforcedTransform = clonePoseTransform(sample.transform);
+    const reinforcedPose = applySemanticActionStageOverlay(sample.pose, reinforcedTransform, transition, motionT);
+    sample.pose = blendPose(sample.pose, reinforcedPose, baseStrength * envelope);
+    sample.transform = blendPoseTransform(sample.transform, reinforcedTransform, Math.min(0.24, baseStrength * 0.45 * envelope));
+  }
+  return { samples: alignSampleEndpoints(next, transition), applied: true };
+}
+
+function reinforceActionSequenceSamples(transition: PoseTransition, samples: AnimationClipSample[], report: MotionQualityReport) {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  if (!sequence || sequence.length <= 1 || samples.length <= 2) return { samples, applied: false };
+  const needsSequenceCorrection = report.issues.some((issue) => issue.metric === 'sequence') || sequenceQualityNeedsWindowRebalance(report);
+  if (!needsSequenceCorrection) return { samples, applied: false };
+
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const next = samples.map(cloneAnimationSample);
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    const active = activeSequenceWeights(sequence, t);
+    if (!active.length) continue;
+    const basePose = clonePose(sample.pose);
+    const baseTransform = clonePoseTransform(sample.transform);
+    let blendedPose: StandardHumanRigPose | null = null;
+    let blendedTransform: PoseTransform | null = null;
+    let totalWeight = 0;
+
+    active.forEach(({ step, weight }) => {
+      const localT = stageProgress(t, step.startRatio, step.endRatio);
+      const scopedTransition = transitionWithSequenceAction(transition, step);
+      const targetTransform = clonePoseTransform(baseTransform);
+      const targetPose = applySemanticActionStageOverlay(basePose, targetTransform, scopedTransition, semanticActionTime(scopedTransition, localT));
+      const actionStrength = isLocomotionActionType(step.actionType)
+        ? 0.46
+        : step.actionType === 'push' || step.actionType === 'pull' || step.actionType === 'throw'
+          ? 0.42
+          : 0.38;
+      const weightedStrength = actionStrength * weight;
+      const mixWeight = totalWeight > 0 ? weightedStrength / (totalWeight + weightedStrength) : 1;
+      blendedPose = blendedPose ? blendPose(blendedPose, targetPose, mixWeight) : targetPose;
+      blendedTransform = blendedTransform ? blendPoseTransform(blendedTransform, targetTransform, mixWeight) : targetTransform;
+      totalWeight += weightedStrength;
+    });
+    if (blendedPose && blendedTransform && totalWeight > 0.001) {
+      sample.pose = blendPose(basePose, blendedPose, Math.min(0.62, totalWeight));
+      sample.transform = blendPoseTransform(baseTransform, blendedTransform, Math.min(0.3, totalWeight * 0.55));
+      sample.pose = applySequenceTransitionContinuity(sample.pose, sample.transform, sequence, t);
+    }
+  }
+  return { samples: alignSampleEndpoints(applyBasicMotionContinuity(transition, next), transition), applied: true };
+}
+
+function reinforceHandContactSamples(
+  samples: AnimationClipSample[],
+  contacts: AnimationContactFrame[] | undefined,
+  report: MotionQualityReport,
+  intensity = 1
+) {
+  const handContacts = (contacts || []).filter((contact) => (
+    (contact.kind === 'reach' || contact.kind === 'grasp' || contact.kind === 'release')
+    && (contact.limb === 'leftHand' || contact.limb === 'rightHand')
+  ));
+  const needsHandCorrection = handContacts.length > 0 && report.issues.some((issue) => issue.metric === 'contact');
+  if (!needsHandCorrection || samples.length <= 2) return { samples, applied: false };
+
+  const next = samples.map(cloneAnimationSample);
+  handContacts.forEach((contact) => {
+    const hand = contact.limb === 'leftHand' ? 'left' : 'right';
+    const windowSec = (contact.kind === 'grasp' ? 0.32 : contact.kind === 'release' ? 0.18 : 0.26) * clampNumber(intensity, 1, 1.65);
+    const baseStrength = (contact.kind === 'release' ? 0.52 : contact.kind === 'grasp' ? 0.72 : 0.64) * clampNumber(intensity, 1, 1.35);
+    next.forEach((sample, index) => {
+      if (index === 0 || index === next.length - 1) return;
+      const distanceSec = Math.abs(sample.timeSec - contact.timeSec);
+      const strength = clamp01(1 - distanceSec / windowSec);
+      if (strength <= 0.001) return;
+      const aimOffset = contact.kind === 'release' ? 0.1 : 0.06;
+      const solved = solveArmIkToTarget(sample.pose, hand, contact.position, sample.transform.position, aimOffset);
+      sample.pose = blendPose(sample.pose, solved.pose, Math.min(0.92, baseStrength * strength));
+    });
+  });
+  return { samples: next, applied: true };
+}
+
+function stabilizeSemanticContactSamples(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[], strength = 0.58) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan || samples.length <= 2) return samples;
+  const sequenceHasContact = semanticPlan.actionType === 'push'
+    || semanticPlan.actionType === 'pull'
+    || semanticPlan.actionType === 'throw'
+    || Boolean(semanticPlan.actionSequence?.some((step) => step.actionType === 'push' || step.actionType === 'pull' || step.actionType === 'throw'));
+  if (!sequenceHasContact) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const control = motionControlFromPrompt(transition.actionPrompt, semanticPlan);
+  const next = samples.map(cloneAnimationSample);
+  const baseFeet = samples[0]?.pose;
+
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    const t = clamp01(sample.timeSec / durationSec);
+    const actionType = semanticContactActionAtTime(transition, t);
+    if (actionType !== 'push' && actionType !== 'pull' && actionType !== 'throw') continue;
+    const localT = semanticSequenceLocalRatio(transition, actionType, t);
+    const window = semanticContactWindow(actionType, localT, control);
+    const contactStrength = clamp01(Math.max(window.contact, actionType === 'throw' ? window.hold : 0) * strength);
+    if (contactStrength <= 0.02) continue;
+
+    const reinforcedTransform = clonePoseTransform(sample.transform);
+    const reinforcedPose = applySemanticActionStageOverlay(sample.pose, reinforcedTransform, transition, semanticActionTime(transition, t));
+    sample.pose = blendPose(sample.pose, reinforcedPose, contactStrength * (actionType === 'throw' ? 0.34 : 0.42));
+    if (baseFeet && (actionType === 'push' || actionType === 'pull')) {
+      sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, baseFeet.leftFoot, contactStrength * 0.62);
+      sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, baseFeet.rightFoot, contactStrength * 0.62);
+    }
+
+    semanticContactLimbsForAction(actionType, transition.actionPrompt).forEach((limb) => {
+      const target = semanticHandTargetForLimb(scene, transition, sample.transform, t, limb);
+      if (!target) return;
+      const hand = limb === 'leftHand' ? 'left' : 'right';
+      const aimOffset = actionType === 'throw' ? 0.08 : 0.045;
+      const solved = solveArmIkToTarget(sample.pose, hand, target.position, sample.transform.position, aimOffset);
+      sample.pose = blendPose(sample.pose, solved.pose, contactStrength * (actionType === 'throw' ? 0.68 : 0.84));
+    });
+  }
+
+  return alignSampleEndpoints(next, transition);
+}
+
+function stabilizeActionSequenceBridgeSamples(transition: PoseTransition, samples: AnimationClipSample[], strength = 0.56) {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  if (!sequence || sequence.length <= 1 || samples.length <= 4) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const next = samples.map(cloneAnimationSample);
+
+  for (let sequenceIndex = 0; sequenceIndex < sequence.length - 1; sequenceIndex += 1) {
+    const current = sequence[sequenceIndex];
+    const following = sequence[sequenceIndex + 1];
+    const boundaryRatio = clamp01((current.endRatio + following.startRatio) / 2);
+    const boundarySec = durationSec * boundaryRatio;
+    const windowSec = clampNumber(durationSec * sequenceActionOverlap(current.actionType, following.actionType) * 1.45, 0.12, 0.34);
+    const beforeAnchor = sampleAnimationSamplesAtTime(samples, boundarySec - windowSec);
+    const afterAnchor = sampleAnimationSamplesAtTime(samples, boundarySec + windowSec);
+    if (!beforeAnchor || !afterAnchor) continue;
+
+    for (let index = 1; index < next.length - 1; index += 1) {
+      const sample = next[index];
+      const distanceSec = Math.abs(sample.timeSec - boundarySec);
+      if (distanceSec > windowSec) continue;
+      const localT = clamp01((sample.timeSec - (boundarySec - windowSec)) / Math.max(0.0001, windowSec * 2));
+      const bridge = sampleBetween(beforeAnchor, afterAnchor, sample.timeSec);
+      const bridgeStrength = clamp01(strength * Math.sin(localT * Math.PI));
+      if (bridgeStrength <= 0.001) continue;
+
+      const transitionPatch = sequenceTransitionPatch(current.actionType, following.actionType, easeCurve('ease_in_out', localT));
+      const transitionPose = Object.keys(transitionPatch).length ? offsetPose(bridge.pose, transitionPatch) : bridge.pose;
+      const previous = samples[Math.max(0, index - 1)];
+      const subsequent = samples[Math.min(samples.length - 1, index + 1)];
+      const stableTransform = {
+        ...bridge.transform,
+        position: blendVec3(bridge.transform.position, averageVec3(previous.transform.position, subsequent.transform.position), 0.22),
+        rotation: smoothRotationSample(previous.transform.rotation, bridge.transform.rotation, subsequent.transform.rotation, 0.2)
+      };
+
+      sample.transform = blendPoseTransform(sample.transform, stableTransform, bridgeStrength * 0.58);
+      sample.pose = blendPose(sample.pose, transitionPose, bridgeStrength * 0.46);
+      if (isLocomotionActionType(current.actionType) && (following.actionType === 'push' || following.actionType === 'pull' || following.actionType === 'reach')) {
+        sample.transform.position.y = Number((sample.transform.position.y - 0.01 * bridgeStrength).toFixed(4));
+        sample.pose.leftFoot = slerpRotation(sample.pose.leftFoot, beforeAnchor.pose.leftFoot, bridgeStrength * 0.32);
+        sample.pose.rightFoot = slerpRotation(sample.pose.rightFoot, beforeAnchor.pose.rightFoot, bridgeStrength * 0.32);
+      }
+      if (current.actionType === 'turn' && (following.actionType === 'throw' || following.actionType === 'punch' || following.actionType === 'kick' || following.actionType === 'side_kick')) {
+        sample.pose.chest = slerpRotation(sample.pose.chest, transitionPose.chest, bridgeStrength * 0.28);
+        sample.pose.pelvis = slerpRotation(sample.pose.pelvis, transitionPose.pelvis, bridgeStrength * 0.24);
+      }
+    }
+  }
+
+  return alignSampleEndpoints(next, transition);
+}
+
+function smoothActionSequenceBoundaries(transition: PoseTransition, samples: AnimationClipSample[]) {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  if (!sequence || sequence.length <= 1 || samples.length <= 4) return samples;
+
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const boundaryPairs = sequence.slice(0, -1).map((step, index) => ({
+    step,
+    following: sequence[index + 1],
+    ratio: clamp01((step.endRatio + sequence[index + 1].startRatio) / 2)
+  })).filter((item) => item.ratio > 0.001 && item.ratio < 0.999);
+  if (!boundaryPairs.length) return samples;
+
+  const source = samples.map(cloneAnimationSample);
+  const next = samples.map(cloneAnimationSample);
+
+  boundaryPairs.forEach(({ step, following, ratio }) => {
+    const boundarySec = durationSec * ratio;
+    const highEnergyBridge = isLocomotionActionType(step.actionType)
+      || isLocomotionActionType(following.actionType)
+      || ['push', 'pull', 'throw', 'punch', 'kick', 'side_kick'].includes(step.actionType)
+      || ['push', 'pull', 'throw', 'punch', 'kick', 'side_kick'].includes(following.actionType);
+    const windowSec = clampNumber(durationSec * (highEnergyBridge ? 0.075 : 0.06), highEnergyBridge ? 0.13 : 0.1, highEnergyBridge ? 0.3 : 0.22);
+    const beforeAnchor = sampleAnimationSamplesAtTime(source, boundarySec - windowSec);
+    const afterAnchor = sampleAnimationSamplesAtTime(source, boundarySec + windowSec);
+    if (!beforeAnchor || !afterAnchor) return;
+
+    for (let index = 1; index < source.length - 1; index += 1) {
+      const current = source[index];
+      const distanceSec = Math.abs(current.timeSec - boundarySec);
+      if (distanceSec > windowSec) continue;
+      const previous = source[index - 1];
+      const following = source[index + 1];
+      const localT = clamp01((current.timeSec - (boundarySec - windowSec)) / Math.max(0.0001, windowSec * 2));
+      const boundaryCurve = sampleBetween(beforeAnchor, afterAnchor, current.timeSec);
+      const strength = 0.58 * easeCurve('ease_in_out', clamp01(1 - distanceSec / windowSec));
+      if (strength <= 0.001) continue;
+
+      const transformTarget = {
+        ...boundaryCurve.transform,
+        position: blendVec3(boundaryCurve.transform.position, averageVec3(previous.transform.position, following.transform.position), 0.32),
+        rotation: smoothRotationSample(previous.transform.rotation, boundaryCurve.transform.rotation, following.transform.rotation, 0.28)
+      };
+      next[index].transform = blendPoseTransform(current.transform, transformTarget, strength * (0.62 + Math.sin(localT * Math.PI) * 0.18));
+      for (const joint of POSE_KEYS) {
+        if (shouldPreserveJointDuringSmoothing(transition, joint, current)) {
+          next[index].pose[joint] = { ...current.pose[joint] };
+          continue;
+        }
+        const curvePose = slerpRotation(current.pose[joint], boundaryCurve.pose[joint], strength * 0.54);
+        next[index].pose[joint] = smoothRotationSample(previous.pose[joint], curvePose, following.pose[joint], strength * 0.42);
+      }
+    }
+  });
+
+  next[0] = cloneAnimationSample(samples[0]);
+  next[next.length - 1] = cloneAnimationSample(samples[samples.length - 1]);
+  return next;
+}
+
+function polishMotionSamples(transition: PoseTransition, samples: AnimationClipSample[]) {
+  let next = samples.map(cloneAnimationSample);
+  next = applyLocomotionGaitBaseline(transition, next);
+  next = applyLocomotionPhaseConsistency(transition, next, 0.38);
+  next = applyPromptControlPoseReinforcement(transition, next);
+  next = stabilizeGroundedMotionSamples(transition, next);
+  next = enforceLocomotionRootProgression(transition, next, 0.62);
+  next = smoothMotionSamples(transition, next);
+  next = smoothActionSequenceBoundaries(transition, next);
+  next = stabilizeActionSequenceBridgeSamples(transition, next, 0.48);
+  next = applyBasicMotionContinuity(transition, next);
+  next = stabilizeLocomotionFootPhases(transition, next);
+  next = applyLocomotionPhaseConsistency(transition, next, 0.52);
+  next = applyLocomotionGoldenStandard(transition, next, 0.54);
+  next = applyPromptControlPoseReinforcement(transition, next);
+  next = enforceLocomotionRootProgression(transition, next, 0.74);
+  next = smoothRootVelocityContinuity(transition, next);
+  next = finalizeLocomotionGoldenStandard(transition, next, 0.64);
+  next = clampNonAirborneRootMotion(next, transition);
+  next = dampExcessivePoseDeltas(next, transition);
+  next = reapplyFootLockPoses(next, transition);
+  return alignSampleEndpoints(next, transition);
+}
+
+function qualityDrivenCorrectionIntensity(report: MotionQualityReport, metric: MotionQualityIssue['metric']) {
+  const severeCount = report.issues.filter((issue) => issue.metric === metric && issue.severity === 'error').length;
+  const warningCount = report.issues.filter((issue) => issue.metric === metric && issue.severity === 'warning').length;
+  return clampNumber(1 + severeCount * 0.35 + warningCount * 0.16, 1, 1.65);
+}
+
+function failedQualityExpectationIds(transition: PoseTransition, report: MotionQualityReport) {
+  const expectations = transition.actionPlan.semanticPlan?.qualityExpectations || [];
+  return new Set(expectations
+    .filter((expectation) => report.issues.some((issue) => (
+      issue.message.includes(`“${expectation.label}”期望`)
+      || issue.message.includes(expectation.description)
+    )))
+    .map((expectation) => expectation.id));
+}
+
+function reinforceExpectationDrivenFailures(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  samples: AnimationClipSample[],
+  report: MotionQualityReport,
+  contacts?: AnimationContactFrame[]
+) {
+  const failed = failedQualityExpectationIds(transition, report);
+  if (!failed.size) return { samples, notes: [] as string[] };
+  let next = samples.map(cloneAnimationSample);
+  const notes: string[] = [];
+
+  if (
+    failed.has('locomotion_gait')
+    || failed.has('locomotion_support')
+    || failed.has('locomotion_travel')
+    || failed.has('locomotion_smoothness')
+    || failed.has('locomotion_arm_sync')
+  ) {
+    const gaitCorrection = reinforceLocomotionGaitSamples(transition, next, report);
+    next = gaitCorrection.applied ? gaitCorrection.samples : applyLocomotionGaitBaseline(transition, next);
+    next = applyLocomotionPhaseConsistency(transition, next, failed.has('locomotion_arm_sync') ? 0.68 : 0.56);
+    next = stabilizeLocomotionFootPhases(transition, next);
+    next = applyLocomotionGoldenStandard(transition, next, failed.has('locomotion_smoothness') ? 0.68 : 0.6);
+    next = enforceLocomotionRootProgression(transition, next, failed.has('locomotion_travel') ? 0.94 : failed.has('locomotion_smoothness') ? 0.9 : 0.86);
+    if (failed.has('locomotion_smoothness')) next = smoothRootVelocityContinuity(transition, next);
+    next = reapplyFootLockPoses(next, transition);
+    notes.push('已根据走跑质量期望定向补强步态、手脚同步、支撑脚和根节点平滑推进。');
+  }
+
+  if (failed.has('target_approach')) {
+    next = stabilizeTargetApproachSequenceSamples(scene, transition, next);
+    next = enforceLocomotionRootProgression(transition, stabilizeGroundedMotionSamples(transition, next), 0.9);
+    next = smoothRootVelocityContinuity(transition, next);
+    notes.push('已根据接触前靠近目标期望定向强化根节点靠近轨迹。');
+  }
+
+  if (failed.has('hand_contact') || failed.has('contact_window') || failed.has('prompt_both_hands')) {
+    const handCorrection = reinforceHandContactSamples(next, contacts, report, Math.max(1.2, qualityDrivenCorrectionIntensity(report, 'contact')));
+    if (handCorrection.applied) next = handCorrection.samples;
+    notes.push('已根据手部接触和接触窗口期望定向扩大接触窗口并重算手臂 IK。');
+  }
+
+  if (
+    failed.has('contact_body_drive')
+    || failed.has('contact_window')
+    || failed.has('contact_foot_anchor')
+    || failed.has('prop_contact_motion')
+    || failed.has('throw_body_windup')
+    || failed.has('throw_release')
+    || failed.has('throw_prop_motion')
+    || failed.has('turn_throw_bridge')
+    || failed.has('punch_extension')
+    || failed.has('punch_recovery')
+    || failed.has('punch_body_drive')
+    || failed.has('low_recovery_attack_bridge')
+    || failed.has('prompt_low_center')
+    || failed.has('prompt_forward_lean')
+    || failed.has('prompt_grounded_feet')
+    || failed.has('prompt_both_hands')
+    || failed.has('approach_contact_bridge')
+  ) {
+    const semanticCorrection = reinforceSemanticSkillSamples(transition, next, report);
+    next = semanticCorrection.applied ? semanticCorrection.samples : next;
+    next = applyPromptControlPoseReinforcement(transition, next);
+    next = stabilizeGroundedMotionSamples(transition, next);
+    const handCorrection = reinforceHandContactSamples(next, contacts, report, Math.max(1.24, qualityDrivenCorrectionIntensity(report, 'contact')));
+    if (handCorrection.applied) next = handCorrection.samples;
+    next = smoothMotionSamples(transition, next);
+    notes.push('已根据接触/投掷/出拳质量期望定向强化身体发力、脚部支撑、释放点、回收和目标响应。');
+  }
+
+  if (
+    failed.has('sequence_order')
+    || failed.has('sequence_bridge')
+    || failed.has('approach_contact_bridge')
+    || failed.has('turn_throw_bridge')
+    || failed.has('low_recovery_attack_bridge')
+  ) {
+    const sequenceTransition = transitionWithQualityAdjustedActionSequence(transition, report);
+    next = stabilizeActionSequenceBridgeSamples(sequenceTransition, smoothActionSequenceBoundaries(sequenceTransition, reinforceActionSequenceSamples(sequenceTransition, next, report).samples), 0.68);
+    next = applyBasicMotionContinuity(sequenceTransition, next);
+    notes.push('已根据动作顺序和阶段承接期望定向补强动作段落承接。');
+    if (failed.has('approach_contact_bridge')) notes.push('已针对“靠近后接触”链路补强移动减速、手部接触和发力承接。');
+    if (failed.has('turn_throw_bridge')) notes.push('已针对“转身后投掷”链路补强转身、蓄力、释放和回收承接。');
+    if (failed.has('low_recovery_attack_bridge')) notes.push('已针对“下沉恢复后攻击”链路补强低重心、起身恢复和最终攻击承接。');
+  }
+
+  return { samples: alignSampleEndpoints(next, transition), notes };
+}
+
+function reinforceQualitySpecificFailures(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  samples: AnimationClipSample[],
+  report: MotionQualityReport,
+  contacts?: AnimationContactFrame[]
+) {
+  let next = samples.map(cloneAnimationSample);
+  const notes: string[] = [];
+
+  const expectationCorrection = reinforceExpectationDrivenFailures(scene, transition, next, report, contacts);
+  if (expectationCorrection.notes.length) {
+    next = expectationCorrection.samples;
+    notes.push(...expectationCorrection.notes);
+  }
+
+  const hasSequenceTimeIssue = report.issues.some((issue) => issue.metric === 'sequence' && issue.message.includes('阶段时间过短'));
+  const hasSequenceBoundaryIssue = report.issues.some((issue) => issue.metric === 'sequence' && (
+    issue.message.includes('过渡不够平滑')
+    || issue.message.includes('缺少承接重叠')
+    || issue.message.includes('混合过多')
+    || issue.message.includes('顺序相反')
+  ));
+  if (hasSequenceTimeIssue || hasSequenceBoundaryIssue) {
+    const sequenceTransition = transitionWithQualityAdjustedActionSequence(transition, report);
+    next = stabilizeActionSequenceBridgeSamples(sequenceTransition, smoothActionSequenceBoundaries(sequenceTransition, reinforceActionSequenceSamples(sequenceTransition, next, report).samples), 0.66);
+    next = applyBasicMotionContinuity(sequenceTransition, next);
+    notes.push('已根据动作序列质检重新加强阶段承接和段落边界平滑。');
+  }
+
+  const handSuccessRatio = report.metrics.semanticHandContactSuccessRatio;
+  const handDistance = report.metrics.semanticHandReachDistance;
+  if ((handSuccessRatio !== undefined && handSuccessRatio < 0.65) || (handDistance !== undefined && handDistance > 0.62)) {
+    const handCorrection = reinforceHandContactSamples(next, contacts, report, qualityDrivenCorrectionIntensity(report, 'contact'));
+    if (handCorrection.applied) {
+      next = handCorrection.samples;
+      notes.push('已根据手部接触质检扩大接触窗口并重新贴近目标。');
+    }
+  }
+
+  if ((report.metrics.semanticTargetApproachDistance || 0) > 0.55) {
+    next = enforceLocomotionRootProgression(transition, stabilizeGroundedMotionSamples(transition, next), 0.88);
+    next = smoothRootVelocityContinuity(transition, next);
+    notes.push('已根据目标接近质检重新强化角色移动到接触目标前的根节点轨迹。');
+  }
+
+  if (
+    (report.metrics.semanticContactBodyDrive !== undefined && report.metrics.semanticContactBodyDrive < 8)
+    || (report.metrics.semanticContactFootStability !== undefined && report.metrics.semanticContactFootStability < 0.42)
+    || (report.metrics.semanticPropMotionDistance !== undefined && report.metrics.semanticPropMotionDistance < 0.14)
+    || (report.metrics.semanticThrowReleaseDistance !== undefined && report.metrics.semanticThrowReleaseDistance < 0.62)
+  ) {
+    const semanticCorrection = reinforceSemanticSkillSamples(transition, next, report);
+    next = stabilizeGroundedMotionSamples(transition, semanticCorrection.applied ? semanticCorrection.samples : next);
+    const handCorrection = reinforceHandContactSamples(next, contacts, report, qualityDrivenCorrectionIntensity(report, 'contact'));
+    if (handCorrection.applied) next = handCorrection.samples;
+    notes.push('已根据接触动作质检重新强化身体发力、脚部支撑、手部接触和目标物体运动。');
+  }
+
+  const qualityTarget = motionQualityTargetForTransition(transition);
+  if (
+    report.metrics.locomotionRootBacktrackCount
+    || (report.metrics.locomotionRootStepJitter !== undefined && report.metrics.locomotionRootStepJitter > (qualityTarget.maxRootStepJitter || 0.65))
+    || (report.metrics.locomotionPaceCoverageRatio !== undefined && report.metrics.locomotionPaceCoverageRatio < 0.64 && (report.metrics.locomotionExpectedTravelDistance || 0) > 0.08)
+    || (report.metrics.sequenceBoundaryMaxVelocityRatio !== undefined && report.metrics.sequenceBoundaryMaxVelocityRatio > 2.55)
+    || (report.metrics.locomotionFootPlantDrift !== undefined && report.metrics.locomotionFootPlantDrift > (qualityTarget.maxFootPlantDrift || 9))
+    || (report.metrics.locomotionFootPhaseMismatchCount !== undefined && report.metrics.locomotionFootPhaseMismatchCount > 0)
+    || (report.metrics.locomotionSupportSwitchCount !== undefined && report.metrics.locomotionSupportSwitchCount < 1)
+    || (report.metrics.locomotionSupportCoverageRatio !== undefined && report.metrics.locomotionSupportCoverageRatio < 0.32)
+    || (report.metrics.locomotionArmSwingSeparation !== undefined && report.metrics.locomotionArmSwingSeparation < (qualityTarget.minArmSwingSeparation || 10))
+    || (report.metrics.locomotionArmLegSyncScore !== undefined && report.metrics.locomotionArmLegSyncScore < 0.34)
+    || (report.metrics.locomotionLegSeparation !== undefined && report.metrics.locomotionLegSeparation < (qualityTarget.minLegSeparation || 10))
+    || (report.metrics.locomotionLegSignChanges !== undefined && report.metrics.locomotionLegSignChanges < 1)
+  ) {
+    next = reapplyFootLockPoses(
+      enforceLocomotionRootProgression(
+        transition,
+        finalizeLocomotionGoldenStandard(transition, reinforceLocomotionGaitSamples(transition, next, report).samples, 0.78),
+        0.86
+      ),
+      transition
+    );
+    notes.push('已根据走跑质检重新强化根节点推进、左右腿交替、支撑脚交替、脚步相位和手臂反向摆动。');
+  }
+
+  return { samples: next, notes };
+}
+
+function autoCorrectMotionSamples(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  samples: AnimationClipSample[],
+  report: MotionQualityReport,
+  contacts?: AnimationContactFrame[]
+) {
   const notes: string[] = [];
   if (!motionQualityNeedsAutoCorrection(report)) {
     return { samples, notes };
   }
   let corrected = samples.map(cloneAnimationSample);
-  const hasRootIssue = report.issues.some((issue) => issue.metric === 'speed' || issue.metric === 'rotation' || issue.metric === 'endpoint');
-  const hasPoseIssue = report.issues.some((issue) => issue.metric === 'pose' || issue.metric === 'foot_lock');
+  const diagnosis = diagnoseMotionQuality(report);
+  const sequenceAdjustedTransition = transitionWithQualityAdjustedActionSequence(transition, report);
+  const hasRootIssue = diagnosis.locomotionNeedsRoot || report.issues.some((issue) => issue.metric === 'speed' || issue.metric === 'rotation' || issue.metric === 'endpoint');
+  const hasPoseIssue = diagnosis.locomotionNeedsGait || diagnosis.sequenceNeedsSmoothing || diagnosis.excessivePoseNeedsDamping || report.issues.some((issue) => issue.metric === 'pose' || issue.metric === 'foot_lock' || issue.metric === 'sequence');
   if (hasRootIssue) {
     corrected = stabilizeGroundedMotionSamples(transition, corrected);
     corrected = smoothMotionSamples(transition, corrected);
+    corrected = enforceLocomotionRootProgression(transition, corrected, 0.82);
+    corrected = smoothRootVelocityContinuity(transition, corrected);
+    corrected = enforceLocomotionRootProgression(transition, corrected, 0.9);
     corrected = smoothMotionSamples(transition, corrected);
     notes.push('已根据质量检查自动平滑根节点轨迹。');
   }
-  if (report.issues.some((issue) => issue.message.includes('离地'))) {
+  if (diagnosis.airborneNeedsClamp) {
     corrected = clampNonAirborneRootMotion(corrected, transition);
     notes.push('已根据质量检查限制非跳跃动作离地幅度。');
   }
+  const gaitCorrection = reinforceLocomotionGaitSamples(transition, corrected, report);
+  if (gaitCorrection.applied || diagnosis.locomotionNeedsGait || diagnosis.locomotionNeedsRoot) {
+    corrected = gaitCorrection.applied ? gaitCorrection.samples : applyLocomotionGaitBaseline(transition, corrected);
+    corrected = finalizeLocomotionGoldenStandard(transition, corrected, diagnosis.locomotionNeedsGait || diagnosis.locomotionNeedsRoot ? 0.82 : 0.64);
+    notes.push('已根据动作质量检查重算走跑步态、左右腿交替和根节点连续性。');
+  }
+  const semanticCorrection = reinforceSemanticSkillSamples(transition, corrected, report);
+  if (semanticCorrection.applied) {
+    corrected = semanticCorrection.samples;
+    notes.push('已根据动作质量检查补强动作技能阶段和主导肢体轨迹。');
+  }
+  const sequenceCorrection = reinforceActionSequenceSamples(transition, corrected, report);
+  if (sequenceCorrection.applied || diagnosis.sequenceNeedsSmoothing) {
+    corrected = sequenceCorrection.applied ? sequenceCorrection.samples : corrected;
+    corrected = reinforceActionSequenceSamples(sequenceAdjustedTransition, corrected, report).samples;
+    corrected = smoothActionSequenceBoundaries(sequenceAdjustedTransition, corrected);
+    corrected = stabilizeActionSequenceBridgeSamples(sequenceAdjustedTransition, corrected, 0.68);
+    corrected = applyBasicMotionContinuity(sequenceAdjustedTransition, corrected);
+    notes.push('已根据动作序列质检补强每一段动作的步态、接触点和主导肢体轨迹。');
+  }
+  const handContactCorrection = reinforceHandContactSamples(corrected, contacts, report, diagnosis.contactNeedsCorrection ? qualityDrivenCorrectionIntensity(report, 'contact') : 1);
+  if (handContactCorrection.applied) {
+    corrected = handContactCorrection.samples;
+    notes.push('已根据接触点质检校正手部靠近目标的位置。');
+  }
+  const qualitySpecificCorrection = reinforceQualitySpecificFailures(scene, transition, corrected, report, contacts);
+  if (qualitySpecificCorrection.notes.length) {
+    corrected = qualitySpecificCorrection.samples;
+    notes.push(...qualitySpecificCorrection.notes);
+  }
+  corrected = stabilizeSemanticContactSamples(scene, transition, corrected, diagnosis.contactNeedsCorrection ? 0.72 : 0.62);
   if (hasPoseIssue) {
-    corrected = applyBasicMotionContinuity(transition, stabilizeGroundedMotionSamples(transition, corrected));
+    corrected = applyBasicMotionContinuity(transition, stabilizeGroundedMotionSamples(transition, applyPromptControlPoseReinforcement(transition, corrected)));
+    corrected = enforceLocomotionRootProgression(transition, corrected, 0.84);
+    corrected = smoothRootVelocityContinuity(transition, corrected);
     corrected = dampExcessivePoseDeltas(corrected, transition);
     corrected = reapplyFootLockPoses(corrected, transition);
     notes.push('已根据质量检查降低关节跳变并重应用脚部锁定。');
   }
-  corrected = alignSampleEndpoints(applyBasicMotionContinuity(transition, stabilizeGroundedMotionSamples(transition, corrected)), transition);
+  corrected = polishMotionSamples(sequenceAdjustedTransition, corrected);
   return { samples: corrected, notes };
 }
 
@@ -6045,7 +10454,923 @@ function poseJointDelta(a: RigRotation, b: RigRotation) {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.z - b.z));
 }
 
-function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimationClip): MotionQualityReport {
+function locomotionAlternationStats(samples: AnimationClipSample[]) {
+  let maxLegSeparation = 0;
+  let signChanges = 0;
+  let previousSign = 0;
+  samples.forEach((sample, index) => {
+    if (index === 0 || index === samples.length - 1) return;
+    const delta = sample.pose.leftUpperLeg.x - sample.pose.rightUpperLeg.x;
+    maxLegSeparation = Math.max(maxLegSeparation, Math.abs(delta));
+    const sign = Math.abs(delta) < 1 ? 0 : delta > 0 ? 1 : -1;
+    if (!sign) return;
+    if (previousSign && sign !== previousSign) signChanges += 1;
+    previousSign = sign;
+  });
+  return { maxLegSeparation, signChanges };
+}
+
+function locomotionSupportStats(transition: PoseTransition, clip: SerializedAnimationClip) {
+  const actionType = sequenceLocomotionActionType(transition);
+  const samples = clip.samples;
+  if (!isLocomotionActionType(actionType) || samples.length <= 2) {
+    return {
+      footPlantDrift: 0,
+      rootStepJitter: 0,
+      footContactCount: 0,
+      footPhaseMismatchCount: 0,
+      rootBacktrackCount: 0,
+      rootTravelDistance: 0,
+      expectedTravelDistance: 0,
+      paceCoverageRatio: 1,
+      supportSwitchCount: 0,
+      supportCoverageRatio: 1,
+      armSwingSeparation: 0,
+      armLegSyncScore: 1
+    };
+  }
+  const durationSec = Math.max(0.0001, clip.durationSec || transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const plantRefs: Record<'left' | 'right', RigRotation | null> = { left: null, right: null };
+  let footPlantDrift = 0;
+  const rootSteps: number[] = [];
+  let rootBacktrackCount = 0;
+  let supportSwitchCount = 0;
+  let previousSupport: 'left' | 'right' | null = null;
+  let supportSampleCount = 0;
+  let activeSampleCount = 0;
+  let armSwingSeparation = 0;
+  const syncPairs: Array<{ leg: number; arm: number }> = [];
+  const travel = locomotionTravelVector(transition, samples);
+  const window = sequenceActionWindow(transition, actionType);
+  const gaitDurationSec = locomotionEffectiveDurationSec(transition, actionType);
+  const tempoScale = locomotionGaitTempoScale(transition, actionType);
+  const expectedTravelDistance = promptRequestsInPlaceMotion(transition.actionPrompt)
+    ? 0
+    : promptLocomotionTravelDistance(transition);
+
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1];
+    const current = samples[index];
+    const currentRatio = clamp01(current.timeSec / durationSec);
+    if (!ratioInActionWindow(transition, actionType, currentRatio, 0.015)) continue;
+    const stepX = current.transform.position.x - previous.transform.position.x;
+    const stepZ = current.transform.position.z - previous.transform.position.z;
+    rootSteps.push(Math.hypot(stepX, stepZ));
+    const projection = stepX * travel.direction.x + stepZ * travel.direction.z;
+    if (travel.distance > 0.08 && projection < -0.006) rootBacktrackCount += 1;
+  }
+
+  for (const sample of samples) {
+    const t = clamp01(sample.timeSec / durationSec);
+    if (t < window.startRatio || t > window.endRatio) continue;
+    const localT = sequenceActionLocalRatio(transition, actionType, t);
+    const motionT = semanticActionTime(transition, localT);
+    const leftPlant = gaitFootPlantStrength(actionType, 'left', motionT, gaitDurationSec, tempoScale);
+    const rightPlant = gaitFootPlantStrength(actionType, 'right', motionT, gaitDurationSec, tempoScale);
+    const dominantSupport = Math.max(leftPlant, rightPlant) > 0.24 && Math.abs(leftPlant - rightPlant) > 0.12
+      ? leftPlant > rightPlant ? 'left' : 'right'
+      : null;
+    activeSampleCount += 1;
+    if (dominantSupport) supportSampleCount += 1;
+    if (dominantSupport && previousSupport && dominantSupport !== previousSupport) supportSwitchCount += 1;
+    if (dominantSupport) previousSupport = dominantSupport;
+    armSwingSeparation = Math.max(armSwingSeparation, Math.abs(sample.pose.leftUpperArm.x - sample.pose.rightUpperArm.x));
+    syncPairs.push({
+      leg: sample.pose.leftUpperLeg.x - sample.pose.rightUpperLeg.x,
+      arm: sample.pose.rightUpperArm.x - sample.pose.leftUpperArm.x
+    });
+
+    for (const limb of ['left', 'right'] as const) {
+      const poseKey: PoseJointKey = limb === 'left' ? 'leftFoot' : 'rightFoot';
+      const plant = limb === 'left' ? leftPlant : rightPlant;
+      if (plant < 0.42) {
+        plantRefs[limb] = null;
+        continue;
+      }
+      if (!plantRefs[limb]) {
+        plantRefs[limb] = { ...sample.pose[poseKey] };
+        continue;
+      }
+      footPlantDrift = Math.max(footPlantDrift, poseJointDelta(sample.pose[poseKey], plantRefs[limb]));
+    }
+  }
+
+  const meanStep = rootSteps.length ? rootSteps.reduce((total, value) => total + value, 0) / rootSteps.length : 0;
+  const variance = rootSteps.length
+    ? rootSteps.reduce((total, value) => total + Math.pow(value - meanStep, 2), 0) / rootSteps.length
+    : 0;
+  const rootStepJitter = meanStep > 0.0001 ? Math.sqrt(variance) / meanStep : 0;
+  const supportCoverageRatio = activeSampleCount ? supportSampleCount / activeSampleCount : 1;
+  const paceCoverageRatio = expectedTravelDistance > 0.001 ? Math.min(1.6, travel.distance / expectedTravelDistance) : 1;
+  const meanLeg = syncPairs.length ? syncPairs.reduce((total, item) => total + item.leg, 0) / syncPairs.length : 0;
+  const meanArm = syncPairs.length ? syncPairs.reduce((total, item) => total + item.arm, 0) / syncPairs.length : 0;
+  const covariance = syncPairs.reduce((total, item) => total + (item.leg - meanLeg) * (item.arm - meanArm), 0);
+  const legVariance = syncPairs.reduce((total, item) => total + Math.pow(item.leg - meanLeg, 2), 0);
+  const armVariance = syncPairs.reduce((total, item) => total + Math.pow(item.arm - meanArm, 2), 0);
+  const armLegCorrelation = legVariance > 0.001 && armVariance > 0.001
+    ? clampNumber(covariance / Math.sqrt(legVariance * armVariance), -1, 1)
+    : -1;
+  const armLegSyncScore = Math.max(0, -armLegCorrelation);
+  const footContactCount = clip.contacts.filter((item) => {
+    if (item.kind !== 'foot_lock' || (item.limb !== 'leftFoot' && item.limb !== 'rightFoot')) return false;
+    const ratio = clamp01(item.timeSec / durationSec);
+    return ratioInActionWindow(transition, actionType, ratio, 0.02);
+  }).length;
+  const footPhaseMismatchCount = clip.contacts.filter((item) => {
+    if (item.kind !== 'foot_lock' || (item.limb !== 'leftFoot' && item.limb !== 'rightFoot')) return false;
+    const ratio = clamp01(item.timeSec / durationSec);
+    if (!ratioInActionWindow(transition, actionType, ratio, 0.02)) return false;
+    const localT = sequenceActionLocalRatio(transition, actionType, ratio);
+    const motionT = semanticActionTime(transition, localT);
+    const limb = item.limb === 'leftFoot' ? 'left' : 'right';
+    return gaitFootPlantStrength(actionType, limb, motionT, gaitDurationSec, tempoScale) < 0.24;
+  }).length;
+
+  return {
+    footPlantDrift: Number(footPlantDrift.toFixed(2)),
+    rootStepJitter: Number(rootStepJitter.toFixed(3)),
+    footContactCount,
+    footPhaseMismatchCount,
+    rootBacktrackCount,
+    rootTravelDistance: Number(travel.distance.toFixed(3)),
+    expectedTravelDistance: Number(expectedTravelDistance.toFixed(3)),
+    paceCoverageRatio: Number(paceCoverageRatio.toFixed(3)),
+    supportSwitchCount,
+    supportCoverageRatio: Number(supportCoverageRatio.toFixed(3)),
+    armSwingSeparation: Number(armSwingSeparation.toFixed(2)),
+    armLegSyncScore: Number(armLegSyncScore.toFixed(3))
+  };
+}
+
+function semanticTimingStats(clip: SerializedAnimationClip) {
+  const samples = clip.samples;
+  if (samples.length <= 3) return { peakRatio: 0, speedContrast: 0 };
+  const speeds: Array<{ ratio: number; speed: number }> = [];
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1];
+    const current = samples[index];
+    const dt = Math.max(0.0001, current.timeSec - previous.timeSec);
+    const rootDistance = Math.hypot(
+      current.transform.position.x - previous.transform.position.x,
+      current.transform.position.y - previous.transform.position.y,
+      current.transform.position.z - previous.transform.position.z
+    );
+    const poseMotion = POSE_KEYS.reduce((total, key) => total + poseJointDelta(previous.pose[key], current.pose[key]), 0) / POSE_KEYS.length;
+    speeds.push({ ratio: clamp01(current.timeSec / Math.max(0.0001, clip.durationSec)), speed: (rootDistance + poseMotion / 260) / dt });
+  }
+  const peak = speeds.reduce((best, item) => item.speed > best.speed ? item : best, speeds[0]);
+  const mean = speeds.reduce((total, item) => total + item.speed, 0) / speeds.length;
+  return {
+    peakRatio: Number(peak.ratio.toFixed(3)),
+    speedContrast: Number((peak.speed / Math.max(0.0001, mean)).toFixed(3))
+  };
+}
+
+function motionContinuityStats(samples: AnimationClipSample[], protectedTimes: number[] = []) {
+  if (samples.length <= 2) {
+    return { rootVelocitySpikeRatio: 1, poseVelocitySpikeRatio: 1, maxPoseVelocity: 0 };
+  }
+  const rootSpeeds: number[] = [];
+  const poseSpeeds: number[] = [];
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1];
+    const current = samples[index];
+    if (intervalTouchesExplicitKeyframe(previous.timeSec, current.timeSec, protectedTimes)) continue;
+    const dt = Math.max(0.0001, current.timeSec - previous.timeSec);
+    rootSpeeds.push(vecDistance(previous.transform.position, current.transform.position) / dt);
+    const poseDelta = POSE_KEYS.reduce((total, key) => total + poseJointDelta(previous.pose[key], current.pose[key]), 0) / POSE_KEYS.length;
+    poseSpeeds.push(poseDelta / dt);
+  }
+  const ratio = (values: number[]) => {
+    const active = values.filter((value) => value > 0.0001);
+    if (active.length <= 1) return 1;
+    const mean = active.reduce((total, value) => total + value, 0) / active.length;
+    return mean > 0.0001 ? Math.max(...active) / mean : 1;
+  };
+  return {
+    rootVelocitySpikeRatio: Number(ratio(rootSpeeds).toFixed(3)),
+    poseVelocitySpikeRatio: Number(ratio(poseSpeeds).toFixed(3)),
+    maxPoseVelocity: Number((poseSpeeds.length ? Math.max(...poseSpeeds) : 0).toFixed(3))
+  };
+}
+
+function maxJointAxisDeltaFromStart(samples: AnimationClipSample[], joint: PoseJointKey, axis: keyof RigRotation) {
+  const start = samples[0]?.pose[joint]?.[axis] || 0;
+  return samples.reduce((max, sample) => Math.max(max, Math.abs((sample.pose[joint]?.[axis] || 0) - start)), 0);
+}
+
+function samplesForSequenceStep(clip: SerializedAnimationClip, step: MotionActionSequenceStep) {
+  const durationSec = Math.max(0.0001, clip.durationSec);
+  const startSec = durationSec * clamp01(step.startRatio);
+  const endSec = durationSec * clamp01(step.endRatio);
+  const ranged = clip.samples.filter((sample) => sample.timeSec >= startSec && sample.timeSec <= endSec);
+  const startSample = sampleClipAtTime(clip, startSec);
+  const endSample = sampleClipAtTime(clip, endSec);
+  const samples = [
+    ...(startSample ? [startSample] : []),
+    ...ranged,
+    ...(endSample ? [endSample] : [])
+  ];
+  return samples.length ? samples : clip.samples;
+}
+
+function maxJointAxisDeltaInSamples(samples: AnimationClipSample[], joint: PoseJointKey, axis: keyof RigRotation) {
+  const start = samples[0]?.pose[joint]?.[axis] || 0;
+  return samples.reduce((max, sample) => Math.max(max, Math.abs((sample.pose[joint]?.[axis] || 0) - start)), 0);
+}
+
+function maxRootLiftInSamples(samples: AnimationClipSample[]) {
+  const startY = samples[0]?.transform.position.y || 0;
+  return samples.reduce((max, sample) => Math.max(max, sample.transform.position.y - startY), 0);
+}
+
+function rootTravelInSamples(samples: AnimationClipSample[]) {
+  if (samples.length <= 1) return 0;
+  const first = samples[0].transform.position;
+  const last = samples[samples.length - 1].transform.position;
+  return Math.hypot(last.x - first.x, last.z - first.z);
+}
+
+function contactsInSequenceStep(clip: SerializedAnimationClip, step: MotionActionSequenceStep, predicate: (contact: AnimationContactFrame) => boolean) {
+  const durationSec = Math.max(0.0001, clip.durationSec);
+  const startSec = durationSec * clamp01(step.startRatio);
+  const endSec = durationSec * clamp01(step.endRatio);
+  return clip.contacts.filter((contact) => contact.timeSec >= startSec && contact.timeSec <= endSec && predicate(contact));
+}
+
+function semanticHandReachDistance(clip: SerializedAnimationClip) {
+  const handContacts = clip.contacts.filter((contact) => (
+    (contact.kind === 'reach' || contact.kind === 'grasp' || contact.kind === 'release')
+    && (contact.limb === 'leftHand' || contact.limb === 'rightHand')
+  ));
+  if (!handContacts.length) return 0;
+  let maxDistance = 0;
+  handContacts.forEach((contact) => {
+    const sample = sampleClipAtTime(clip, contact.timeSec);
+    if (!sample || (contact.limb !== 'leftHand' && contact.limb !== 'rightHand')) return;
+    const handPosition = approximateHandWorldPosition(sample, contact.limb);
+    maxDistance = Math.max(maxDistance, vecDistance(handPosition, contact.position));
+  });
+  return Number(maxDistance.toFixed(3));
+}
+
+function semanticHandContactStats(clip: SerializedAnimationClip, transition?: PoseTransition) {
+  const handContacts = clip.contacts.filter((contact) => (
+    (contact.kind === 'reach' || contact.kind === 'grasp' || contact.kind === 'release')
+    && (contact.limb === 'leftHand' || contact.limb === 'rightHand')
+  ));
+  if (!handContacts.length) return { maxDistance: 0, successRatio: 1, checkedCount: 0 };
+  let maxDistance = 0;
+  let successCount = 0;
+  handContacts.forEach((contact) => {
+    const sample = sampleClipAtTime(clip, contact.timeSec);
+    if (!sample || (contact.limb !== 'leftHand' && contact.limb !== 'rightHand')) return;
+    const handPosition = approximateHandWorldPosition(sample, contact.limb);
+    const distance = vecDistance(handPosition, contact.position);
+    maxDistance = Math.max(maxDistance, distance);
+    const contactAction = transition
+      ? semanticContactActionAtTime(transition, clamp01(contact.timeSec / Math.max(0.0001, clip.durationSec)))
+      : undefined;
+    const baseThreshold = contact.kind === 'release' ? 0.5 : contact.kind === 'grasp' ? 0.42 : 0.46;
+    const threshold = contactAction === 'push' || contactAction === 'pull'
+      ? Math.min(baseThreshold, contact.kind === 'release' ? 0.46 : 0.38)
+      : contactAction === 'throw'
+        ? Math.min(baseThreshold, contact.kind === 'release' ? 0.52 : 0.4)
+        : baseThreshold;
+    if (distance <= threshold) successCount += 1;
+  });
+  return {
+    maxDistance: Number(maxDistance.toFixed(3)),
+    successRatio: Number((successCount / handContacts.length).toFixed(3)),
+    checkedCount: handContacts.length
+  };
+}
+
+function semanticTargetApproachDistance(scene: Scene3DState, transition: PoseTransition, clip: SerializedAnimationClip) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const contactAction = sequenceContactActionType(transition);
+  if (!semanticPlan?.targetObjectId || !sequenceLocomotionActionType(transition) || !contactAction) return undefined;
+  const target = findSceneObject(scene, semanticPlan.targetObjectId);
+  if (!target) return undefined;
+  const contactWindow = sequenceActionWindow(transition, contactAction);
+  const checkRatio = clamp01(contactWindow.startRatio + (contactWindow.endRatio - contactWindow.startRatio) * 0.18);
+  const sample = sampleClipAtTime(clip, clip.durationSec * checkRatio) || clip.samples[Math.max(0, Math.min(clip.samples.length - 1, Math.round((clip.samples.length - 1) * checkRatio)))];
+  if (!sample) return undefined;
+  const expectedApproach = targetApproachPositionForTransition(transition, target);
+  if (!expectedApproach) return undefined;
+  return Number(Math.hypot(sample.transform.position.x - expectedApproach.x, sample.transform.position.z - expectedApproach.z).toFixed(3));
+}
+
+function semanticContactActionStats(scene: Scene3DState, transition: PoseTransition, clip: SerializedAnimationClip) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const actionType = sequenceContactActionType(transition)
+    || (semanticPlan?.actionType === 'punch' ? 'punch' : undefined)
+    || semanticPlan?.actionSequence?.find((step) => step.actionType === 'punch')?.actionType;
+  const target = findSceneObject(scene, semanticPlan?.targetObjectId);
+  const empty = {
+    bodyDrive: undefined as number | undefined,
+    footStability: undefined as number | undefined,
+    contactWindowCoverage: undefined as number | undefined,
+    propMotionDistance: undefined as number | undefined,
+    propDirectionAlignment: undefined as number | undefined,
+    throwReleaseDistance: undefined as number | undefined,
+    punchExtension: undefined as number | undefined,
+    punchRecoveryRatio: undefined as number | undefined
+  };
+  if (!semanticPlan || !actionType || clip.samples.length <= 2) return empty;
+  const window = sequenceActionWindow(transition, actionType);
+  const ranged = clip.samples.filter((sample) => {
+    const ratio = clamp01(sample.timeSec / Math.max(0.0001, clip.durationSec));
+    return ratio >= window.startRatio && ratio <= window.endRatio;
+  });
+  const samples = ranged.length ? ranged : clip.samples;
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  if (!first || !last) return empty;
+  const chestDrive = samples.reduce((max, sample) => Math.max(max, poseJointDelta(sample.pose.chest, first.pose.chest)), 0);
+  const pelvisDrive = samples.reduce((max, sample) => Math.max(max, poseJointDelta(sample.pose.pelvis, first.pose.pelvis)), 0);
+  const rootDrive = samples.reduce((max, sample) => Math.max(
+    max,
+    Math.hypot(sample.transform.position.x - first.transform.position.x, sample.transform.position.z - first.transform.position.z) * 100
+  ), 0);
+  const bodyDrive = Number(Math.max(chestDrive, pelvisDrive, rootDrive).toFixed(2));
+  const leftFootDrift = maxJointAxisDeltaInSamples(samples, 'leftFoot', 'x') + maxJointAxisDeltaInSamples(samples, 'leftFoot', 'z');
+  const rightFootDrift = maxJointAxisDeltaInSamples(samples, 'rightFoot', 'x') + maxJointAxisDeltaInSamples(samples, 'rightFoot', 'z');
+  const footStability = Number(Math.max(0, 1 - Math.min(leftFootDrift, rightFootDrift) / 26).toFixed(3));
+  const baseProp = target && 'shape' in target ? propBaseTransform(target as PropObject) : null;
+  const propEnd = baseProp && target && 'shape' in target ? semanticPropMotionTransform(baseProp, target as PropObject, transition, last) : null;
+  const propMotionDistance = baseProp && propEnd
+    ? Number(Math.hypot(propEnd.position.x - baseProp.position.x, propEnd.position.z - baseProp.position.z, propEnd.position.y - baseProp.position.y).toFixed(3))
+    : undefined;
+  const propDirectionAlignment = baseProp && propEnd && propMotionDistance && propMotionDistance > 0.001
+    ? (() => {
+        const forward = target && 'shape' in target
+          ? semanticPropContactForwardDirection(target as PropObject, transition, first, actionType)
+          : normalizedDirection(transition.actionPlan.universal?.direction || vec(0, 0, -1));
+        const expected = actionType === 'pull' ? vec(-forward.x, 0, -forward.z) : forward;
+        const actual = normalizedDirection(vec(propEnd.position.x - baseProp.position.x, 0, propEnd.position.z - baseProp.position.z));
+        return Number(clampNumber(actual.x * expected.x + actual.z * expected.z, -1, 1).toFixed(3));
+      })()
+    : undefined;
+  const windowStartSec = clip.durationSec * clamp01(window.startRatio);
+  const windowEndSec = clip.durationSec * clamp01(window.endRatio);
+  const expectedHandContacts = actionType === 'push' || actionType === 'pull' || actionType === 'throw'
+    ? semanticContactLimbsForAction(actionType, transition.actionPrompt).length * 3
+    : 0;
+  const actualHandContacts = clip.contacts.filter((contact) => (
+    contact.timeSec >= windowStartSec
+    && contact.timeSec <= windowEndSec
+    && (contact.kind === 'grasp' || contact.kind === 'release')
+    && (contact.limb === 'leftHand' || contact.limb === 'rightHand')
+  )).length;
+  const contactWindowCoverage = expectedHandContacts
+    ? Number(clamp01(actualHandContacts / expectedHandContacts).toFixed(3))
+    : undefined;
+  const releaseContacts = clip.contacts.filter((contact) => contact.kind === 'release' && (contact.limb === 'leftHand' || contact.limb === 'rightHand'));
+  const throwReleaseDistance = actionType === 'throw' && releaseContacts.length
+    ? Number(Math.max(...releaseContacts.map((contact) => vecDistance(contact.position, first.transform.position))).toFixed(3))
+    : undefined;
+  const punchStep = semanticPlan.actionType === 'punch'
+    ? undefined
+    : semanticPlan.actionSequence?.find((step) => step.actionType === 'punch');
+  const punchSamples = actionType === 'punch'
+    ? samples
+    : punchStep
+      ? samplesForSequenceStep(clip, punchStep)
+      : [];
+  const punchFirst = punchSamples[0];
+  const punchLast = punchSamples[punchSamples.length - 1];
+  const mainHand = inferPromptHand(transition.actionPrompt) === 'left' ? 'left' : 'right';
+  const upperKey: PoseJointKey = mainHand === 'left' ? 'leftUpperArm' : 'rightUpperArm';
+  const lowerKey: PoseJointKey = mainHand === 'left' ? 'leftLowerArm' : 'rightLowerArm';
+  const startUpper = (punchFirst || first).pose[upperKey];
+  const startLower = (punchFirst || first).pose[lowerKey];
+  const endUpper = (punchLast || last).pose[upperKey];
+  const endLower = (punchLast || last).pose[lowerKey];
+  const armDelta = (sample: AnimationClipSample) => Math.max(
+    Math.abs(sample.pose[upperKey].x - startUpper.x),
+    Math.abs(sample.pose[upperKey].y - startUpper.y),
+    Math.abs(sample.pose[upperKey].z - startUpper.z),
+    Math.abs(sample.pose[lowerKey].x - startLower.x),
+    Math.abs(sample.pose[lowerKey].y - startLower.y),
+    Math.abs(sample.pose[lowerKey].z - startLower.z)
+  );
+  const hasPunchAction = actionType === 'punch' || Boolean(punchStep);
+  const punchExtension = hasPunchAction
+    ? Number((punchSamples.length ? punchSamples : samples).reduce((max, sample) => Math.max(max, armDelta(sample)), 0).toFixed(2))
+    : undefined;
+  const punchEndDelta = hasPunchAction
+    ? Math.max(
+        Math.abs(endUpper.x - startUpper.x),
+        Math.abs(endUpper.y - startUpper.y),
+        Math.abs(endUpper.z - startUpper.z),
+        Math.abs(endLower.x - startLower.x),
+        Math.abs(endLower.y - startLower.y),
+        Math.abs(endLower.z - startLower.z)
+      )
+    : 0;
+  const punchRecoveryRatio = hasPunchAction && punchExtension && punchExtension > 0.001
+    ? Number(clamp01((punchExtension - punchEndDelta) / punchExtension).toFixed(3))
+    : undefined;
+  return {
+    bodyDrive,
+    footStability,
+    contactWindowCoverage,
+    propMotionDistance,
+    propDirectionAlignment,
+    throwReleaseDistance,
+    punchExtension,
+    punchRecoveryRatio
+  };
+}
+
+function inspectMotionQualityExpectations(
+  transition: PoseTransition,
+  stats: {
+    locomotionStats: ReturnType<typeof locomotionSupportStats>;
+    locomotionAlternation: ReturnType<typeof locomotionAlternationStats>;
+    handContactStats: ReturnType<typeof semanticHandContactStats>;
+    targetApproachDistance?: number;
+    contactActionStats: ReturnType<typeof semanticContactActionStats>;
+    sequenceBoundaryStats: SequenceBoundaryStats;
+    samples: AnimationClipSample[];
+    contacts: AnimationContactFrame[];
+  }
+): Array<Omit<MotionQualityIssue, 'id'>> {
+  const expectations = transition.actionPlan.semanticPlan?.qualityExpectations || [];
+  if (!expectations.length) return [];
+  const issues: Array<Omit<MotionQualityIssue, 'id'>> = [];
+  const add = (expectation: MotionQualityExpectation, message: string, value?: number) => {
+    issues.push({
+      severity: expectation.required ? 'warning' : 'info',
+      metric: expectation.metric,
+      message,
+      value: value === undefined ? undefined : Number(value.toFixed(3))
+    });
+  };
+
+  expectations.forEach((expectation) => {
+    if (expectation.id === 'locomotion_gait') {
+      const value = stats.locomotionAlternation.maxLegSeparation;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'locomotion_support') {
+      const value = stats.locomotionStats.supportCoverageRatio;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'locomotion_travel') {
+      const value = stats.locomotionStats.paceCoverageRatio;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'locomotion_smoothness') {
+      const value = stats.locomotionStats.rootStepJitter;
+      if (expectation.maxValue !== undefined && value > expectation.maxValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'locomotion_arm_sync') {
+      const value = stats.locomotionStats.armLegSyncScore;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'prompt_low_center') {
+      const value = Math.max(
+        maxJointAxisDeltaInSamples(stats.samples, 'pelvis', 'x'),
+        maxJointAxisDeltaInSamples(stats.samples, 'leftLowerLeg', 'x'),
+        maxJointAxisDeltaInSamples(stats.samples, 'rightLowerLeg', 'x')
+      );
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'prompt_forward_lean') {
+      const value = Math.max(
+        maxJointAxisDeltaInSamples(stats.samples, 'chest', 'x'),
+        maxJointAxisDeltaInSamples(stats.samples, 'pelvis', 'x')
+      );
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'prompt_grounded_feet') {
+      const footContacts = stats.contacts.filter((contact) => contact.kind === 'foot_lock' && (contact.limb === 'leftFoot' || contact.limb === 'rightFoot')).length;
+      const maxLift = maxRootLiftInSamples(stats.samples);
+      if ((expectation.minValue !== undefined && footContacts < expectation.minValue) || maxLift > 0.08) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, Math.max(footContacts, maxLift));
+      }
+    }
+    if (expectation.id === 'prompt_both_hands') {
+      const hasLeft = stats.contacts.some((contact) => contact.limb === 'leftHand');
+      const hasRight = stats.contacts.some((contact) => contact.limb === 'rightHand');
+      const value = (hasLeft ? 1 : 0) + (hasRight ? 1 : 0);
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'contact_window') {
+      const value = stats.handContactStats.checkedCount;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'hand_contact') {
+      const value = stats.handContactStats.checkedCount > 0 ? stats.handContactStats.successRatio : 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'contact_body_drive') {
+      const value = stats.contactActionStats.bodyDrive || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'contact_foot_anchor') {
+      const value = stats.contactActionStats.footStability || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'prop_contact_motion' || expectation.id === 'throw_prop_motion') {
+      const value = stats.contactActionStats.propMotionDistance || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'throw_body_windup') {
+      const value = stats.contactActionStats.bodyDrive || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'throw_release') {
+      const value = stats.contactActionStats.throwReleaseDistance || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'punch_extension') {
+      const value = stats.contactActionStats.punchExtension || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'punch_recovery') {
+      const value = stats.contactActionStats.punchRecoveryRatio || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'punch_body_drive') {
+      const value = stats.contactActionStats.bodyDrive || 0;
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'target_approach') {
+      const value = stats.targetApproachDistance;
+      if (value !== undefined && expectation.maxValue !== undefined && value > expectation.maxValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'sequence_bridge') {
+      const value = sequenceBoundarySmoothnessRatio(stats.sequenceBoundaryStats);
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+      if (stats.sequenceBoundaryStats.maxVelocityRatio > 2.4) {
+        add(expectation, `未达到“${expectation.label}”期望：组合动作段落交界处速度突变过大，需要更平滑的承接。`, stats.sequenceBoundaryStats.maxVelocityRatio);
+      }
+    }
+    if (expectation.id === 'approach_contact_bridge') {
+      const smoothness = sequenceBoundarySmoothnessRatio(stats.sequenceBoundaryStats);
+      const approachScore = stats.targetApproachDistance === undefined
+        ? 1
+        : 1 - clamp01(stats.targetApproachDistance / 0.7);
+      const contactScore = stats.contactActionStats.contactWindowCoverage ?? stats.handContactStats.successRatio ?? 0;
+      const value = Number(Math.min(smoothness, approachScore, contactScore).toFixed(3));
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'turn_throw_bridge') {
+      const smoothness = sequenceBoundarySmoothnessRatio(stats.sequenceBoundaryStats);
+      const windupScore = clamp01((stats.contactActionStats.bodyDrive || 0) / 12);
+      const releaseScore = clamp01((stats.contactActionStats.throwReleaseDistance || 0) / 0.62);
+      const value = Number(Math.min(smoothness, windupScore, releaseScore).toFixed(3));
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+    if (expectation.id === 'low_recovery_attack_bridge') {
+      const smoothness = sequenceBoundarySmoothnessRatio(stats.sequenceBoundaryStats);
+      const bodyDriveScore = clamp01((stats.contactActionStats.bodyDrive || 0) / 9);
+      const punchScore = stats.contactActionStats.punchExtension === undefined
+        ? bodyDriveScore
+        : clamp01(stats.contactActionStats.punchExtension / 16);
+      const value = Number(Math.min(smoothness, Math.max(bodyDriveScore, punchScore)).toFixed(3));
+      if (expectation.minValue !== undefined && value < expectation.minValue) {
+        add(expectation, `未达到“${expectation.label}”期望：${expectation.description}`, value);
+      }
+    }
+  });
+
+  return issues;
+}
+
+function locomotionAlternationStatsForSamples(samples: AnimationClipSample[]) {
+  let maxLegSeparation = 0;
+  let signChanges = 0;
+  let previousSign = 0;
+  samples.forEach((sample, index) => {
+    if (index === 0 || index === samples.length - 1) return;
+    const delta = sample.pose.leftUpperLeg.x - sample.pose.rightUpperLeg.x;
+    maxLegSeparation = Math.max(maxLegSeparation, Math.abs(delta));
+    const sign = Math.abs(delta) < 1 ? 0 : delta > 0 ? 1 : -1;
+    if (!sign) return;
+    if (previousSign && sign !== previousSign) signChanges += 1;
+    previousSign = sign;
+  });
+  return { maxLegSeparation, signChanges };
+}
+
+function sequenceBoundaryContinuityStats(transition: PoseTransition, clip: SerializedAnimationClip): SequenceBoundaryStats {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  const empty = { maxPoseDelta: 0, maxRootDelta: 0, maxRotationDelta: 0, maxVelocityRatio: 1, issues: [] as Array<Omit<MotionQualityIssue, 'id'>> };
+  if (!sequence || sequence.length <= 1 || clip.samples.length <= 3) return empty;
+
+  let maxPoseDelta = 0;
+  let maxRootDelta = 0;
+  let maxRotationDelta = 0;
+  let maxVelocityRatio = 1;
+  const issues: Array<Omit<MotionQualityIssue, 'id'>> = [];
+  const durationSec = Math.max(0.0001, clip.durationSec || transition.durationSec || 1);
+  const qualityTarget = motionQualityTargetForTransition(transition);
+
+  sequenceBoundaryRatios(sequence).forEach((boundaryRatio, boundaryIndex) => {
+    const boundarySec = durationSec * boundaryRatio;
+    let afterIndex = clip.samples.findIndex((sample) => sample.timeSec >= boundarySec);
+    if (afterIndex <= 0) afterIndex = 1;
+    if (afterIndex >= clip.samples.length) afterIndex = clip.samples.length - 1;
+    const beforeIndex = Math.max(0, afterIndex - 1);
+    const before = clip.samples[beforeIndex];
+    const after = clip.samples[afterIndex];
+    if (!before || !after || before === after) return;
+    const beforePrev = clip.samples[Math.max(0, beforeIndex - 1)];
+    const afterNext = clip.samples[Math.min(clip.samples.length - 1, afterIndex + 1)];
+
+    const rootDelta = vecDistance(before.transform.position, after.transform.position);
+    const rotation = rotationDelta(before.transform.rotation, after.transform.rotation);
+    const boundaryDt = Math.max(0.0001, after.timeSec - before.timeSec);
+    const beforeSpeed = beforePrev && beforePrev !== before
+      ? vecDistance(beforePrev.transform.position, before.transform.position) / Math.max(0.0001, before.timeSec - beforePrev.timeSec)
+      : 0;
+    const afterSpeed = afterNext && afterNext !== after
+      ? vecDistance(after.transform.position, afterNext.transform.position) / Math.max(0.0001, afterNext.timeSec - after.timeSec)
+      : 0;
+    const neighborSpeed = Math.max(0.002, (beforeSpeed + afterSpeed) / 2);
+    const boundarySpeed = rootDelta / boundaryDt;
+    const velocityRatio = boundarySpeed / neighborSpeed;
+    let poseDelta = 0;
+    for (const joint of POSE_KEYS) {
+      poseDelta = Math.max(poseDelta, poseJointDelta(before.pose[joint], after.pose[joint]));
+    }
+    maxRootDelta = Math.max(maxRootDelta, rootDelta);
+    maxRotationDelta = Math.max(maxRotationDelta, rotation);
+    maxVelocityRatio = Math.max(maxVelocityRatio, velocityRatio);
+    maxPoseDelta = Math.max(maxPoseDelta, poseDelta);
+
+    const maxRootDeltaAllowed = Math.min(0.13, qualityTarget.maxRootStepDistance * 0.9);
+    const maxRotationAllowed = Math.min(26, qualityTarget.maxRootRotationDelta);
+    const maxPoseDeltaAllowed = Math.min(34, qualityTarget.maxPoseStepDelta);
+    if (rootDelta > maxRootDeltaAllowed || rotation > maxRotationAllowed || poseDelta > maxPoseDeltaAllowed) {
+      issues.push({
+        severity: rootDelta > maxRootDeltaAllowed * 1.7 || rotation > maxRotationAllowed * 1.6 || poseDelta > maxPoseDeltaAllowed * 1.5 ? 'error' : 'warning',
+        metric: 'sequence',
+        message: `动作序列第 ${boundaryIndex + 1} 段到第 ${boundaryIndex + 2} 段过渡不够平滑`,
+        timeSec: Number(boundarySec.toFixed(3)),
+        value: Number(Math.max(rootDelta * 100, rotation, poseDelta).toFixed(2))
+      });
+    }
+    if (velocityRatio > 2.4 && rootDelta > 0.025) {
+      issues.push({
+        severity: velocityRatio > 3.2 ? 'error' : 'warning',
+        metric: 'sequence',
+        message: `动作序列第 ${boundaryIndex + 1} 段到第 ${boundaryIndex + 2} 段根节点速度突变，容易产生卡顿。`,
+        timeSec: Number(boundarySec.toFixed(3)),
+        value: Number(velocityRatio.toFixed(2))
+      });
+    }
+  });
+
+  return {
+    maxPoseDelta: Number(maxPoseDelta.toFixed(2)),
+    maxRootDelta: Number(maxRootDelta.toFixed(4)),
+    maxRotationDelta: Number(maxRotationDelta.toFixed(2)),
+    maxVelocityRatio: Number(maxVelocityRatio.toFixed(3)),
+    issues
+  };
+}
+
+function sequenceBoundarySmoothnessRatio(stats: SequenceBoundaryStats) {
+  const rootScore = 1 - clamp01(stats.maxRootDelta / 0.16);
+  const rotationScore = 1 - clamp01(stats.maxRotationDelta / 32);
+  const poseScore = 1 - clamp01(stats.maxPoseDelta / 42);
+  const velocityScore = 1 - clamp01((stats.maxVelocityRatio - 1) / 2.2);
+  return Number(clamp01(rootScore * 0.3 + rotationScore * 0.22 + poseScore * 0.34 + velocityScore * 0.14).toFixed(3));
+}
+
+function inspectActionSequenceRealization(transition: PoseTransition, clip: SerializedAnimationClip): Array<Omit<MotionQualityIssue, 'id'>> {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  if (!sequence || sequence.length <= 1) return [];
+  const issues: Array<Omit<MotionQualityIssue, 'id'>> = [];
+  const promptHand = inferPromptHand(transition.actionPrompt);
+  const promptLeg = inferPromptLeg(transition.actionPrompt);
+  const normalizedPrompt = transition.actionPrompt.trim().toLowerCase();
+  const addIssue = (step: MotionActionSequenceStep, message: string, value?: number) => {
+    issues.push({
+      severity: 'warning',
+      metric: 'sequence',
+      message,
+      timeSec: Number((clip.durationSec * ((step.startRatio + step.endRatio) / 2)).toFixed(3)),
+      value: value === undefined ? undefined : Number(value.toFixed(2))
+    });
+  };
+  const indexOfStep = (predicate: (type: MotionSemanticActionType) => boolean) => sequence.findIndex((step) => predicate(step.actionType));
+  const addOrderIssue = (stepIndex: number, message: string) => {
+    const step = sequence[clampNumber(stepIndex, 0, sequence.length - 1)];
+    if (!step) return;
+    addIssue(step, message);
+  };
+
+  const locomotionIndex = indexOfStep(isLocomotionActionType);
+  const contactIndex = indexOfStep((type) => ['push', 'pull', 'reach', 'throw', 'punch', 'kick', 'side_kick'].includes(type));
+  if (hasPromptApproachBeforeContact(normalizedPrompt) && locomotionIndex >= 0 && contactIndex >= 0 && contactIndex < locomotionIndex) {
+    addOrderIssue(contactIndex, '提示词包含靠近目标语义，但动作序列把接触/攻击排在靠近之前。');
+  }
+  const pushPullIndex = indexOfStep((type) => type === 'push' || type === 'pull');
+  if (hasPromptApproachBeforeContact(normalizedPrompt) && locomotionIndex >= 0 && pushPullIndex >= 0) {
+    const locomotionStep = sequence[locomotionIndex];
+    const contactStep = sequence[pushPullIndex];
+    const overlap = locomotionStep.endRatio - contactStep.startRatio;
+    if (pushPullIndex < locomotionIndex) {
+      addOrderIssue(pushPullIndex, '提示词要求先靠近再推/拉目标，但当前推/拉阶段排在移动之前。');
+    } else if (overlap < 0.04) {
+      addIssue(contactStep, '跑/走/冲到目标后缺少减速贴近和手部接触承接。', overlap);
+    }
+  }
+
+  const turnIndex = indexOfStep((type) => type === 'turn');
+  const powerActionIndex = indexOfStep((type) => ['throw', 'punch', 'kick', 'side_kick'].includes(type));
+  if (hasPromptTurnBeforeAction(normalizedPrompt) && turnIndex >= 0 && powerActionIndex >= 0 && powerActionIndex < turnIndex) {
+    addOrderIssue(powerActionIndex, '提示词包含转身后发力语义，但动作序列把发力动作排在转身之前。');
+  }
+  const throwIndex = indexOfStep((type) => type === 'throw');
+  if (hasPromptTurnBeforeAction(normalizedPrompt) && turnIndex >= 0 && throwIndex >= 0) {
+    const turnStep = sequence[turnIndex];
+    const throwStep = sequence[throwIndex];
+    const overlap = turnStep.endRatio - throwStep.startRatio;
+    if (throwIndex < turnIndex) {
+      addOrderIssue(throwIndex, '提示词要求转身后投掷，但当前投掷阶段排在转身之前。');
+    } else if (overlap < 0.035) {
+      addIssue(throwStep, '转身后投掷缺少躯干扭转到蓄力出手的承接。', overlap);
+    }
+  }
+
+  const crouchIndex = indexOfStep((type) => type === 'crouch' || type === 'block');
+  const recoveryIndex = indexOfStep((type) => type === 'get_up');
+  if (hasPromptCrouchBeforeRecovery(normalizedPrompt) && crouchIndex >= 0 && recoveryIndex >= 0 && recoveryIndex < crouchIndex) {
+    addOrderIssue(recoveryIndex, '提示词包含蹲下/躲避后再恢复语义，但动作序列把恢复排在下沉防守之前。');
+  }
+  if (hasPromptRecoveryBeforeAttack(normalizedPrompt) && recoveryIndex >= 0 && powerActionIndex >= 0 && powerActionIndex < recoveryIndex) {
+    addOrderIssue(powerActionIndex, '提示词包含起身后再攻击语义，但动作序列把攻击排在起身之前。');
+  }
+  if (promptNeedsImplicitGetUpBeforeAttack(normalizedPrompt)) {
+    if (recoveryIndex < 0) {
+      addOrderIssue(Math.max(crouchIndex, 0), '提示词包含蹲下/躲避后攻击语义，但动作序列缺少起身恢复阶段。');
+    } else if (crouchIndex >= 0 && powerActionIndex >= 0 && !(crouchIndex < recoveryIndex && recoveryIndex < powerActionIndex)) {
+      addOrderIssue(recoveryIndex, '蹲下/躲避后攻击需要按“下沉 → 起身恢复 → 攻击”顺序执行。');
+    }
+  }
+
+  promptExplicitSequenceRelations(normalizedPrompt, sequence.map((step) => step.actionType)).forEach((relation) => {
+    const beforeIndex = indexOfStep((type) => type === relation.before);
+    const afterIndex = indexOfStep((type) => type === relation.after);
+    if (beforeIndex >= 0 && afterIndex >= 0 && afterIndex < beforeIndex) {
+      addOrderIssue(afterIndex, `提示词要求“${MOTION_SEMANTIC_TYPE_LABELS[relation.before]}”先于“${MOTION_SEMANTIC_TYPE_LABELS[relation.after]}”，但当前动作序列顺序相反。`);
+    }
+  });
+
+  for (let index = 0; index < sequence.length - 1; index += 1) {
+    const current = sequence[index];
+    const next = sequence[index + 1];
+    const overlap = current.endRatio - next.startRatio;
+    if (overlap < 0.015) {
+      addIssue(next, `动作序列第${index + 1}段到第${index + 2}段缺少承接重叠，容易出现卡顿。`, overlap);
+    } else if (overlap > 0.24) {
+      addIssue(next, `动作序列第${index + 1}段到第${index + 2}段混合过多，动作意图可能变得不清晰。`, overlap);
+    }
+  }
+
+  sequence.forEach((step, index) => {
+    if (step.actionType === 'unknown' || step.actionType === 'idle') return;
+    const label = step.label || MOTION_SEMANTIC_TYPE_LABELS[step.actionType] || `动作${index + 1}`;
+    const stepSamples = samplesForSequenceStep(clip, step);
+    if (stepSamples.length <= 2) return;
+    const stepDurationRatio = clampNumber(step.endRatio - step.startRatio, 0, 1);
+    const minDurationRatio = sequenceActionMinDurationRatio(step.actionType, sequence.length);
+    if (stepDurationRatio < minDurationRatio) {
+      addIssue(step, `动作序列第${index + 1}段“${label}”阶段时间过短，动作意图可能无法完整呈现。`, stepDurationRatio);
+    }
+    const hasHandContact = contactsInSequenceStep(clip, step, (contact) => contact.limb === 'leftHand' || contact.limb === 'rightHand').length > 0;
+    const hasRelease = contactsInSequenceStep(clip, step, (contact) => contact.kind === 'release').length > 0;
+
+    if (isLocomotionActionType(step.actionType)) {
+      const alternation = locomotionAlternationStatsForSamples(stepSamples);
+      const minSeparation = motionActionSkill(step.actionType)?.quality.minLegSeparation || (step.actionType === 'walk' ? 8 : 11);
+      const travel = rootTravelInSamples(stepSamples);
+      if (alternation.maxLegSeparation < minSeparation && travel < 0.08 && !promptRequestsInPlaceMotion(transition.actionPrompt)) {
+        addIssue(step, `动作序列第${index + 1}段“${label}”没有形成清晰的步态和位移。`, Math.max(alternation.maxLegSeparation, travel * 100));
+      } else if (alternation.maxLegSeparation < minSeparation) {
+        addIssue(step, `动作序列第${index + 1}段“${label}”左右腿交替幅度不足。`, alternation.maxLegSeparation);
+      }
+    }
+
+    if (step.actionType === 'punch' || step.actionType === 'block' || step.actionType === 'reach') {
+      const mainHand = promptHand === 'left' ? 'left' : 'right';
+      const upper = maxJointAxisDeltaInSamples(stepSamples, mainHand === 'left' ? 'leftUpperArm' : 'rightUpperArm', 'x');
+      const lower = maxJointAxisDeltaInSamples(stepSamples, mainHand === 'left' ? 'leftLowerArm' : 'rightLowerArm', 'x');
+      const threshold = motionActionSkill(step.actionType)?.quality.minPrimaryJointDelta || (step.actionType === 'block' ? 10 : 13);
+      if (Math.max(upper, lower) < threshold && !hasHandContact) {
+        addIssue(step, `动作序列第${index + 1}段“${label}”主手轨迹不明显。`, Math.max(upper, lower));
+      }
+    }
+
+    if (step.actionType === 'push' || step.actionType === 'pull') {
+      const limbs = semanticContactLimbsForAction(step.actionType, transition.actionPrompt)
+        .map((limb) => limb === 'leftHand' ? 'left' : 'right');
+      const armDelta = limbs.reduce((min, limb) => {
+        const upper = maxJointAxisDeltaInSamples(stepSamples, limb === 'left' ? 'leftUpperArm' : 'rightUpperArm', 'x');
+        const lower = maxJointAxisDeltaInSamples(stepSamples, limb === 'left' ? 'leftLowerArm' : 'rightLowerArm', 'x');
+        return Math.min(min, Math.max(upper, lower));
+      }, Number.POSITIVE_INFINITY);
+      const threshold = motionActionSkill(step.actionType)?.quality.minPrimaryJointDelta || 10;
+      if (armDelta < threshold || !hasHandContact) {
+        addIssue(step, `动作序列第${index + 1}段“${label}”缺少明确的手部接触和发力。`, Number.isFinite(armDelta) ? armDelta : 0);
+      }
+    }
+
+    if (step.actionType === 'throw') {
+      const mainHand = promptHand === 'left' ? 'left' : 'right';
+      const shoulder = maxJointAxisDeltaInSamples(stepSamples, mainHand === 'left' ? 'leftUpperArm' : 'rightUpperArm', 'x');
+      const twist = maxJointAxisDeltaInSamples(stepSamples, 'chest', 'y');
+      const threshold = motionActionSkill('throw')?.quality.minPrimaryJointDelta || 14;
+      if (shoulder < threshold || twist < 6 || !hasRelease) {
+        addIssue(step, `动作序列第${index + 1}段“${label}”缺少蓄力、出手或释放点。`, Math.min(shoulder, twist));
+      }
+    }
+
+    if (step.actionType === 'kick' || step.actionType === 'side_kick') {
+      const kickLeg = promptLeg === 'left' ? 'left' : 'right';
+      const hip = maxJointAxisDeltaInSamples(stepSamples, kickLeg === 'left' ? 'leftUpperLeg' : 'rightUpperLeg', step.actionType === 'side_kick' ? 'z' : 'x');
+      const knee = maxJointAxisDeltaInSamples(stepSamples, kickLeg === 'left' ? 'leftLowerLeg' : 'rightLowerLeg', 'x');
+      const threshold = motionActionSkill(step.actionType)?.quality.minPrimaryJointDelta || 12;
+      if (hip < threshold || knee < 8) {
+        addIssue(step, `动作序列第${index + 1}段“${label}”主腿发力不明显。`, Math.min(hip, knee));
+      }
+    }
+
+    if (step.actionType === 'crouch') {
+      const pelvis = maxJointAxisDeltaInSamples(stepSamples, 'pelvis', 'x');
+      const knee = Math.max(
+        maxJointAxisDeltaInSamples(stepSamples, 'leftLowerLeg', 'x'),
+        maxJointAxisDeltaInSamples(stepSamples, 'rightLowerLeg', 'x')
+      );
+      if (pelvis < 7 || knee < 10) addIssue(step, `动作序列第${index + 1}段“${label}”下沉姿态不明显。`, Math.min(pelvis, knee));
+    }
+
+    if (step.actionType === 'jump') {
+      const lift = maxRootLiftInSamples(stepSamples);
+      if (lift < 0.1) addIssue(step, `动作序列第${index + 1}段“${label}”缺少明显起跳离地。`, lift);
+    }
+
+    if (step.actionType === 'turn') {
+      const yaw = Math.abs((stepSamples[stepSamples.length - 1].transform.rotation.y || 0) - (stepSamples[0].transform.rotation.y || 0));
+      const chestTwist = maxJointAxisDeltaInSamples(stepSamples, 'chest', 'y');
+      if (Math.max(yaw, chestTwist) < 8) addIssue(step, `动作序列第${index + 1}段“${label}”转向变化不明显。`, Math.max(yaw, chestTwist));
+    }
+  });
+  return issues;
+}
+
+function inspectMotionQuality(scene: Scene3DState, transition: PoseTransition, clip: SerializedAnimationClip): MotionQualityReport {
   const issues: MotionQualityIssue[] = [];
   const samples = clip.samples;
   const start = samples[0];
@@ -6054,6 +11379,24 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
   let maxRootRotationDelta = 0;
   let maxConsecutivePoseDelta = 0;
   let lockedFootChanges = 0;
+  const locomotionStats = locomotionSupportStats(transition, clip);
+  const locomotionActionType = sequenceLocomotionActionType(transition);
+  const locomotionAlternation = isLocomotionActionType(locomotionActionType)
+    ? locomotionAlternationStats(samples)
+    : { maxLegSeparation: 0, signChanges: 0 };
+  const timingStats = semanticTimingStats(clip);
+  const handContactStats = semanticHandContactStats(clip, transition);
+  const handReachDistance = handContactStats.maxDistance || semanticHandReachDistance(clip);
+  const targetApproachDistance = semanticTargetApproachDistance(scene, transition, clip);
+  const contactActionStats = semanticContactActionStats(scene, transition, clip);
+  const sequenceBoundaryStats = sequenceBoundaryContinuityStats(transition, clip);
+  const protectedKeyframeTimes = explicitMiddleKeyframeTimes(transition, clip.durationSec);
+  const continuityStats = motionContinuityStats(samples, protectedKeyframeTimes);
+  const qualityTarget = motionQualityTargetForTransition(transition);
+  const actualSampleRate = samples.length > 1 && clip.durationSec > 0
+    ? (samples.length - 1) / clip.durationSec
+    : 0;
+  const expectedSampleRate = motionClipSampleRateForTransition(transition);
   const pushIssue = (issue: Omit<MotionQualityIssue, 'id'>) => {
     issues.push({ id: createId('quality'), ...issue });
   };
@@ -6061,25 +11404,28 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
   for (let index = 1; index < samples.length; index += 1) {
     const previous = samples[index - 1];
     const current = samples[index];
+    const protectedInterval = intervalTouchesExplicitKeyframe(previous.timeSec, current.timeSec, protectedKeyframeTimes);
     const stepDistance = vecDistance(previous.transform.position, current.transform.position);
     const rootTurn = rotationDelta(previous.transform.rotation, current.transform.rotation);
-    maxStepDistance = Math.max(maxStepDistance, stepDistance);
-    maxRootRotationDelta = Math.max(maxRootRotationDelta, rootTurn);
-    for (const key of POSE_KEYS) {
-      maxConsecutivePoseDelta = Math.max(maxConsecutivePoseDelta, poseJointDelta(previous.pose[key], current.pose[key]));
+    if (!protectedInterval) {
+      maxStepDistance = Math.max(maxStepDistance, stepDistance);
+      maxRootRotationDelta = Math.max(maxRootRotationDelta, rootTurn);
+      for (const key of POSE_KEYS) {
+        maxConsecutivePoseDelta = Math.max(maxConsecutivePoseDelta, poseJointDelta(previous.pose[key], current.pose[key]));
+      }
     }
-    if (stepDistance > 0.18) {
+    if (!protectedInterval && stepDistance > qualityTarget.maxRootStepDistance) {
       pushIssue({
-        severity: stepDistance > 0.32 ? 'error' : 'warning',
+        severity: stepDistance > qualityTarget.maxRootStepDistance * 1.65 ? 'error' : 'warning',
         metric: 'speed',
         message: '根节点位移变化过大',
         timeSec: current.timeSec,
         value: Number(stepDistance.toFixed(4))
       });
     }
-    if (rootTurn > 32) {
+    if (!protectedInterval && rootTurn > qualityTarget.maxRootRotationDelta) {
       pushIssue({
-        severity: rootTurn > 58 ? 'error' : 'warning',
+        severity: rootTurn > qualityTarget.maxRootRotationDelta * 1.65 ? 'error' : 'warning',
         metric: 'rotation',
         message: '根节点旋转变化过大',
         timeSec: current.timeSec,
@@ -6147,6 +11493,37 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
 
   const families = universalMotionFamilies(transition.actionPlan.universal, transition.actionPrompt);
   const semanticPlan = transition.actionPlan.semanticPlan;
+  if (isLocomotionActionType(locomotionActionType) && actualSampleRate < expectedSampleRate * 0.85) {
+    pushIssue({
+      severity: 'warning',
+      metric: 'speed',
+      message: '走跑冲刺采样密度不足，播放时可能出现卡顿或步态跳变',
+      value: Number(actualSampleRate.toFixed(2))
+    });
+  }
+  const allowsBurstTiming = promptRequestsBurstTiming(transition.actionPrompt);
+  const rootSpikeLimit = isLocomotionActionType(locomotionActionType)
+    ? 2.25
+    : allowsBurstTiming
+      ? 3.8
+      : 2.8;
+  const poseSpikeLimit = allowsBurstTiming ? 4.4 : 3.25;
+  if (continuityStats.rootVelocitySpikeRatio > rootSpikeLimit) {
+    pushIssue({
+      severity: continuityStats.rootVelocitySpikeRatio > rootSpikeLimit * 1.35 ? 'error' : 'warning',
+      metric: 'speed',
+      message: '根节点速度出现尖峰，播放时容易卡顿或突然抽动',
+      value: continuityStats.rootVelocitySpikeRatio
+    });
+  }
+  if (continuityStats.poseVelocitySpikeRatio > poseSpikeLimit) {
+    pushIssue({
+      severity: continuityStats.poseVelocitySpikeRatio > poseSpikeLimit * 1.35 ? 'error' : 'warning',
+      metric: 'pose',
+      message: '关节速度出现尖峰，动作姿态过渡不够丝滑',
+      value: continuityStats.poseVelocitySpikeRatio
+    });
+  }
   const expectsContact = families.some((family) => ['roll', 'fall', 'get_up', 'crawl', 'kneel', 'carry', 'reach'].includes(family))
     || transition.constraints.handTarget.enabled
     || transition.actionPlan.templates.some((item) => item.id === 'pick_up' || item.id === 'put_down' || item.id === 'point_at')
@@ -6159,11 +11536,31 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
     });
   }
   if (semanticPlan) {
+    const actionTypes = new Set<MotionSemanticActionType>([
+      semanticPlan.actionType,
+      ...(semanticPlan.actionSequence || []).map((step) => step.actionType)
+    ]);
+    const hasAction = (...types: MotionSemanticActionType[]) => types.some((type) => actionTypes.has(type));
+    if (hasAction('push', 'pull', 'throw', 'reach') && !semanticPlan.targetObjectId) {
+      pushIssue({
+        severity: 'warning',
+        metric: 'contact',
+        message: '接触型动作缺少真实目标对象，将只能使用角色前方虚拟目标',
+      });
+    }
+    if (targetApproachDistance !== undefined && targetApproachDistance > 0.55) {
+      pushIssue({
+        severity: targetApproachDistance > 0.9 ? 'error' : 'warning',
+        metric: 'contact',
+        message: '组合动作接触前没有靠近目标对象',
+        value: targetApproachDistance
+      });
+    }
     const allowsAirborne = transitionAllowsAirborneMotion(transition);
     const allowsExaggerated = promptAllowsExaggeratedMotion(transition.actionPrompt);
     const startY = samples[0]?.transform.position.y || 0;
     const maxLift = samples.reduce((max, sample) => Math.max(max, sample.transform.position.y - startY), 0);
-    if (!allowsAirborne && maxLift > 0.08) {
+    if (!allowsAirborne && maxLift > qualityTarget.maxRootLift) {
       pushIssue({
         severity: 'warning',
         metric: 'pose',
@@ -6171,7 +11568,7 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
         value: Number(maxLift.toFixed(3))
       });
     }
-    if (!allowsExaggerated && maxConsecutivePoseDelta > 52) {
+    if (!allowsExaggerated && maxConsecutivePoseDelta > qualityTarget.maxPoseStepDelta) {
       pushIssue({
         severity: 'warning',
         metric: 'pose',
@@ -6179,10 +11576,42 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
         value: Number(maxConsecutivePoseDelta.toFixed(2))
       });
     }
+    if (promptRequestsBurstTiming(transition.actionPrompt) && timingStats.speedContrast < 1.18) {
+      pushIssue({
+        severity: 'warning',
+        metric: 'speed',
+        message: '提示词要求突然爆发，但动态缺少明显速度峰值',
+        value: timingStats.speedContrast
+      });
+    }
+    if (semanticPlan.speedLabel === '缓慢' && timingStats.speedContrast > 1.8) {
+      pushIssue({
+        severity: 'warning',
+        metric: 'speed',
+        message: '提示词要求缓慢动作，但根节点速度变化过急',
+        value: timingStats.speedContrast
+      });
+    }
     if (semanticPlan.contacts.some((item) => item.contact === 'hands' || item.contact === 'leftHand' || item.contact === 'rightHand')) {
       const handContacts = clip.contacts.filter((item) => item.limb === 'leftHand' || item.limb === 'rightHand');
       if (!handContacts.length) {
         pushIssue({ severity: 'warning', metric: 'contact', message: '提示词要求手部接触，但动态缺少手部接触点' });
+      }
+      if (handReachDistance > 0.62) {
+        pushIssue({
+          severity: handReachDistance > 0.9 ? 'error' : 'warning',
+          metric: 'contact',
+          message: '手部轨迹距离目标接触点过远',
+          value: handReachDistance
+        });
+      }
+      if (handContactStats.checkedCount > 0 && handContactStats.successRatio < 0.5) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'contact',
+          message: '手部接触帧没有稳定贴近目标',
+          value: handContactStats.successRatio
+        });
       }
     }
     if (semanticPlan.contacts.some((item) => item.contact === 'feet')) {
@@ -6191,17 +11620,247 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
         pushIssue({ severity: 'warning', metric: 'foot_lock', message: '提示词要求脚部贴地，但动态缺少脚部接触点' });
       }
     }
-    if (semanticPlan.actionType === 'walk' || semanticPlan.actionType === 'run' || semanticPlan.actionType === 'dash') {
-      const legDelta = samples.reduce((max, sample) => Math.max(max, Math.abs(sample.pose.leftUpperLeg.x - sample.pose.rightUpperLeg.x)), 0);
-      if (legDelta < 12) {
-        pushIssue({ severity: 'warning', metric: 'pose', message: '走跑动作左右腿交替幅度不足', value: Number(legDelta.toFixed(2)) });
+    if (isLocomotionActionType(locomotionActionType)) {
+      const minSeparation = qualityTarget.minLegSeparation || (locomotionActionType === 'walk' ? 10 : 14);
+      if (locomotionAlternation.maxLegSeparation < minSeparation) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: '走跑动作左右腿交替幅度不足', value: Number(locomotionAlternation.maxLegSeparation.toFixed(2)) });
+      }
+      if (locomotionAlternation.signChanges < 1) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: '走跑动作缺少明确的左右腿交替变化', value: locomotionAlternation.signChanges });
+      }
+      const locomotionDurationRatio = sequenceActionDurationRatio(transition, locomotionActionType);
+      const locomotionDurationSec = Math.max(0.1, clip.durationSec * locomotionDurationRatio);
+      const gaitCycles = locomotionGaitCycleCount(locomotionActionType, locomotionDurationSec, locomotionGaitTempoScale(transition, locomotionActionType));
+      const expectedSupportSwitches = Math.max(
+        1,
+        Math.floor(gaitCycles * 0.62)
+      );
+      if (locomotionStats.supportSwitchCount < expectedSupportSwitches) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'foot_lock',
+          message: '走跑动作支撑脚交替不足',
+          value: locomotionStats.supportSwitchCount
+        });
+      }
+      const minArmSwing = qualityTarget.minArmSwingSeparation || (locomotionActionType === 'walk' ? 10 : locomotionActionType === 'run' ? 18 : 22);
+      if (locomotionStats.armSwingSeparation < minArmSwing) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'pose',
+          message: '走跑动作手臂反向摆动不足',
+          value: locomotionStats.armSwingSeparation
+        });
+      }
+      const maxFootPlantDrift = qualityTarget.maxFootPlantDrift || 9;
+      if (locomotionStats.footPlantDrift > maxFootPlantDrift) {
+        pushIssue({
+          severity: locomotionStats.footPlantDrift > maxFootPlantDrift * 2 ? 'error' : 'warning',
+          metric: 'foot_lock',
+          message: '走跑动作支撑脚漂移过大',
+          value: locomotionStats.footPlantDrift
+        });
+      }
+      const maxRootStepJitter = qualityTarget.maxRootStepJitter || 0.65;
+      if (!protectedKeyframeTimes.length && locomotionStats.rootStepJitter > maxRootStepJitter) {
+        pushIssue({
+          severity: locomotionStats.rootStepJitter > maxRootStepJitter * 1.45 ? 'error' : 'warning',
+          metric: 'speed',
+          message: '走跑动作根节点步速不稳定',
+          value: locomotionStats.rootStepJitter
+        });
+      }
+      if (!protectedKeyframeTimes.length && locomotionStats.rootBacktrackCount > 0) {
+        pushIssue({
+          severity: locomotionStats.rootBacktrackCount > 2 ? 'error' : 'warning',
+          metric: 'speed',
+          message: '走跑动作根节点出现反向回抽',
+          value: locomotionStats.rootBacktrackCount
+        });
+      }
+      const minPaceCoverage = locomotionActionType === 'walk' ? 0.58 : locomotionActionType === 'run' ? 0.64 : 0.68;
+      if (
+        locomotionStats.expectedTravelDistance > 0.08
+        && locomotionStats.paceCoverageRatio < minPaceCoverage
+        && !promptRequestsInPlaceMotion(transition.actionPrompt)
+      ) {
+        pushIssue({
+          severity: locomotionStats.paceCoverageRatio < minPaceCoverage * 0.72 ? 'error' : 'warning',
+          metric: 'speed',
+          message: '走跑动作根节点位移没有达到提示词要求',
+          value: locomotionStats.paceCoverageRatio
+        });
+      }
+      const minSupportCoverage = locomotionActionType === 'walk' ? 0.42 : locomotionActionType === 'run' ? 0.32 : 0.28;
+      if (locomotionStats.supportCoverageRatio < minSupportCoverage) {
+        pushIssue({
+          severity: locomotionStats.supportCoverageRatio < minSupportCoverage * 0.65 ? 'error' : 'warning',
+          metric: 'foot_lock',
+          message: '走跑动作缺少稳定支撑脚相位',
+          value: locomotionStats.supportCoverageRatio
+        });
+      }
+      const minArmLegSync = locomotionActionType === 'walk' ? 0.34 : 0.38;
+      if (locomotionStats.armLegSyncScore < minArmLegSync && locomotionStats.armSwingSeparation >= minArmSwing * 0.65) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'pose',
+          message: '走跑动作手臂反摆与腿部交替不同步',
+          value: locomotionStats.armLegSyncScore
+        });
+      }
+      const contactDensity = locomotionActionType === 'walk' ? 1.35 : locomotionActionType === 'run' ? 1.85 : 2.2;
+      const minimumContacts = Math.max(2, Math.floor(locomotionDurationSec * contactDensity));
+      const expectedContacts = Math.max(
+        minimumContacts,
+        Math.floor(gaitCycles * 1.15)
+      );
+      if (expectedContacts > 0 && locomotionStats.footContactCount < expectedContacts) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'contact',
+          message: '走跑动作脚步接触帧不足',
+          value: locomotionStats.footContactCount
+        });
+      }
+      if (locomotionStats.footPhaseMismatchCount > 0) {
+        pushIssue({
+          severity: locomotionStats.footPhaseMismatchCount > 2 ? 'error' : 'warning',
+          metric: 'foot_lock',
+          message: '走跑动作脚步接触帧与步态相位不匹配',
+          value: locomotionStats.footPhaseMismatchCount
+        });
+      }
+    }
+    if (hasAction('punch')) {
+      const mainHand = inferPromptHand(transition.actionPrompt) === 'left' ? 'left' : 'right';
+      const shoulderDelta = maxJointAxisDeltaFromStart(samples, mainHand === 'left' ? 'leftUpperArm' : 'rightUpperArm', 'x');
+      const elbowDelta = maxJointAxisDeltaFromStart(samples, mainHand === 'left' ? 'leftLowerArm' : 'rightLowerArm', 'x');
+      const minPunchDelta = motionActionSkill('punch')?.quality.minPrimaryJointDelta || 16;
+      if (shoulderDelta < minPunchDelta || elbowDelta < minPunchDelta) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: '出拳动作主手发力不明显', value: Number(Math.min(shoulderDelta, elbowDelta).toFixed(2)) });
+      }
+    }
+    if (hasAction('push', 'pull')) {
+      const pushPullType = hasAction('push') ? 'push' : 'pull';
+      const limbs = semanticContactLimbsForAction(pushPullType, transition.actionPrompt)
+        .map((limb) => limb === 'leftHand' ? 'left' : 'right');
+      const minArmDelta = limbs.reduce((min, limb) => {
+        const upper = maxJointAxisDeltaFromStart(samples, limb === 'left' ? 'leftUpperArm' : 'rightUpperArm', 'x');
+        const lower = maxJointAxisDeltaFromStart(samples, limb === 'left' ? 'leftLowerArm' : 'rightLowerArm', 'x');
+        return Math.min(min, Math.max(upper, lower));
+      }, Number.POSITIVE_INFINITY);
+      const minPushPullDelta = motionActionSkill(pushPullType)?.quality.minPrimaryJointDelta || 12;
+      if (minArmDelta < minPushPullDelta) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: pushPullType === 'push' ? '推动作手臂前推幅度不足' : '拉动作手臂回拉幅度不足', value: Number(minArmDelta.toFixed(2)) });
+      }
+      const hasHandReach = clip.contacts.some((item) => item.limb === 'leftHand' || item.limb === 'rightHand');
+      if (!hasHandReach) {
+        pushIssue({ severity: 'warning', metric: 'contact', message: pushPullType === 'push' ? '推动作缺少手部接触目标帧' : '拉动作缺少手部抓取目标帧' });
+      }
+      if (contactActionStats.contactWindowCoverage !== undefined && contactActionStats.contactWindowCoverage < 0.65) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'contact',
+          message: pushPullType === 'push' ? '推动作接触窗口不够持续' : '拉动作抓握窗口不够持续',
+          value: contactActionStats.contactWindowCoverage
+        });
+      }
+      if ((contactActionStats.bodyDrive || 0) < 7) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'pose',
+          message: pushPullType === 'push' ? '推动作缺少身体前压发力' : '拉动作缺少身体后拉发力',
+          value: contactActionStats.bodyDrive
+        });
+      }
+      if (contactActionStats.footStability !== undefined && contactActionStats.footStability < 0.42) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'foot_lock',
+          message: pushPullType === 'push' ? '推动作脚部支撑不稳定' : '拉动作脚部支撑不稳定',
+          value: contactActionStats.footStability
+        });
+      }
+      if (semanticPlan.targetObjectId && (contactActionStats.propMotionDistance || 0) < (pushPullType === 'push' ? 0.14 : 0.1)) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'contact',
+          message: pushPullType === 'push' ? '推动作没有带动目标道具向前移动' : '拉动作没有带动目标道具向角色方向移动',
+          value: contactActionStats.propMotionDistance
+        });
+      }
+      if (semanticPlan.targetObjectId && contactActionStats.propDirectionAlignment !== undefined && contactActionStats.propDirectionAlignment < 0.45) {
+        pushIssue({
+          severity: 'warning',
+          metric: 'contact',
+          message: pushPullType === 'push' ? '推动作目标道具移动方向与推力方向不一致' : '拉动作目标道具移动方向与回拉方向不一致',
+          value: contactActionStats.propDirectionAlignment
+        });
+      }
+    }
+    if (hasAction('throw')) {
+      const mainHand = inferPromptHand(transition.actionPrompt) === 'left' ? 'left' : 'right';
+      const shoulderDelta = maxJointAxisDeltaFromStart(samples, mainHand === 'left' ? 'leftUpperArm' : 'rightUpperArm', 'x');
+      const twistDelta = maxJointAxisDeltaFromStart(samples, 'chest', 'y');
+      const minThrowDelta = motionActionSkill('throw')?.quality.minPrimaryJointDelta || 18;
+      if (shoulderDelta < minThrowDelta || twistDelta < 8) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: '投掷动作蓄力或出手幅度不足', value: Number(Math.min(shoulderDelta, twistDelta).toFixed(2)) });
+      }
+      if (!clip.contacts.some((item) => item.kind === 'release')) {
+        pushIssue({ severity: 'warning', metric: 'contact', message: '投掷动作缺少出手释放帧' });
+      }
+      if ((contactActionStats.bodyDrive || 0) < 8) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: '投掷动作缺少躯干蓄力和重心转移', value: contactActionStats.bodyDrive });
+      }
+      if (contactActionStats.throwReleaseDistance !== undefined && contactActionStats.throwReleaseDistance < 0.62) {
+        pushIssue({ severity: 'warning', metric: 'contact', message: '投掷动作释放点离身体过近，出手轨迹不明显', value: contactActionStats.throwReleaseDistance });
+      }
+      if (contactActionStats.contactWindowCoverage !== undefined && contactActionStats.contactWindowCoverage < 0.65) {
+        pushIssue({ severity: 'warning', metric: 'contact', message: '投掷动作握持、蓄力、释放窗口不完整', value: contactActionStats.contactWindowCoverage });
+      }
+      if (semanticPlan.targetObjectId && (contactActionStats.propMotionDistance || 0) < 0.32) {
+        pushIssue({ severity: 'warning', metric: 'contact', message: '投掷动作没有带动目标物体形成明显飞出轨迹', value: contactActionStats.propMotionDistance });
+      }
+      if (semanticPlan.targetObjectId && contactActionStats.propDirectionAlignment !== undefined && contactActionStats.propDirectionAlignment < 0.45) {
+        pushIssue({ severity: 'warning', metric: 'contact', message: '投掷目标物体飞出方向与出手方向不一致', value: contactActionStats.propDirectionAlignment });
+      }
+    }
+    if (hasAction('kick', 'side_kick')) {
+      const kickType = hasAction('side_kick') ? 'side_kick' : 'kick';
+      const kickLeg = inferPromptLeg(transition.actionPrompt) === 'left' ? 'left' : 'right';
+      const hipDelta = maxJointAxisDeltaFromStart(samples, kickLeg === 'left' ? 'leftUpperLeg' : 'rightUpperLeg', kickType === 'side_kick' ? 'z' : 'x');
+      const kneeDelta = maxJointAxisDeltaFromStart(samples, kickLeg === 'left' ? 'leftLowerLeg' : 'rightLowerLeg', 'x');
+      const minKickDelta = motionActionSkill(kickType)?.quality.minPrimaryJointDelta || 14;
+      if (hipDelta < minKickDelta || kneeDelta < 10) {
+        pushIssue({ severity: 'warning', metric: 'pose', message: '踢腿动作主腿发力不明显', value: Number(Math.min(hipDelta, kneeDelta).toFixed(2)) });
       }
     }
     if (semanticPlan.cameraIntent && !clip.cameraSamples?.length) {
       pushIssue({ severity: 'warning', metric: 'pose', message: '识别到运镜意图，但未生成运镜采样' });
     }
+    inspectMotionQualityExpectations(transition, {
+      locomotionStats,
+      locomotionAlternation,
+      handContactStats,
+      targetApproachDistance,
+      contactActionStats,
+      sequenceBoundaryStats,
+      samples,
+      contacts: clip.contacts
+    }).forEach(pushIssue);
+    inspectActionSequenceRealization(transition, clip).forEach(pushIssue);
+    sequenceBoundaryStats.issues.forEach(pushIssue);
   }
 
+  const motionExpectations = transition.actionPlan.semanticPlan?.qualityExpectations || [];
+  const failedExpectationCount = motionExpectations.filter((expectation) => issues.some((issue) => (
+    issue.message.includes(`“${expectation.label}”期望`)
+    || issue.message.includes(expectation.description)
+  ))).length;
+  const expectationPassRatio = motionExpectations.length
+    ? clamp01((motionExpectations.length - failedExpectationCount) / motionExpectations.length)
+    : undefined;
   const issueWeight = issues.reduce((total, issue) => total + (issue.severity === 'error' ? 24 : issue.severity === 'warning' ? 10 : 3), 0);
   return {
     version: 1,
@@ -6211,12 +11870,100 @@ function inspectMotionQuality(transition: PoseTransition, clip: SerializedAnimat
     metrics: {
       maxStepDistance: Number(maxStepDistance.toFixed(4)),
       maxRootRotationDelta: Number(maxRootRotationDelta.toFixed(2)),
+      rootVelocitySpikeRatio: continuityStats.rootVelocitySpikeRatio,
+      poseVelocitySpikeRatio: continuityStats.poseVelocitySpikeRatio,
+      maxPoseVelocity: continuityStats.maxPoseVelocity,
       startPositionDrift: Number(startPositionDrift.toFixed(4)),
       endPositionDrift: Number(endPositionDrift.toFixed(4)),
       lockedFootChanges,
-      contactCount: clip.contacts.length
+      contactCount: clip.contacts.length,
+      motionSampleRate: actualSampleRate ? Number(actualSampleRate.toFixed(2)) : undefined,
+      locomotionFootPlantDrift: locomotionStats.footPlantDrift,
+      locomotionRootStepJitter: locomotionStats.rootStepJitter,
+      locomotionFootContactCount: locomotionStats.footContactCount,
+      locomotionFootPhaseMismatchCount: locomotionStats.footPhaseMismatchCount,
+      locomotionRootBacktrackCount: locomotionStats.rootBacktrackCount,
+      locomotionRootTravelDistance: locomotionStats.rootTravelDistance,
+      locomotionExpectedTravelDistance: locomotionStats.expectedTravelDistance,
+      locomotionPaceCoverageRatio: locomotionStats.paceCoverageRatio,
+      locomotionSupportSwitchCount: locomotionStats.supportSwitchCount,
+      locomotionSupportCoverageRatio: locomotionStats.supportCoverageRatio,
+      locomotionArmSwingSeparation: locomotionStats.armSwingSeparation,
+      locomotionArmLegSyncScore: locomotionStats.armLegSyncScore,
+      locomotionLegSeparation: locomotionAlternation.maxLegSeparation ? Number(locomotionAlternation.maxLegSeparation.toFixed(2)) : undefined,
+      locomotionLegSignChanges: locomotionAlternation.signChanges || undefined,
+      semanticTimingPeakRatio: timingStats.peakRatio,
+      semanticTimingSpeedContrast: timingStats.speedContrast,
+      semanticHandReachDistance: handReachDistance || undefined,
+      semanticHandContactSuccessRatio: handContactStats.checkedCount ? handContactStats.successRatio : undefined,
+      semanticTargetApproachDistance: targetApproachDistance,
+      semanticContactBodyDrive: contactActionStats.bodyDrive,
+      semanticContactFootStability: contactActionStats.footStability,
+      semanticContactWindowCoverage: contactActionStats.contactWindowCoverage,
+      semanticPropMotionDistance: contactActionStats.propMotionDistance,
+      semanticPropDirectionAlignment: contactActionStats.propDirectionAlignment,
+      semanticThrowReleaseDistance: contactActionStats.throwReleaseDistance,
+      semanticPunchExtension: contactActionStats.punchExtension,
+      semanticPunchRecoveryRatio: contactActionStats.punchRecoveryRatio,
+      sequenceBoundaryMaxPoseDelta: sequenceBoundaryStats.maxPoseDelta || undefined,
+      sequenceBoundaryMaxRootDelta: sequenceBoundaryStats.maxRootDelta || undefined,
+      sequenceBoundaryMaxRotationDelta: sequenceBoundaryStats.maxRotationDelta || undefined,
+      sequenceBoundaryMaxVelocityRatio: sequenceBoundaryStats.maxVelocityRatio > 1 ? sequenceBoundaryStats.maxVelocityRatio : undefined,
+      sequenceBoundarySmoothnessRatio: transition.actionPlan.semanticPlan?.actionSequence?.length ? sequenceBoundarySmoothnessRatio(sequenceBoundaryStats) : undefined,
+      motionExpectationCount: motionExpectations.length || undefined,
+      motionExpectationFailedCount: motionExpectations.length ? failedExpectationCount : undefined,
+      motionExpectationPassRatio: expectationPassRatio === undefined ? undefined : Number(expectationPassRatio.toFixed(3))
     }
   };
+}
+
+function motionQualityFeedbackNotes(report: MotionQualityReport) {
+  const importantIssues = report.issues.filter((issue) => issue.severity !== 'info').slice(0, 5);
+  const diagnosis = diagnoseMotionQuality(report);
+  const hasIssueText = (text: string) => report.issues.some((issue) => issue.message.includes(text));
+  const metricNotes = [
+    hasIssueText('靠近后接触承接')
+      ? '质量诊断：靠近后接触链路未达标，需要更清晰的移动减速、手部接触和推拉发力。'
+      : '',
+    hasIssueText('转身投掷承接')
+      ? '质量诊断：转身投掷链路未达标，需要更连续的转身、蓄力、释放和回收。'
+      : '',
+    hasIssueText('下沉恢复后攻击')
+      ? '质量诊断：下沉恢复后攻击链路未达标，需要先恢复重心再进入攻击。'
+      : '',
+    report.metrics.sequenceBoundaryMaxVelocityRatio !== undefined && report.metrics.sequenceBoundaryMaxVelocityRatio > 2.4
+      ? `质量诊断：组合动作边界速度突变 ${report.metrics.sequenceBoundaryMaxVelocityRatio.toFixed(2)}x，需要平滑段落衔接。`
+      : '',
+    report.metrics.rootVelocitySpikeRatio !== undefined && report.metrics.rootVelocitySpikeRatio > 2.8
+      ? `质量诊断：根节点速度尖峰 ${report.metrics.rootVelocitySpikeRatio.toFixed(2)}x，需要继续平滑轨迹。`
+      : '',
+    report.metrics.poseVelocitySpikeRatio !== undefined && report.metrics.poseVelocitySpikeRatio > 3.25
+      ? `质量诊断：关节速度尖峰 ${report.metrics.poseVelocitySpikeRatio.toFixed(2)}x，需要降低抽动和过急过渡。`
+      : '',
+    report.metrics.semanticHandContactSuccessRatio !== undefined && report.metrics.semanticHandContactSuccessRatio < 0.65
+      ? `质量诊断：手部接触稳定度 ${Math.round(report.metrics.semanticHandContactSuccessRatio * 100)}%，需要更贴近目标。`
+      : '',
+    report.metrics.locomotionArmLegSyncScore !== undefined && report.metrics.locomotionArmLegSyncScore < 0.34
+      ? `质量诊断：走跑手脚同步度 ${Math.round(report.metrics.locomotionArmLegSyncScore * 100)}%，需要重算步态相位。`
+      : ''
+  ].filter(Boolean);
+  const diagnosisNotes = [
+    diagnosis.locomotionNeedsGait ? '质量诊断：需要强化走跑步态、支撑脚和手脚同步。' : '',
+    diagnosis.locomotionNeedsRoot ? '质量诊断：需要平滑根节点位移和速度节奏。' : '',
+    diagnosis.contactNeedsCorrection ? '质量诊断：需要校正手部接触、目标距离或道具响应。' : '',
+    diagnosis.sequenceNeedsSmoothing ? '质量诊断：需要平滑组合动作阶段衔接。' : '',
+    diagnosis.airborneNeedsClamp ? '质量诊断：非跳跃动作需要限制离地。' : '',
+    diagnosis.excessivePoseNeedsDamping ? '质量诊断：需要降低关节跳变或过大幅度。' : ''
+  ].filter(Boolean).slice(0, 3);
+  return [
+    `动作质量评分：${Math.round(report.score)}/100`,
+    report.metrics.motionExpectationCount
+      ? `动作期望通过率：${Math.round((report.metrics.motionExpectationPassRatio ?? 0) * 100)}%（${report.metrics.motionExpectationCount - (report.metrics.motionExpectationFailedCount || 0)}/${report.metrics.motionExpectationCount}）`
+      : '',
+    ...metricNotes.slice(0, 3),
+    ...diagnosisNotes,
+    ...importantIssues.map((issue) => `动作质量检查：${issue.message}`)
+  ].filter(Boolean);
 }
 
 const UPPER_BODY_JOINTS: PoseJointKey[] = [
@@ -6299,6 +12046,12 @@ function subtractVec3(a: Vec3, b: Vec3): Vec3 {
   return vec(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
+function averageManyVec3(points: Vec3[]) {
+  if (!points.length) return vec();
+  const total = points.reduce((sum, point) => vec(sum.x + point.x, sum.y + point.y, sum.z + point.z), vec());
+  return vec(total.x / points.length, total.y / points.length, total.z / points.length);
+}
+
 function scaleLocalPoint(point: THREE.Vector3, scale: Vec3) {
   return new THREE.Vector3(point.x * scale.x, point.y * scale.y, point.z * scale.z);
 }
@@ -6336,12 +12089,16 @@ function semanticPropMotionTransform(base: PoseTransform, prop: PropObject, tran
   if (!semanticPlan || semanticPlan.targetObjectId !== prop.id) return null;
   const durationSec = Math.max(0.0001, transition.animationClip?.durationSec || transition.durationSec || 1);
   const t = clamp01(sample.timeSec / durationSec);
-  const direction = transition.actionPlan.universal?.direction || vec(0, 0, -1);
-  const forward = direction.x || direction.z ? direction : vec(0, 0, -1);
-  if (semanticPlan.actionType === 'push') {
-    const contact = ramp(t, 0.34, 0.82);
-    const hold = 1 - ramp(t, 0.86, 1);
-    const amount = 0.32 * contact * Math.max(0.35, hold);
+  const actionType = semanticContactActionAtTime(transition, t) || semanticPlan.actionType;
+  const localT = sequenceActionLocalRatio(transition, actionType, t);
+  const forward = semanticPropContactForwardDirection(prop, transition, sample, actionType);
+  const control = motionControlFromPrompt(transition.actionPrompt, semanticPlan);
+  const window = semanticContactWindow(actionType, localT, control);
+  if (actionType === 'push') {
+    const contact = window.contact;
+    const drive = window.drive;
+    const amount = 0.36 * control.travelScale * easeCurve(control.speedLabel === '缓慢' ? 'ease_in_out' : 'ease_out', Math.max(contact * 0.42, drive));
+    const settle = 1 - window.release;
     return {
       ...base,
       position: {
@@ -6350,9 +12107,78 @@ function semanticPropMotionTransform(base: PoseTransform, prop: PropObject, tran
         z: Number((base.position.z + forward.z * amount).toFixed(4))
       },
       rotation: {
-        x: Number((base.rotation.x + sample.transform.rotation.x * 0.05 * contact).toFixed(3)),
+        x: Number((base.rotation.x + sample.transform.rotation.x * 0.04 * contact + 3 * drive * settle * control.forceScale).toFixed(3)),
         y: Number((base.rotation.y + sample.transform.rotation.y * 0.08 * contact).toFixed(3)),
-        z: base.rotation.z
+        z: Number((base.rotation.z + 2 * drive * settle * control.forceScale).toFixed(3))
+      }
+    };
+  }
+  if (actionType === 'pull') {
+    const grab = window.hold;
+    const pull = window.drive;
+    const settle = 1 - window.release;
+    const amount = 0.3 * control.travelScale * grab * pull;
+    return {
+      ...base,
+      position: {
+        x: Number((base.position.x - forward.x * amount).toFixed(4)),
+        y: base.position.y,
+        z: Number((base.position.z - forward.z * amount).toFixed(4))
+      },
+      rotation: {
+        x: Number((base.rotation.x + sample.transform.rotation.x * 0.04 * pull - 2.5 * pull * settle * control.forceScale).toFixed(3)),
+        y: Number((base.rotation.y + sample.transform.rotation.y * 0.06 * pull).toFixed(3)),
+        z: Number((base.rotation.z - 1.5 * pull * settle * control.forceScale).toFixed(3))
+      }
+    };
+  }
+  if (actionType === 'throw') {
+    const windup = ramp(localT, 0.08, control.burst ? 0.44 : 0.38) * (1 - window.release);
+    const release = window.release;
+    const handPreference = inferPromptHand(transition.actionPrompt);
+    const throwLimbs: Array<'leftHand' | 'rightHand'> = handPreference === 'both'
+      ? ['leftHand', 'rightHand']
+      : [handPreference === 'left' ? 'leftHand' : 'rightHand'];
+    const handHoldPosition = subtractVec3(averageManyVec3(throwLimbs.map((limb) => approximateHandWorldPosition(sample, limb))), propGripOffset(prop));
+    const heldOffset = vec(
+      -forward.x * 0.16 * windup,
+      0.16 * windup,
+      -forward.z * 0.18 * windup
+    );
+    const heldPosition = lerpVec3(
+      vec(base.position.x + heldOffset.x, base.position.y + heldOffset.y, base.position.z + heldOffset.z),
+      handHoldPosition,
+      clamp01(Math.max(window.reach * 0.72, window.hold))
+    );
+    if (release <= 0.001) {
+      return {
+        ...base,
+        position: {
+          x: Number(heldPosition.x.toFixed(4)),
+          y: Number(heldPosition.y.toFixed(4)),
+          z: Number(heldPosition.z.toFixed(4))
+        },
+        rotation: {
+          x: Number((base.rotation.x - 18 * windup).toFixed(3)),
+          y: Number((base.rotation.y + sample.transform.rotation.y * 0.08 * windup).toFixed(3)),
+          z: Number((base.rotation.z + 8 * windup).toFixed(3))
+        }
+      };
+    }
+    const ballistic = easeCurve(control.speedLabel === '缓慢' ? 'ease_in_out' : 'ease_out', release);
+    const travel = 0.86 * control.travelScale * ballistic;
+    const arc = Math.sin(release * Math.PI) * 0.24 * control.forceScale + 0.08 * release;
+    return {
+      ...base,
+      position: {
+        x: Number((heldPosition.x + forward.x * travel).toFixed(4)),
+        y: Number((heldPosition.y + arc).toFixed(4)),
+        z: Number((heldPosition.z + forward.z * travel).toFixed(4))
+      },
+      rotation: {
+        x: Number((base.rotation.x + 118 * release * control.forceScale).toFixed(3)),
+        y: Number((base.rotation.y + sample.transform.rotation.y * 0.12).toFixed(3)),
+        z: Number((base.rotation.z + 44 * release * control.forceScale).toFixed(3))
       }
     };
   }
@@ -6416,7 +12242,9 @@ function buildPreviewPropTransforms(
 
 function generateTransition(scene: Scene3DState, transition: PoseTransition): PoseTransition {
   const jointProfile = jointAxisProfileForScene(scene);
-  const rootMotionTransition = transitionWithPromptBasicMotionEndpoints(transition);
+  const sequencedTransition = transitionWithRescheduledActionSequence(transition);
+  const targetApproachTransition = transitionWithPromptTargetApproachRootMotion(scene, sequencedTransition);
+  const rootMotionTransition = transitionWithPromptBasicMotionEndpoints(targetApproachTransition);
   const semanticPlan = rootMotionTransition.actionPlan.semanticPlan;
   const effectiveConstraints: PoseTransitionConstraints = semanticPlan?.contacts.some((item) => item.contact === 'feet')
     ? {
@@ -6437,15 +12265,19 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
       error: issues.join(' ')
     };
   }
-  const sampleRate = 24;
   const durationSec = Math.max(0.1, transition.durationSec);
+  const useRigPoseForSemanticMotion = semanticMotionUsesRigPose(effectiveTransition);
+  const sampleBonePoseForSemanticMotion = (bonePose?: Scene3DBonePose) => (
+    useRigPoseForSemanticMotion ? undefined : bonePose
+  );
   const keyframeTrack = transitionKeyframeTrack(effectiveTransition, durationSec).map((item) => ({
     ...item,
     pose: effectiveTransition.constraints.jointLimitsEnabled ? clampPoseWithJointProfile(clonePose(item.pose), jointProfile) : clonePose(item.pose)
   }));
   const startFrame = keyframeTrack[0];
   const endFrame = keyframeTrack[keyframeTrack.length - 1];
-  const sampleCount = Math.max(3, Math.round(durationSec * sampleRate));
+  const sampleCount = motionClipSampleCountForTransition(effectiveTransition, durationSec);
+  const sampleTimes = sampleTimesForKeyframeTrack(durationSec, sampleCount, keyframeTrack);
   const samples: AnimationClipSample[] = [];
   const contactFrames = buildContactFrames(scene, effectiveTransition, durationSec);
   contactFrames.forEach((frame) => {
@@ -6454,43 +12286,72 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
     }
   });
 
-  for (let index = 0; index <= sampleCount; index += 1) {
-    const t = index / sampleCount;
-    const timeSec = t * durationSec;
+  for (const sampleTimeSec of sampleTimes) {
+    const t = clamp01(sampleTimeSec / durationSec);
+    const motionT = semanticActionTime(effectiveTransition, t);
+    const timeSec = sampleTimeSec;
     const segment = keyframeSegmentAt(keyframeTrack, timeSec);
     const eased = easeCurve(transition.curve, segment.localT);
     const keyframeSample = interpolateKeyframeSample(segment.from, segment.to, eased, timeSec);
-    const transform = keyframeSample.transform;
+    const hardKeyframe = exactKeyframeAtTime(keyframeTrack, timeSec);
+    const transform = hardKeyframe ? clonePoseTransform(hardKeyframe.transform) : keyframeSample.transform;
     const baseTransform = clonePoseTransform(transform);
-    let nextPose = keyframeSample.pose;
-    if (!shouldCompileBasicMotionWithSemanticLayer(effectiveTransition)) {
-      nextPose = applyUniversalMotionOverlay(nextPose, transform, effectiveTransition.actionPlan.universal, t, jointProfile);
-    }
-    for (const template of effectiveTransition.actionPlan.templates) {
-      if (templateAppliesToBasicMotion(template, effectiveTransition)) {
-        nextPose = applyTemplateOverlay(nextPose, transform, template, t, jointProfile);
+    let nextPose = hardKeyframe ? clonePose(hardKeyframe.pose) : keyframeSample.pose;
+    if (!hardKeyframe) {
+      if (!shouldCompileBasicMotionWithSemanticLayer(effectiveTransition)) {
+        nextPose = applyUniversalMotionOverlay(nextPose, transform, effectiveTransition.actionPlan.universal, motionT, jointProfile);
       }
-    }
-    nextPose = applySemanticActionStageOverlay(nextPose, transform, effectiveTransition, t, jointProfile);
-    nextPose = applyRealisticMotionGuard(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition);
-    nextPose = applyGroundedBalanceAndFooting(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition, t, jointProfile);
-    const targets = targetPositionForConstraint(scene, effectiveTransition, transform);
-    if (effectiveTransition.constraints.headLookAt.enabled) nextPose = applyHeadLookAt(nextPose, targets.headTarget, targets.origin);
-    const hasTemplateHandTarget = effectiveTransition.actionPlan.templates.some((item) => (
-      item.id === 'point_at' || item.id === 'pick_up' || item.id === 'put_down'
-    ));
-    const hasSemanticHandContact = Boolean(semanticPlan?.contacts.some((item) => item.contact === 'hands' || item.contact === 'leftHand' || item.contact === 'rightHand'));
-    if (effectiveTransition.constraints.handTarget.enabled || hasTemplateHandTarget || hasSemanticHandContact) {
-      const solved = solveArmIkToTarget(nextPose, targets.hand, targets.handTarget, targets.origin);
-      nextPose = solved.pose;
-      if (solved.warning) warningSet.add(solved.warning);
-    }
-    if (effectiveTransition.constraints.footLock.enabled) {
-      if (footLockPhaseActive(effectiveTransition, 'left', t)) {
-        nextPose.leftFoot = { ...startFrame.pose.leftFoot };
+      for (const template of effectiveTransition.actionPlan.templates) {
+        if (templateAppliesToBasicMotion(template, effectiveTransition)) {
+          nextPose = applyTemplateOverlay(nextPose, transform, template, motionT, jointProfile);
+        }
       }
-      if (footLockPhaseActive(effectiveTransition, 'right', t)) {
-        nextPose.rightFoot = { ...startFrame.pose.rightFoot };
+      nextPose = applySemanticActionSequenceOverlay(
+        nextPose,
+        transform,
+        effectiveTransition,
+        effectiveTransition.actionPlan.semanticPlan?.actionSequence?.length ? t : motionT,
+        jointProfile
+      );
+      nextPose = applyRealisticMotionGuard(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition);
+      nextPose = applyGroundedBalanceAndFooting(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition, motionT, jointProfile);
+      const targets = targetPositionForConstraint(scene, effectiveTransition, transform, motionT);
+      if (effectiveTransition.constraints.headLookAt.enabled) nextPose = applyHeadLookAt(nextPose, targets.headTarget, targets.origin);
+      const hasTemplateHandTarget = effectiveTransition.actionPlan.templates.some((item) => (
+        item.id === 'point_at' || item.id === 'pick_up' || item.id === 'put_down'
+      ));
+      const hasSemanticHandContact = Boolean(semanticPlan?.contacts.some((item) => item.contact === 'hands' || item.contact === 'leftHand' || item.contact === 'rightHand'));
+      if (effectiveTransition.constraints.handTarget.enabled || hasTemplateHandTarget || hasSemanticHandContact) {
+        const semanticContacts = semanticPlan?.contacts || [];
+        const semanticContactAction = semanticContactActionAtTime(effectiveTransition, t) || semanticPlan?.actionType;
+        const semanticSolveHands = semanticContactLimbsForAction(semanticContactAction, effectiveTransition.actionPrompt)
+          .filter((limb) => (
+            semanticContacts.some((item) => item.contact === 'hands')
+            || semanticContacts.some((item) => item.contact === limb)
+          ))
+          .map((limb) => limb === 'leftHand' ? 'left' : 'right');
+        const solveHands: Array<'left' | 'right'> = hasSemanticHandContact
+          ? semanticSolveHands.length ? semanticSolveHands : [targets.hand]
+          : [targets.hand];
+        solveHands.forEach((hand) => {
+          const semanticTarget = hasSemanticHandContact
+            ? semanticHandTargetForLimb(scene, effectiveTransition, transform, t, hand === 'left' ? 'leftHand' : 'rightHand')
+            : null;
+          const handTarget = semanticTarget
+            ? semanticTarget.position
+            : targets.handTarget;
+          const solved = solveArmIkToTarget(nextPose, hand, handTarget, targets.origin, semanticTarget ? 0.06 : 0.22);
+          nextPose = blendPose(nextPose, solved.pose, clamp01(targets.handStrength || 1));
+          if (solved.warning) warningSet.add(solved.warning);
+        });
+      }
+      if (effectiveTransition.constraints.footLock.enabled) {
+        if (footLockPhaseActive(effectiveTransition, 'left', t)) {
+          nextPose.leftFoot = { ...startFrame.pose.leftFoot };
+        }
+        if (footLockPhaseActive(effectiveTransition, 'right', t)) {
+          nextPose.rightFoot = { ...startFrame.pose.rightFoot };
+        }
       }
     }
     if (effectiveTransition.constraints.jointLimitsEnabled) nextPose = clampPoseWithJointProfile(nextPose, jointProfile);
@@ -6514,10 +12375,10 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
         }
       },
       pose: nextPose,
-      bonePose: keyframeSample.bonePose,
-      fingerPose: keyframeSample.fingerPose,
-      toePose: keyframeSample.toePose,
-      libTvJointAngles: keyframeSample.libTvJointAngles
+      bonePose: hardKeyframe ? cloneBonePose(hardKeyframe.bonePose) : sampleBonePoseForSemanticMotion(keyframeSample.bonePose),
+      fingerPose: hardKeyframe ? cloneFingerPose(hardKeyframe.fingerPose) : keyframeSample.fingerPose,
+      toePose: hardKeyframe ? cloneToePose(hardKeyframe.toePose) : keyframeSample.toePose,
+      libTvJointAngles: hardKeyframe ? cloneLibTvJointAngles(hardKeyframe.libTvJointAngles) : keyframeSample.libTvJointAngles
     };
     samples.push(baseSample);
   }
@@ -6526,7 +12387,7 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
     timeSec: 0,
     transform: startFrame.transform,
     pose: startFrame.pose,
-    bonePose: startFrame.bonePose,
+    bonePose: sampleBonePoseForSemanticMotion(startFrame.bonePose),
     fingerPose: startFrame.fingerPose,
     toePose: startFrame.toePose,
     libTvJointAngles: startFrame.libTvJointAngles
@@ -6535,25 +12396,44 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
     timeSec: Number(durationSec.toFixed(4)),
     transform: endFrame.transform,
     pose: endFrame.pose,
-    bonePose: endFrame.bonePose,
+    bonePose: sampleBonePoseForSemanticMotion(endFrame.bonePose),
     fingerPose: endFrame.fingerPose,
     toePose: endFrame.toePose,
     libTvJointAngles: endFrame.libTvJointAngles
   };
 
   try {
-    let finalSamples = applyBasicMotionContinuity(effectiveTransition, smoothMotionSamples(effectiveTransition, stabilizeGroundedMotionSamples(effectiveTransition, samples)));
+    let finalSamples = stabilizeSemanticContactSamples(
+      scene,
+      effectiveTransition,
+      stabilizeActionSequenceBridgeSamples(
+        effectiveTransition,
+        stabilizeTargetApproachSequenceSamples(scene, effectiveTransition, polishMotionSamples(effectiveTransition, samples)),
+        0.56
+      ),
+      0.62
+    );
+    finalSamples = finalizeLocomotionGoldenStandard(effectiveTransition, finalSamples, 0.68);
+    finalSamples = restoreExplicitMiddleKeyframeSamples(finalSamples, effectiveTransition);
     let cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples));
     let animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, finalSamples, contactFrames, jointProfile, cameraSamples));
-    let qualityReport = inspectMotionQuality(effectiveTransition, animationClip);
-    if (motionQualityNeedsAutoCorrection(qualityReport)) {
-      const correction = autoCorrectMotionSamples(effectiveTransition, finalSamples, qualityReport);
+    let qualityReport = inspectMotionQuality(scene, effectiveTransition, animationClip);
+    for (let correctionPass = 0; correctionPass < 3 && motionQualityNeedsAutoCorrection(qualityReport); correctionPass += 1) {
+      const correction = autoCorrectMotionSamples(scene, effectiveTransition, finalSamples, qualityReport, contactFrames);
       correction.notes.forEach((note) => warningSet.add(note));
-      finalSamples = correction.samples;
+      finalSamples = stabilizeSemanticContactSamples(
+        scene,
+        effectiveTransition,
+        stabilizeActionSequenceBridgeSamples(effectiveTransition, stabilizeTargetApproachSequenceSamples(scene, effectiveTransition, correction.samples), 0.68),
+        0.72
+      );
+      finalSamples = finalizeLocomotionGoldenStandard(effectiveTransition, finalSamples, 0.78);
+      finalSamples = restoreExplicitMiddleKeyframeSamples(finalSamples, effectiveTransition);
       cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples));
       animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, finalSamples, contactFrames, jointProfile, cameraSamples));
-      qualityReport = inspectMotionQuality(effectiveTransition, animationClip);
+      qualityReport = inspectMotionQuality(scene, effectiveTransition, animationClip);
     }
+    motionQualityFeedbackNotes(qualityReport).forEach((note) => warningSet.add(note));
     qualityReport.issues.forEach((issue) => {
       if (issue.severity !== 'info') warningSet.add(issue.message);
     });
@@ -6801,7 +12681,7 @@ async function captureSceneCanvas({
   const cropped = await canvasToAspectBlob(canvas, scene.aspectRatio);
   const uploaded = await uploadCanvasBlob(cropped.blob);
   const activeCamera = scene.objects.cameras.find((camera) => camera.id === scene.activeCameraId) || scene.objects.cameras[0];
-  const activeCameraTargetPosition = cameraEffectiveTargetPosition(scene, activeCamera);
+  const activeCameraTargetPosition = cameraEffectiveTargetPosition(activeCamera);
   const nextCapture: Capture = {
     id: createId('cap'),
     name: '截图 ' + (scene.captures.length + 1),
@@ -6867,6 +12747,8 @@ function buildMotionRefinePayload(input: {
 }) {
   const { cameras, props } = sceneObjectSummary(input.scene);
   const referenceCapture = input.scene.captures[input.scene.captures.length - 1];
+  const localActionPlan = input.transition.actionPlan;
+  const localCompilerContract = motionIntentLocalCompilerContract(input.transition, localActionPlan);
   return {
     projectId: input.currentProjectId || undefined,
     nodeId: input.node.id,
@@ -6885,6 +12767,8 @@ function buildMotionRefinePayload(input: {
     endFingerPose: input.transition.endFingerPose,
     startToePose: input.transition.startToePose,
     endToePose: input.transition.endToePose,
+    fixedPoseConstraints: localCompilerContract.fixedPoseConstraints,
+    middleKeyframeConstraints: localCompilerContract.fixedPoseConstraints.filter((frame) => frame.role === 'middle'),
     currentCharacterTransform: {
       position: input.character.position,
       rotation: input.character.rotation,
@@ -6892,8 +12776,9 @@ function buildMotionRefinePayload(input: {
       bonePose: input.character.bonePose
     },
     constraints: input.transition.constraints,
-    localSemanticPlan: input.transition.actionPlan.semanticPlan,
-    localActionPlan: input.transition.actionPlan,
+    localSemanticPlan: localActionPlan.semanticPlan,
+    localActionPlan,
+    localCompilerContract,
     availableSemanticStageTemplates: Array.from(new Set([
       input.transition.actionPlan.semanticPlan?.actionType,
       'walk',
@@ -6912,6 +12797,7 @@ function buildMotionRefinePayload(input: {
       actionType,
       stages: motionStagesForAction(actionType as MotionSemanticActionType)
     })),
+    availableActionSkills: serializableMotionActionSkills(),
     cameras,
     props,
     activeCameraId: input.scene.activeCameraId,
@@ -6923,7 +12809,7 @@ function buildMotionRefinePayload(input: {
       applicationMode: input.scene.jointAxisProfile?.applicationMode || 'rest_quaternion_multiply_delta',
       joints: jointAxisProfileSummary(jointAxisProfileForScene(input.scene))
     },
-    motionSolverInstruction: 'Return MotionIntent only. Do not generate raw per-frame joint rotations. The frontend compiler will map intent into root trajectory, contacts, and local XYZ joint deltas using jointAxisProfile ranges and semantics.',
+    motionSolverInstruction: 'Return MotionIntent only. Do not generate raw per-frame joint rotations, raw keyframes, transforms, animationClip, bonePose, jointRotations, or constraints. Treat localCompilerContract as the executable truth: preserve locked actionType/actionFamily, actionSequence, poseStages, contacts, target object, grounded/airborne limits, and quality expectations. Choose actionFamily/actionType from availableActionSkills. The frontend compiler will map intent into root trajectory, contacts, and local XYZ joint deltas using jointAxisProfile ranges and semantics.',
     referenceImageAssetId: referenceCapture?.mediaAssetId
   };
 }
@@ -7359,13 +13245,14 @@ function DirectorStage({
 
   useEffect(() => {
     if (!preview.playing || !activeTransition?.animationClip) return undefined;
-    let frame = 0;
+    const transitionId = activeTransition.id;
     let lastAt = performance.now();
-    const tick = (now: number) => {
+    const timer = window.setInterval(() => {
+      const now = performance.now();
       const delta = (now - lastAt) / 1000;
       lastAt = now;
       setPreview((current) => {
-        if (!current.playing) return current;
+        if (!current.playing || current.transitionId !== transitionId) return current;
         const duration = activeTransition.animationClip?.durationSec || activeTransition.durationSec;
         let nextTime = current.currentTimeSec + delta;
         let nextPlaying: boolean = current.playing;
@@ -7378,10 +13265,8 @@ function DirectorStage({
         }
         return { ...current, currentTimeSec: nextTime, playing: nextPlaying, enabled: true };
       });
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    }, 33);
+    return () => window.clearInterval(timer);
   }, [preview.playing, activeTransition]);
 
   useEffect(() => {
@@ -7982,7 +13867,7 @@ function SceneViewport({
       : undefined;
     if (scene.activeViewMode !== 'camera' && !previewCameraSample) return;
     const cameraPosition = previewCameraSample?.position || activeCamera.position;
-    const cameraLookTarget = previewCameraSample?.targetPosition || cameraEffectiveTargetPosition(scene, activeCamera);
+    const cameraLookTarget = previewCameraSample?.targetPosition || cameraEffectiveTargetPosition(activeCamera);
     camera.position.set(cameraPosition.x, cameraPosition.y, cameraPosition.z);
     camera.lookAt(new THREE.Vector3(cameraLookTarget.x, cameraLookTarget.y, cameraLookTarget.z));
     if ('fov' in camera) {
@@ -8158,7 +14043,7 @@ function SceneViewport({
             onUpdateObject={onUpdateObject}
           >
             <CameraRig
-              cameraObject={{ ...cameraObject, targetPosition: cameraEffectiveTargetPosition(scene, cameraObject) }}
+              cameraObject={{ ...cameraObject, targetPosition: cameraEffectiveTargetPosition(cameraObject) }}
               selected={scene.selectedObjectId === cameraObject.id || scene.activeCameraId === cameraObject.id}
               onSelect={() => onPatch({ selectedObjectId: cameraObject.id }, { history: false })}
             />
@@ -8334,7 +14219,7 @@ function buildCameraMotionSamples(scene: Scene3DState, transition: PoseTransitio
   if (!transition.cameraMotion.enabled || transition.cameraMotion.type === 'none') return undefined;
   const baseCamera = scene.objects.cameras.find((item) => item.id === scene.activeCameraId) || scene.objects.cameras[0];
   const focusedBaseCamera = baseCamera
-    ? { ...baseCamera, targetPosition: cameraEffectiveTargetPosition(scene, baseCamera) }
+    ? { ...baseCamera, targetPosition: cameraEffectiveTargetPosition(baseCamera) }
     : undefined;
   const cameraSamples = samples
     .map((sample) => cameraSampleForMotion(focusedBaseCamera, transition.cameraMotion, sample))
@@ -10003,46 +15888,52 @@ function PropertyPanel({
   const localPlanFromIntent = (transition: PoseTransition, intent: MotionIntent | undefined) => {
     const localPlan = stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition));
     if (!intent) return localPlan;
-    const aiStages = intent.keyframeHints?.length
-      ? intent.keyframeHints.map((hint, index) => semanticStage(`ai_${index}`, hint.label, hint.timeRatio, hint.note || hint.label, '由 AI 建议作为语义关键阶段。', hint.note || 'AI 关键姿势建议。'))
-      : [];
+    const constrained = constrainMotionIntentForLocalCompiler(transition, localPlan, intent);
+    const safeIntent = constrained.intent;
+    const promptCameraMatched = cameraMotionFromPrompt(transition.actionPrompt, transition.durationSec, transition.characterId, transition.cameraMotion).matched;
+    const aiStages = aiSemanticStagesForLocalCompiler(transition, localPlan, safeIntent);
     const semanticPlan: MotionSemanticPlan | undefined = localPlan.semanticPlan
       ? {
           ...localPlan.semanticPlan,
           source: 'merged',
-          confidence: Math.max(localPlan.semanticPlan.confidence, intent.confidence),
-          poseStages: aiStages.length ? aiStages : localPlan.semanticPlan.poseStages,
-          contacts: [
+          confidence: Math.max(localPlan.semanticPlan.confidence, safeIntent.confidence),
+          poseStages: aiStages.length ? mergeSemanticStages(localPlan.semanticPlan.poseStages, aiStages) : localPlan.semanticPlan.poseStages,
+          actionSequence: localPlan.semanticPlan.actionSequence,
+          actionChains: localPlan.semanticPlan.actionChains,
+          contacts: Array.from(new Map([
             ...localPlan.semanticPlan.contacts,
-            ...(intent.contactHints || []).map((hint) => ({
+            ...(safeIntent.contactHints || []).map((hint) => ({
               label: hint.note || MOTION_CONTACT_LABELS[hint.contact],
               contact: hint.contact,
               required: true
             }))
-          ].slice(0, 12),
-          cameraIntent: intent.cameraMotionHint?.enabled
-            ? { label: CAMERA_MOTION_LABELS[intent.cameraMotionHint.type], type: intent.cameraMotionHint.type, priority: 'prompt', description: 'AI 根据动作提示词补全的运镜。' }
+          ].map((item) => [item.contact, item])).values()).slice(0, 12),
+          targetObjectId: localPlan.semanticPlan.targetObjectId || safeIntent.targetObjectId,
+          targetObjectName: localPlan.semanticPlan.targetObjectName,
+          cameraIntent: promptCameraMatched && safeIntent.cameraMotionHint?.enabled
+            ? { label: CAMERA_MOTION_LABELS[safeIntent.cameraMotionHint.type], type: safeIntent.cameraMotionHint.type, priority: 'prompt', description: 'AI 根据动作提示词补全的运镜。' }
             : localPlan.semanticPlan.cameraIntent,
           explain: [
             ...localPlan.semanticPlan.explain,
-            intent.intent ? `AI理解：${intent.intent}` : '',
-            intent.generatedMotionPrompt ? `AI补全动作：${intent.generatedMotionPrompt}` : ''
+            middleKeyframeConstraintNote(transition),
+            safeIntent.intent ? `AI理解：${safeIntent.intent}` : '',
+            safeIntent.generatedMotionPrompt ? `AI补全动作：${safeIntent.generatedMotionPrompt}` : '',
+            ...constrained.notes
           ].filter(Boolean),
-          warnings: [...localPlan.semanticPlan.warnings, ...intent.warnings]
+          warnings: [...localPlan.semanticPlan.warnings, ...safeIntent.warnings]
         }
       : undefined;
     return {
       mode: 'motion_intent' as const,
       templates: localPlan.templates,
-      universal: {
-        ...motionIntentToUniversalPlan(intent),
-        families: intent.motionFamilies?.length ? intent.motionFamilies : motionIntentToUniversalPlan(intent).families
-      },
+      universal: constrained.universal,
       notes: [
-        intent.intent ? `AI 动作意图：${intent.intent}` : '',
-        intent.generatedMotionPrompt ? `AI 生成动作提示：${intent.generatedMotionPrompt}` : '',
-        ...(intent.keyframeHints || []).map((hint) => `关键帧建议 ${Math.round(hint.timeRatio * 100)}%：${hint.label}`),
-        ...intent.warnings,
+        safeIntent.intent ? `AI 动作意图：${safeIntent.intent}` : '',
+        safeIntent.generatedMotionPrompt ? `AI 生成动作提示：${safeIntent.generatedMotionPrompt}` : '',
+        ...(safeIntent.keyframeHints || []).map((hint) => `关键帧建议 ${Math.round(hint.timeRatio * 100)}%：${hint.label}`),
+        middleKeyframeConstraintNote(transition),
+        ...constrained.notes,
+        ...safeIntent.warnings,
         ...localPlan.notes
       ].filter(Boolean),
       semanticPlan
@@ -10056,35 +15947,28 @@ function PropertyPanel({
     updatedAt: new Date().toISOString()
   }));
 
-  const resolveTransitionPlan = () => {
-    const transition = ensureTransition();
-    if (!transition) return;
-    const plan = stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition));
-    patchTransition(transition.id, {
-      actionPlan: plan,
-      warnings: plan.notes,
-      animationClip: undefined,
-      error: undefined
-    }, { label: '解析动作模板' });
-    onError(plan.notes.join(' '));
-  };
-
   const resolveTransitionPlanWithAi = async () => {
     const transition = ensureTransition();
     if (!transition) return;
+    const localPlan = stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition));
+    const locallyResolvedTransition: PoseTransition = {
+      ...transition,
+      actionPlan: localPlan,
+      warnings: localPlan.notes,
+      animationClip: undefined,
+      error: undefined
+    };
     try {
       setMotionResolving(true);
-      const intent = await requestMotionIntent(buildMotionRefinePayload({ node, scene, transition, character, currentProjectId }));
-      const plan = localPlanFromIntent(transition, intent);
+      const intent = await requestMotionIntent(buildMotionRefinePayload({ node, scene, transition: locallyResolvedTransition, character, currentProjectId }));
+      const plan = localPlanFromIntent(locallyResolvedTransition, intent);
       patchTransition(transition.id, {
         actionPlan: plan,
         aiActionIntent: intent.intent,
         generatedMotionPrompt: intent.generatedMotionPrompt,
         motionIntent: intent,
-        cameraMotion: intent.cameraMotionHint?.enabled
-          ? normalizeCameraMotion(intent.cameraMotionHint, transition.durationSec, transition.characterId)
-          : cameraMotionForTransition(transition),
-        motionRefineHistory: appendMotionHistory(transition, 'resolve', intent),
+        cameraMotion: cameraMotionForAiIntent(transition, intent),
+        motionRefineHistory: appendMotionHistory(locallyResolvedTransition, 'resolve', intent),
         warnings: [...intent.warnings, ...plan.notes],
         animationClip: undefined,
         error: undefined
@@ -10092,11 +15976,11 @@ function PropertyPanel({
       onError(intent.warnings.join(' '));
     } catch (error: any) {
       const message = error?.message || 'AI 解析失败';
-      const plan = stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition));
+      const plan = localPlan;
       const fallbackNote = `AI 解析失败，已保留本地模板解析：${message}`;
       patchTransition(transition.id, {
         actionPlan: plan,
-        motionRefineHistory: appendMotionHistory(transition, 'resolve', undefined, message),
+        motionRefineHistory: appendMotionHistory(locallyResolvedTransition, 'resolve', undefined, message),
         warnings: [fallbackNote, ...plan.notes],
         animationClip: undefined,
         error: message
@@ -10119,9 +16003,7 @@ function PropertyPanel({
         aiActionIntent: intent.intent,
         generatedMotionPrompt: intent.generatedMotionPrompt,
         motionIntent: intent,
-        cameraMotion: intent.cameraMotionHint?.enabled
-          ? normalizeCameraMotion(intent.cameraMotionHint, transition.durationSec, transition.characterId)
-          : cameraMotionForTransition(transition),
+        cameraMotion: cameraMotionForAiIntent(transition, intent),
         motionRefineHistory: appendMotionHistory(transition, 'generate', intent),
         warnings: [...intent.warnings, ...plan.notes]
       }, plan);
@@ -10400,17 +16282,14 @@ function PropertyPanel({
           <ColorField label="背景颜色" value={scene.background.color} onChange={(color) => onPatch({ background: { type: 'color', color } }, { label: '调整背景颜色', mergeKey: 'scene:background.color' })} />
           <SelectField label="画幅比例" value={scene.aspectRatio} options={SCENE_ASPECT_RATIOS} onChange={(aspectRatio) => onPatch({ aspectRatio }, { label: '调整画幅' })} />
           <NumberField label="场景缩放" value={scene.sceneZoomPercent} min={50} max={500} step={1} sliderStep={1} suffix="%" onChange={(sceneZoomPercent) => onPatch({ sceneZoomPercent }, { label: '调整场景缩放', mergeKey: 'scene:zoom' })} />
-          <ToggleRow label="地面碰撞" checked={scene.groundEnabled} onChange={(groundEnabled) => onPatch((current) => {
+          <ToggleRow label="地面碰撞" description={SCENE_TOGGLE_DESCRIPTIONS.groundCollision} checked={scene.groundEnabled} onChange={(groundEnabled) => onPatch((current) => {
             const nextScene = normalizeScene({ ...current, groundEnabled });
             return groundEnabled ? applyGroundCollision(nextScene) : nextScene;
           }, { label: groundEnabled ? '开启地面碰撞' : '关闭地面碰撞' })} />
-          <div className="rounded border border-white/10 bg-black/20 px-2 py-1 text-[10px] leading-relaxed text-zinc-400">
-            开启后角色和道具向下移动时会被地面阻挡，向上移动不受限制。
-          </div>
-          <ToggleRow label="地面网格线" checked={scene.groundGridEnabled} onChange={(groundGridEnabled) => onPatch({ groundGridEnabled }, { label: groundGridEnabled ? '显示地面网格线' : '隐藏地面网格线' })} />
-          <ToggleRow label="运动轨迹线" checked={scene.motionPathEnabled} onChange={(motionPathEnabled) => onPatch({ motionPathEnabled }, { label: motionPathEnabled ? '显示运动轨迹线' : '隐藏运动轨迹线' })} />
-          <ToggleRow label="角色标签" checked={scene.characterLabelsEnabled} onChange={(characterLabelsEnabled) => onPatch({ characterLabelsEnabled }, { label: characterLabelsEnabled ? '显示角色标签' : '隐藏角色标签' })} />
-          <ToggleRow label="网格吸附" checked={scene.gridSnapEnabled} onChange={(gridSnapEnabled) => onPatch({ gridSnapEnabled }, { label: gridSnapEnabled ? '开启网格吸附' : '关闭网格吸附' })} />
+          <ToggleRow label="地面网格线" description={SCENE_TOGGLE_DESCRIPTIONS.groundGrid} checked={scene.groundGridEnabled} onChange={(groundGridEnabled) => onPatch({ groundGridEnabled }, { label: groundGridEnabled ? '显示地面网格线' : '隐藏地面网格线' })} />
+          <ToggleRow label="运动轨迹线" description={SCENE_TOGGLE_DESCRIPTIONS.motionPath} checked={scene.motionPathEnabled} onChange={(motionPathEnabled) => onPatch({ motionPathEnabled }, { label: motionPathEnabled ? '显示运动轨迹线' : '隐藏运动轨迹线' })} />
+          <ToggleRow label="角色标签" description={SCENE_TOGGLE_DESCRIPTIONS.characterLabels} checked={scene.characterLabelsEnabled} onChange={(characterLabelsEnabled) => onPatch({ characterLabelsEnabled }, { label: characterLabelsEnabled ? '显示角色标签' : '隐藏角色标签' })} />
+          <ToggleRow label="网格吸附" description={SCENE_TOGGLE_DESCRIPTIONS.gridSnap} checked={scene.gridSnapEnabled} onChange={(gridSnapEnabled) => onPatch({ gridSnapEnabled }, { label: gridSnapEnabled ? '开启网格吸附' : '关闭网格吸附' })} />
         </Panel>
       )}
       {character && (
@@ -10502,10 +16381,10 @@ function PropertyPanel({
                   <SelectField label="播放变化曲线" value={currentTransition.curve} options={CURVE_OPTIONS} labels={CURVE_LABELS} descriptions={CURVE_DESCRIPTIONS} onChange={(curve) => patchTransitionInput(currentTransition.id, { curve: curve as CurveType })} />
                   <CameraMotionPanel value={currentTransition.cameraMotion} durationSec={currentTransition.durationSec} characterId={currentTransition.characterId} onChange={(cameraMotion) => patchTransitionInput(currentTransition.id, { cameraMotion })} />
                   <MotionPipelinePanel
+                    transition={currentTransition}
                     status={currentMotionPipeline}
                     motionResolving={motionResolving}
                     motionGenerating={motionGenerating}
-                    onResolveLocal={resolveTransitionPlan}
                     onResolveAi={resolveTransitionPlanWithAi}
                     onGenerate={regenerateTransitionWithAi}
                   />
@@ -10708,26 +16587,40 @@ function TimelinePreview({
 }
 
 function MotionPipelinePanel({
+  transition,
   status,
   motionResolving,
   motionGenerating,
-  onResolveLocal,
   onResolveAi,
   onGenerate
 }: {
+  transition?: PoseTransition | null;
   status: ReturnType<typeof motionPipelineStatus>;
   motionResolving: boolean;
   motionGenerating: boolean;
-  onResolveLocal: () => void;
   onResolveAi: () => void;
   onGenerate: () => void;
 }) {
+  const actionSkill = transition?.actionPlan.semanticPlan?.actionSkill;
+  const qualityReport = transition?.qualityReport;
+  const visibleQualityIssues = qualityReport?.issues.filter((issue) => issue.severity !== 'info').slice(0, 3) || [];
+  const expectationCount = qualityReport?.metrics.motionExpectationCount || 0;
+  const expectationFailedCount = qualityReport?.metrics.motionExpectationFailedCount || 0;
+  const expectationPassCount = Math.max(0, expectationCount - expectationFailedCount);
+  const expectationPassRatio = qualityReport?.metrics.motionExpectationPassRatio;
+  const expectationClass = expectationPassRatio === undefined
+    ? 'text-zinc-400'
+    : expectationPassRatio >= 0.8
+      ? 'text-emerald-100'
+      : expectationPassRatio >= 0.6
+        ? 'text-amber-100'
+        : 'text-red-100';
   return (
     <div className="space-y-2 rounded-md border border-white/10 bg-black/20 p-2">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <div className="text-[11px] font-medium text-zinc-100">{'动态生成流程'}</div>
-          <div className="text-[10px] text-zinc-500">{'按顺序完成动态解析与生成'}</div>
+          <div className="text-[11px] font-medium text-zinc-100">{"动态生成流程"}</div>
+          <div className="text-[10px] text-zinc-500">{"先理解动作，再生成可播放动态"}</div>
         </div>
         <span className={status.isGenerated && !status.isStale ? 'rounded border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-100' : status.isStale ? 'rounded border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-100' : 'rounded border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-400'}>
           {status.isGenerated && !status.isStale ? '已生成' : status.isStale ? '已过期' : '未生成'}
@@ -10735,31 +16628,55 @@ function MotionPipelinePanel({
       </div>
       <MotionPipelineStep
         index={1}
-        title={'解析动作模板'}
-        description={'本地识别动作语义、阶段、接触点和运镜'}
-        state={status.local}
-        disabled={false}
-        onClick={onResolveLocal}
-      />
-      <MotionPipelineStep
-        index={2}
-        title={'AI解析动作'}
-        description={'AI 补全动作语义、阶段和运镜'}
-        state={status.ai}
-        disabled={!status.canResolveAi}
+        title={"解析动态"}
+        state={status.parse}
+        disabled={!status.canResolve}
         loading={motionResolving}
         onClick={onResolveAi}
       />
       <MotionPipelineStep
-        index={3}
-        title={'AI生成动态'}
-        description={'把动作计划编译成可播放动态'}
+        index={2}
+        title={"生成动态"}
         state={status.generate}
         disabled={!status.canGenerate}
         loading={motionGenerating}
         onClick={onGenerate}
         primary
       />
+      {(actionSkill || qualityReport) && (
+        <div className="space-y-1 rounded border border-white/10 bg-black/25 px-2 py-1.5">
+          {actionSkill && (
+            <div className="space-y-0.5">
+              <div className="text-[10px] font-medium text-zinc-300">本地动作技能：{actionSkill.label}</div>
+              <div className="text-[10px] leading-relaxed text-zinc-500">{actionSkill.constraints.join(' / ')}</div>
+            </div>
+          )}
+          {qualityReport && (
+            <div className="space-y-0.5">
+              <div className={qualityReport.score >= 80 ? 'text-[10px] font-medium text-emerald-100' : qualityReport.score >= 60 ? 'text-[10px] font-medium text-amber-100' : 'text-[10px] font-medium text-red-100'}>
+                动作质量评分：{Math.round(qualityReport.score)}/100
+              </div>
+              {expectationCount > 0 && (
+                <div className={'text-[10px] font-medium ' + expectationClass}>
+                  动作期望通过率：{Math.round((expectationPassRatio ?? 0) * 100)}%（{expectationPassCount}/{expectationCount}）
+                </div>
+              )}
+              {qualityReport.metrics.motionSampleRate !== undefined && (
+                <div className="text-[10px] text-zinc-500">
+                  动态采样率：{qualityReport.metrics.motionSampleRate} fps
+                </div>
+              )}
+              {visibleQualityIssues.length > 0 && (
+                <div className="space-y-0.5">
+                  {visibleQualityIssues.map((issue) => (
+                    <div key={issue.id} className="truncate text-[10px] text-zinc-500">{issue.message}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -10776,7 +16693,7 @@ function MotionPipelineStep({
 }: {
   index: number;
   title: string;
-  description: string;
+  description?: string;
   state: MotionPipelineStepState;
   disabled?: boolean;
   loading?: boolean;
@@ -10808,7 +16725,7 @@ function MotionPipelineStep({
           <span className="truncate text-[11px] font-medium text-zinc-100">{title}</span>
           <span className={'rounded border px-1.5 py-0.5 text-[10px] ' + badgeClass}>{loading ? '处理中' : stateLabel[state]}</span>
         </div>
-        <div className="truncate text-[10px] text-zinc-500">{description}</div>
+        {description && <div className="truncate text-[10px] text-zinc-500">{description}</div>}
       </div>
       <button type="button" disabled={disabled || loading} onClick={onClick} className={primary ? 'h-7 rounded border border-violet-400/40 bg-violet-400/15 px-2 text-[10px] text-violet-100 disabled:opacity-45' : 'h-7 rounded border border-white/10 bg-white/5 px-2 text-[10px] text-zinc-200 disabled:opacity-45'}>
         {state === 'done' || state === 'stale' ? '重新执行' : '执行'}
@@ -11414,24 +17331,25 @@ function SelectField({
       <select value={value} disabled={disabled} title={activeDescription} onChange={(event) => onChange(event.target.value)} className="h-7 w-full rounded-md border border-white/10 bg-black/30 px-2 text-[11px] text-white disabled:opacity-45">
         {options.map((option) => <option key={option} value={option} title={descriptions?.[option]} className="bg-zinc-950">{labels?.[option] || option}</option>)}
       </select>
-      {activeDescription && <div className="rounded border border-white/10 bg-black/20 px-2 py-1 text-[10px] leading-4 text-zinc-500">{activeDescription}</div>}
     </label>
   );
 }
 
 function ToggleRow({
   label,
+  description,
   checked,
   onChange
 }: {
   label: string;
+  description?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex h-8 items-center justify-between rounded-md border border-white/10 bg-black/20 px-2 text-[11px] text-zinc-300">
+    <label title={description} className="flex h-8 items-center justify-between rounded-md border border-white/10 bg-black/20 px-2 text-[11px] text-zinc-300">
       <span>{label}</span>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-3.5 w-3.5 accent-violet-400" />
+      <input type="checkbox" title={description} checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-3.5 w-3.5 accent-violet-400" />
     </label>
   );
 }
