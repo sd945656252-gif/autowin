@@ -491,16 +491,23 @@ const scene3dMotionRefineRequestSchema = z.object({
   startFingerPose: z.unknown().optional(),
   endFingerPose: z.unknown().optional(),
   fixedPoseConstraints: z.array(z.unknown()).max(12).default([]),
+  fixedPoseSegments: z.array(z.unknown()).max(12).default([]),
   middleKeyframeConstraints: z.array(z.unknown()).max(10).default([]),
   currentCharacterTransform: z.unknown().optional(),
   constraints: z.unknown().optional(),
   localSemanticPlan: z.unknown().optional(),
   localActionPlan: z.unknown().optional(),
   localCompilerContract: z.unknown().optional(),
+  promptRequirementGraph: z.unknown().optional(),
+  negativeConstraints: z.array(z.unknown()).max(80).default([]),
+  motionStyleProfile: z.unknown().optional(),
   availableSemanticStageTemplates: z.array(z.unknown()).max(24).default([]),
   availableActionSkills: z.array(z.unknown()).max(24).default([]),
+  characters: z.array(z.unknown()).max(12).default([]),
+  characterRigMappings: z.array(z.unknown()).max(12).default([]),
   cameras: z.array(z.unknown()).max(8).default([]),
   props: z.array(z.unknown()).max(16).default([]),
+  sceneContext: z.unknown().optional(),
   activeCameraId: z.string().max(120).optional(),
   activeViewMode: z.enum(["director", "camera"]).default("director"),
   coordinateSystemDescription: z.string().trim().max(1200),
@@ -575,8 +582,228 @@ const scene3dMotionIntentSchema = z.object({
   confidence: z.number().finite().min(0).max(1)
 }).strict();
 
+const scene3dMotionDraftRequirementSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  text: z.string().trim().min(1).max(300),
+  category: z.enum(["action", "body", "timing", "contact", "camera", "style", "constraint", "other"]).default("other"),
+  priority: z.enum(["low", "normal", "high"]).optional()
+}).strict();
+const scene3dMotionDraftPhaseSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  label: z.string().trim().min(1).max(120),
+  startSec: z.number().finite().min(0).max(120),
+  endSec: z.number().finite().min(0).max(120),
+  purpose: z.string().trim().max(300).optional(),
+  keyJoints: z.array(scene3dPoseJointKeySchema).max(8).default([]),
+  contacts: z.array(scene3dMotionContactHintSchema).max(8).default([]),
+  requirementIds: z.array(z.string().trim().min(1).max(80)).max(12).default([])
+}).strict();
+const scene3dMotionDraftTransformKeyframeSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  timeSec: z.number().finite().min(0).max(120),
+  position: z.object({
+    x: z.number().finite().min(-50).max(50),
+    y: z.number().finite().min(-50).max(50),
+    z: z.number().finite().min(-50).max(50)
+  }).strict().optional(),
+  rotation: z.object({
+    x: z.number().finite().min(-180).max(180),
+    y: z.number().finite().min(-180).max(180),
+    z: z.number().finite().min(-180).max(180)
+  }).strict().optional(),
+  scale: z.object({
+    x: z.number().finite().min(0.01).max(20),
+    y: z.number().finite().min(0.01).max(20),
+    z: z.number().finite().min(0.01).max(20)
+  }).strict().optional(),
+  phaseId: z.string().trim().max(80).optional(),
+  requirementIds: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  note: z.string().trim().max(300).optional()
+}).strict();
+const scene3dMotionDraftBoneKeyframeSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  timeSec: z.number().finite().min(0).max(120),
+  joint: scene3dPoseJointKeySchema,
+  rotation: z.object({
+    x: z.number().finite().min(-180).max(180),
+    y: z.number().finite().min(-180).max(180),
+    z: z.number().finite().min(-180).max(180)
+  }).strict(),
+  phaseId: z.string().trim().max(80).optional(),
+  requirementIds: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  note: z.string().trim().max(300).optional()
+}).strict();
+const scene3dMotionDraftContactFrameSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  timeSec: z.number().finite().min(0).max(120),
+  contact: scene3dMotionContactHintSchema,
+  type: z.enum(["ground", "prop", "look", "release", "hold", "other"]).optional(),
+  targetObjectId: z.string().trim().max(120).optional(),
+  phaseId: z.string().trim().max(80).optional(),
+  requirementIds: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  note: z.string().trim().max(300).optional()
+}).strict();
+const scene3dMotionDraftConstraintSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  type: z.enum(["head_look", "hand_target", "foot_lock", "body_aim", "grounding", "prop_contact", "other"]),
+  target: z.string().trim().max(160).optional(),
+  startSec: z.number().finite().min(0).max(120).optional(),
+  endSec: z.number().finite().min(0).max(120).optional(),
+  joints: z.array(scene3dPoseJointKeySchema).max(8).default([]),
+  requirementIds: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  note: z.string().trim().max(300).optional()
+}).strict();
+const scene3dMotionDraftRequirementMapSchema = z.object({
+  requirementId: z.string().trim().min(1).max(80),
+  appliedTo: z.array(z.object({
+    kind: z.enum(["phase", "transformKeyframe", "boneKeyframe", "contactFrame", "constraint", "camera"]),
+    id: z.string().trim().max(80).optional(),
+    timeSec: z.number().finite().min(0).max(120).optional(),
+    joint: scene3dPoseJointKeySchema.optional(),
+    phaseId: z.string().trim().max(80).optional()
+  }).strict()).max(16).default([]),
+  note: z.string().trim().max(300).optional()
+}).strict();
+const scene3dMotionDraftSchema = z.object({
+  version: z.literal(1),
+  actionIntent: z.string().trim().min(1).max(1200),
+  durationSec: z.number().finite().min(0.2).max(120),
+  fpsHint: z.number().finite().min(12).max(60).optional(),
+  generatedMotionPrompt: z.string().trim().min(1).max(4000),
+  promptRequirements: z.array(scene3dMotionDraftRequirementSchema).max(20).default([]),
+  promptRequirementMap: z.array(scene3dMotionDraftRequirementMapSchema).max(20).default([]),
+  phasePlan: z.array(scene3dMotionDraftPhaseSchema).max(12).default([]),
+  transformKeyframes: z.array(scene3dMotionDraftTransformKeyframeSchema).max(24).default([]),
+  boneKeyframes: z.array(scene3dMotionDraftBoneKeyframeSchema).max(80).default([]),
+  contactFrames: z.array(scene3dMotionDraftContactFrameSchema).max(32).default([]),
+  constraints: z.array(scene3dMotionDraftConstraintSchema).max(24).default([]),
+  timing: z.object({
+    anticipation: z.number().finite().min(0).max(120).optional(),
+    mainActionStart: z.number().finite().min(0).max(120).optional(),
+    mainActionEnd: z.number().finite().min(0).max(120).optional(),
+    settle: z.number().finite().min(0).max(120).optional()
+  }).strict().optional(),
+  warnings: z.array(z.string().trim().min(1).max(300)).max(24).default([]),
+  confidence: z.number().finite().min(0).max(1)
+}).strict();
+
+const scene3dInteractionTargetTypeSchema = z.enum(["character", "prop", "camera", "point"]);
+const scene3dInteractionActorRoleSchema = z.enum(["primary", "secondary", "target", "obstacle"]);
+const scene3dInteractionTargetRoleSchema = z.enum(["push_target", "receive_target", "avoid_target", "look_target", "obstacle", "held_object"]);
+const scene3dInteractionActionTypeSchema = z.enum(["approach", "push", "pull", "handoff", "receive", "avoid", "chase", "fight_basic", "kick_prop", "pick_up", "put_down"]);
+const scene3dInteractionContactTypeSchema = z.enum(["reach", "touch", "hold", "push", "pull", "hit", "release", "receive", "avoid"]);
+const scene3dInteractionSyncMarkerTypeSchema = z.enum(["contact", "release", "dodge", "receive", "impact", "look", "camera_cue"]);
+const scene3dInteractionPropPhysicalHintSchema = z.enum(["slide", "roll", "lift", "drop", "impact", "carry"]);
+const scene3dInteractionActorSchema = z.object({
+  actorId: z.string().trim().min(1).max(120),
+  role: scene3dInteractionActorRoleSchema,
+  actionType: scene3dMotionSemanticActionTypeSchema.default("unknown"),
+  startRatio: z.number().finite().min(0).max(1),
+  endRatio: z.number().finite().min(0).max(1),
+  targetObjectId: z.string().trim().max(120).optional(),
+  relativePositionGoal: z.string().trim().max(240).optional(),
+  motionDraftRef: z.string().trim().max(120).optional(),
+  motionDraft: scene3dMotionDraftSchema.optional(),
+  notes: z.array(z.string().trim().min(1).max(300)).max(8).default([])
+}).strict();
+const scene3dInteractionTargetSchema = z.object({
+  targetId: z.string().trim().min(1).max(120),
+  targetType: scene3dInteractionTargetTypeSchema,
+  role: scene3dInteractionTargetRoleSchema,
+  worldPosition: scene3dVec3Schema.optional(),
+  boundingHint: z.object({
+    x: z.number().finite().min(0).max(20),
+    y: z.number().finite().min(0).max(20),
+    z: z.number().finite().min(0).max(20)
+  }).strict().optional(),
+  notes: z.array(z.string().trim().min(1).max(300)).max(8).default([])
+}).strict();
+const scene3dInteractionContactSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  timeSec: z.number().finite().min(0).max(120),
+  actorId: z.string().trim().min(1).max(120),
+  limb: z.enum(["head", "leftHand", "rightHand", "leftFoot", "rightFoot"]),
+  targetId: z.string().trim().min(1).max(120),
+  targetType: scene3dInteractionTargetTypeSchema,
+  contactType: scene3dInteractionContactTypeSchema,
+  worldPosition: scene3dVec3Schema.optional(),
+  required: z.boolean().default(true)
+}).strict();
+const scene3dInteractionDraftClipSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  label: z.string().trim().min(1).max(120),
+  actionType: scene3dInteractionActionTypeSchema,
+  actorIds: z.array(z.string().trim().min(1).max(120)).min(1).max(8),
+  targetIds: z.array(z.string().trim().min(1).max(120)).max(8).default([]),
+  startSec: z.number().finite().min(0).max(120),
+  endSec: z.number().finite().min(0).max(120),
+  requiredContacts: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  relativePositionRules: z.array(z.string().trim().min(1).max(300)).max(8).default([]),
+  notes: z.array(z.string().trim().min(1).max(300)).max(8).default([])
+}).strict();
+const scene3dInteractionSyncMarkerSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  timeSec: z.number().finite().min(0).max(120),
+  markerType: scene3dInteractionSyncMarkerTypeSchema,
+  actorId: z.string().trim().max(120).optional(),
+  targetId: z.string().trim().max(120).optional(),
+  triggers: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
+  notes: z.array(z.string().trim().min(1).max(300)).max(8).default([])
+}).strict();
+const scene3dInteractionPropMotionSchema = z.object({
+  propId: z.string().trim().min(1).max(120),
+  startSec: z.number().finite().min(0).max(120),
+  endSec: z.number().finite().min(0).max(120),
+  transformKeyframes: z.array(z.object({
+    timeSec: z.number().finite().min(0).max(120),
+    transform: z.object({
+      position: z.object({
+        x: z.number().finite().min(-50).max(50),
+        y: z.number().finite().min(-50).max(50),
+        z: z.number().finite().min(-50).max(50)
+      }).strict().optional(),
+      rotation: z.object({
+        x: z.number().finite().min(-180).max(180),
+        y: z.number().finite().min(-180).max(180),
+        z: z.number().finite().min(-180).max(180)
+      }).strict().optional(),
+      scale: z.object({
+        x: z.number().finite().min(0.01).max(20),
+        y: z.number().finite().min(0.01).max(20),
+        z: z.number().finite().min(0.01).max(20)
+      }).strict().optional()
+    }).strict(),
+    note: z.string().trim().max(300).optional()
+  }).strict()).max(12).default([]),
+  causedByActorId: z.string().trim().max(120).optional(),
+  causeContactId: z.string().trim().max(80).optional(),
+  physicalHint: scene3dInteractionPropPhysicalHintSchema,
+  notes: z.array(z.string().trim().min(1).max(300)).max(8).default([])
+}).strict();
+const scene3dInteractionDraftSchema = z.object({
+  version: z.literal(1),
+  primaryActorId: z.string().trim().max(120).optional(),
+  actors: z.array(scene3dInteractionActorSchema).max(8).default([]),
+  targets: z.array(scene3dInteractionTargetSchema).max(16).default([]),
+  interactionClips: z.array(scene3dInteractionDraftClipSchema).max(16).default([]),
+  contacts: z.array(scene3dInteractionContactSchema).max(48).default([]),
+  syncMarkers: z.array(scene3dInteractionSyncMarkerSchema).max(32).default([]),
+  propMotions: z.array(scene3dInteractionPropMotionSchema).max(12).default([]),
+  spatialConstraints: z.array(z.string().trim().min(1).max(300)).max(16).default([]),
+  warnings: z.array(z.string().trim().min(1).max(300)).max(24).default([]),
+  confidence: z.number().finite().min(0).max(1)
+}).strict();
+const scene3dMotionRefineResultSchema = z.object({
+  motionIntent: scene3dMotionIntentSchema,
+  motionDraft: scene3dMotionDraftSchema.optional(),
+  interactionDraft: scene3dInteractionDraftSchema.optional()
+}).strict();
+
 type Scene3DMotionRefineRequest = z.infer<typeof scene3dMotionRefineRequestSchema>;
 type Scene3DMotionIntent = z.infer<typeof scene3dMotionIntentSchema>;
+type Scene3DMotionDraft = z.infer<typeof scene3dMotionDraftSchema>;
+type Scene3DInteractionDraft = z.infer<typeof scene3dInteractionDraftSchema>;
+type Scene3DMotionRefineResult = z.infer<typeof scene3dMotionRefineResultSchema>;
 
 const scene3dPoseReferenceImageSchema = z.object({
   view: scene3dPoseReferenceViewSchema,
@@ -869,7 +1096,8 @@ const SCENE3D_IMPORT_MAX_IMAGE_BYTES = Number(process.env.SCENE3D_IMPORT_MAX_IMA
 const SCENE3D_MOTION_REFINE_MAX_IMAGE_BYTES = Number(process.env.SCENE3D_MOTION_REFINE_MAX_IMAGE_BYTES || 3 * 1024 * 1024);
 const SCENE3D_POSE_REFERENCE_MAX_IMAGE_BYTES = Number(process.env.SCENE3D_POSE_REFERENCE_MAX_IMAGE_BYTES || 4 * 1024 * 1024);
 const SCENE3D_DIRECTOR_TIMEOUT_MS = Number(process.env.SCENE3D_DIRECTOR_TIMEOUT_MS || 90000);
-const SCENE3D_MOTION_REFINE_TIMEOUT_MS = Number(process.env.SCENE3D_MOTION_REFINE_TIMEOUT_MS || 90000);
+const SCENE3D_MOTION_REFINE_TIMEOUT_MS = Number(process.env.SCENE3D_MOTION_REFINE_TIMEOUT_MS || 18000);
+const SCENE3D_MOTION_REFINE_ULTRA_TIMEOUT_MS = Number(process.env.SCENE3D_MOTION_REFINE_ULTRA_TIMEOUT_MS || 12000);
 const SCENE3D_POSE_REFERENCE_TIMEOUT_MS = Number(process.env.SCENE3D_POSE_REFERENCE_TIMEOUT_MS || 90000);
 const SENSITIVE_WORKFLOW_INPUT_KEYS = /(^|[_-])?(api[_-]?key|custom[_-]?key|authorization|bearer|token|secret|password|headers?)($|[_-])?/i;
 const REDACTED_WORKFLOW_SECRET = "[REDACTED]";
@@ -1128,7 +1356,157 @@ function parseScene3DPoseReferenceSolveRequest(body: unknown): Scene3DPoseRefere
   return validation.data;
 }
 
-function parseScene3DMotionIntentJson(raw: string, request: Scene3DMotionRefineRequest): Scene3DMotionIntent {
+function scene3DMotionContextObjectIds(request: Scene3DMotionRefineRequest) {
+  const objectIds = new Set<string>([request.selectedCharacterId]);
+  for (const item of request.characters as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
+  for (const item of request.props as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
+  for (const item of request.cameras as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
+  return objectIds;
+}
+
+function scene3DMotionContextIdsByType(request: Scene3DMotionRefineRequest) {
+  const characters = new Set<string>([request.selectedCharacterId]);
+  const props = new Set<string>();
+  const cameras = new Set<string>();
+  for (const item of request.characters as any[]) if (typeof item?.id === "string") characters.add(item.id);
+  for (const item of request.props as any[]) if (typeof item?.id === "string") props.add(item.id);
+  for (const item of request.cameras as any[]) if (typeof item?.id === "string") cameras.add(item.id);
+  return { characters, props, cameras, all: scene3DMotionContextObjectIds(request) };
+}
+
+function validateScene3DMotionDraftSemantics(draft: Scene3DMotionDraft, request: Scene3DMotionRefineRequest) {
+  const issues: Array<{ path: string; message: string }> = [];
+  const objectIds = scene3DMotionContextObjectIds(request);
+  const endpointEpsilon = 0.001;
+  const isMiddleTime = (timeSec: number) => timeSec > endpointEpsilon && timeSec < request.durationSec - endpointEpsilon;
+  if (Math.abs(draft.durationSec - request.durationSec) > endpointEpsilon) {
+    issues.push({ path: "motionDraft.durationSec", message: "motionDraft.durationSec must match request durationSec" });
+  }
+  for (const [index, phase] of draft.phasePlan.entries()) {
+    if (phase.endSec < phase.startSec) issues.push({ path: `motionDraft.phasePlan.${index}.endSec`, message: "phase endSec must be greater than or equal to startSec" });
+    if (phase.endSec > request.durationSec + endpointEpsilon) issues.push({ path: `motionDraft.phasePlan.${index}.endSec`, message: "phase endSec exceeds request durationSec" });
+  }
+  for (const [index, keyframe] of draft.transformKeyframes.entries()) {
+    if (!isMiddleTime(keyframe.timeSec)) issues.push({ path: `motionDraft.transformKeyframes.${index}.timeSec`, message: "transformKeyframes cannot cover the 0s start frame or durationSec end frame" });
+  }
+  for (const [index, keyframe] of draft.boneKeyframes.entries()) {
+    if (!isMiddleTime(keyframe.timeSec)) issues.push({ path: `motionDraft.boneKeyframes.${index}.timeSec`, message: "boneKeyframes cannot cover the 0s start frame or durationSec end frame" });
+  }
+  for (const [index, contact] of draft.contactFrames.entries()) {
+    if (!isMiddleTime(contact.timeSec)) issues.push({ path: `motionDraft.contactFrames.${index}.timeSec`, message: "contactFrames cannot cover the 0s start frame or durationSec end frame" });
+    if (contact.targetObjectId && !objectIds.has(contact.targetObjectId)) {
+      issues.push({ path: `motionDraft.contactFrames.${index}.targetObjectId`, message: "targetObjectId does not exist in the compact Scene3D context" });
+    }
+  }
+  for (const [index, constraint] of draft.constraints.entries()) {
+    if (constraint.startSec !== undefined && constraint.endSec !== undefined && constraint.endSec < constraint.startSec) {
+      issues.push({ path: `motionDraft.constraints.${index}.endSec`, message: "constraint endSec must be greater than or equal to startSec" });
+    }
+    if (constraint.startSec !== undefined && constraint.startSec > request.durationSec + endpointEpsilon) {
+      issues.push({ path: `motionDraft.constraints.${index}.startSec`, message: "constraint startSec exceeds request durationSec" });
+    }
+    if (constraint.endSec !== undefined && constraint.endSec > request.durationSec + endpointEpsilon) {
+      issues.push({ path: `motionDraft.constraints.${index}.endSec`, message: "constraint endSec exceeds request durationSec" });
+    }
+  }
+  if (draft.timing) {
+    for (const key of ["anticipation", "mainActionStart", "mainActionEnd", "settle"] as const) {
+      const value = draft.timing[key];
+      if (value !== undefined && value > request.durationSec + endpointEpsilon) {
+        issues.push({ path: `motionDraft.timing.${key}`, message: "timing value exceeds request durationSec" });
+      }
+    }
+    if (draft.timing.mainActionStart !== undefined && draft.timing.mainActionEnd !== undefined && draft.timing.mainActionEnd < draft.timing.mainActionStart) {
+      issues.push({ path: "motionDraft.timing.mainActionEnd", message: "mainActionEnd must be greater than or equal to mainActionStart" });
+    }
+  }
+  return issues;
+}
+
+function validateScene3DInteractionDraftSemantics(draft: Scene3DInteractionDraft, request: Scene3DMotionRefineRequest) {
+  const issues: Array<{ path: string; message: string }> = [];
+  const ids = scene3DMotionContextIdsByType(request);
+  const targetExists = (targetId: string | undefined, targetType?: string) => {
+    if (!targetId) return false;
+    if (targetType === "character") return ids.characters.has(targetId);
+    if (targetType === "prop") return ids.props.has(targetId);
+    if (targetType === "camera") return ids.cameras.has(targetId);
+    return ids.all.has(targetId);
+  };
+  const checkTime = (path: string, value: number) => {
+    if (value > request.durationSec + 0.001) issues.push({ path, message: "time exceeds request durationSec" });
+  };
+  if (draft.primaryActorId && !ids.characters.has(draft.primaryActorId)) {
+    issues.push({ path: "interactionDraft.primaryActorId", message: "primaryActorId must reference an existing character id" });
+  }
+  for (const [index, actor] of draft.actors.entries()) {
+    if (!ids.characters.has(actor.actorId)) {
+      issues.push({ path: `interactionDraft.actors.${index}.actorId`, message: "actorId must reference an existing character id" });
+    }
+    if (actor.endRatio < actor.startRatio) {
+      issues.push({ path: `interactionDraft.actors.${index}.endRatio`, message: "actor endRatio must be greater than or equal to startRatio" });
+    }
+    if (actor.targetObjectId && !ids.all.has(actor.targetObjectId)) {
+      issues.push({ path: `interactionDraft.actors.${index}.targetObjectId`, message: "targetObjectId does not exist in compact Scene3D context" });
+    }
+    if (actor.motionDraft) {
+      const nestedIssues = validateScene3DMotionDraftSemantics(actor.motionDraft, request);
+      nestedIssues.forEach((issue) => issues.push({ path: `interactionDraft.actors.${index}.${issue.path}`, message: issue.message }));
+    }
+  }
+  for (const [index, target] of draft.targets.entries()) {
+    if (target.targetType !== "point" && !targetExists(target.targetId, target.targetType)) {
+      issues.push({ path: `interactionDraft.targets.${index}.targetId`, message: "targetId must reference an existing object id for its targetType" });
+    }
+    if (target.targetType === "point" && !target.worldPosition) {
+      issues.push({ path: `interactionDraft.targets.${index}.worldPosition`, message: "point targets require worldPosition" });
+    }
+  }
+  for (const [index, clip] of draft.interactionClips.entries()) {
+    checkTime(`interactionDraft.interactionClips.${index}.startSec`, clip.startSec);
+    checkTime(`interactionDraft.interactionClips.${index}.endSec`, clip.endSec);
+    if (clip.endSec < clip.startSec) issues.push({ path: `interactionDraft.interactionClips.${index}.endSec`, message: "interaction clip endSec must be after startSec" });
+    clip.actorIds.forEach((actorId, actorIndex) => {
+      if (!ids.characters.has(actorId)) issues.push({ path: `interactionDraft.interactionClips.${index}.actorIds.${actorIndex}`, message: "actorIds must reference existing character ids" });
+    });
+    clip.targetIds.forEach((targetId, targetIndex) => {
+      if (!ids.all.has(targetId)) issues.push({ path: `interactionDraft.interactionClips.${index}.targetIds.${targetIndex}`, message: "targetIds must reference existing object ids" });
+    });
+  }
+  for (const [index, contact] of draft.contacts.entries()) {
+    checkTime(`interactionDraft.contacts.${index}.timeSec`, contact.timeSec);
+    if (!ids.characters.has(contact.actorId)) issues.push({ path: `interactionDraft.contacts.${index}.actorId`, message: "contact actorId must reference an existing character id" });
+    if (contact.targetType !== "point" && !targetExists(contact.targetId, contact.targetType)) {
+      issues.push({ path: `interactionDraft.contacts.${index}.targetId`, message: "contact targetId must reference an existing object id for targetType" });
+    }
+    if (contact.targetType === "point" && !contact.worldPosition) {
+      issues.push({ path: `interactionDraft.contacts.${index}.worldPosition`, message: "point contacts require worldPosition" });
+    }
+  }
+  for (const [index, marker] of draft.syncMarkers.entries()) {
+    checkTime(`interactionDraft.syncMarkers.${index}.timeSec`, marker.timeSec);
+    if (marker.actorId && !ids.characters.has(marker.actorId)) issues.push({ path: `interactionDraft.syncMarkers.${index}.actorId`, message: "sync marker actorId must reference an existing character id" });
+    if (marker.targetId && !ids.all.has(marker.targetId)) issues.push({ path: `interactionDraft.syncMarkers.${index}.targetId`, message: "sync marker targetId must reference an existing object id" });
+  }
+  for (const [index, motion] of draft.propMotions.entries()) {
+    if (!ids.props.has(motion.propId)) issues.push({ path: `interactionDraft.propMotions.${index}.propId`, message: "propMotion propId must reference an existing prop id" });
+    checkTime(`interactionDraft.propMotions.${index}.startSec`, motion.startSec);
+    checkTime(`interactionDraft.propMotions.${index}.endSec`, motion.endSec);
+    if (motion.endSec < motion.startSec) issues.push({ path: `interactionDraft.propMotions.${index}.endSec`, message: "propMotion endSec must be after startSec" });
+    if (motion.causedByActorId && !ids.characters.has(motion.causedByActorId)) {
+      issues.push({ path: `interactionDraft.propMotions.${index}.causedByActorId`, message: "causedByActorId must reference an existing character id" });
+    }
+    for (const [frameIndex, frame] of motion.transformKeyframes.entries()) {
+      checkTime(`interactionDraft.propMotions.${index}.transformKeyframes.${frameIndex}.timeSec`, frame.timeSec);
+      if (frame.timeSec < motion.startSec - 0.001 || frame.timeSec > motion.endSec + 0.001) {
+        issues.push({ path: `interactionDraft.propMotions.${index}.transformKeyframes.${frameIndex}.timeSec`, message: "propMotion keyframe timeSec must be inside startSec/endSec" });
+      }
+    }
+  }
+  return issues;
+}
+
+function parseScene3DMotionRefineJson(raw: string, request: Scene3DMotionRefineRequest): Scene3DMotionRefineResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripJsonMarkdown(raw));
@@ -1138,7 +1516,11 @@ function parseScene3DMotionIntentJson(raw: string, request: Scene3DMotionRefineR
     });
   }
 
-  const coerced = coerceScene3DMotionIntent(parsed, request);
+  const parsedObject = parsed && typeof parsed === "object" ? parsed as any : {};
+  const rawMotionIntent = parsedObject.motionIntent && typeof parsedObject.motionIntent === "object"
+    ? parsedObject.motionIntent
+    : parsedObject;
+  const coerced = coerceScene3DMotionIntent(rawMotionIntent, request);
   const validation = scene3dMotionIntentSchema.safeParse(coerced);
   if (!validation.success) {
     throw new HttpError(502, "Scene3D motion intent output failed schema validation.", "SCENE3D_MOTION_REFINE_SCHEMA_INVALID", {
@@ -1150,9 +1532,7 @@ function parseScene3DMotionIntentJson(raw: string, request: Scene3DMotionRefineR
   }
   const intent = validation.data;
   const issues: Array<{ path: string; message: string }> = [];
-  const objectIds = new Set<string>();
-  for (const item of request.props as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
-  for (const item of request.cameras as any[]) if (typeof item?.id === "string") objectIds.add(item.id);
+  const objectIds = scene3DMotionContextObjectIds(request);
 
   if (Math.abs(intent.durationSec - request.durationSec) > 0.001) {
     issues.push({ path: "durationSec", message: "durationSec must match request durationSec" });
@@ -1164,7 +1544,58 @@ function parseScene3DMotionIntentJson(raw: string, request: Scene3DMotionRefineR
   if (issues.length) {
     throw new HttpError(502, "Scene3D motion intent output failed semantic validation.", "SCENE3D_MOTION_REFINE_SEMANTIC_INVALID", { issues });
   }
-  return intent;
+  let motionDraft: Scene3DMotionDraft | undefined;
+  if (parsedObject.motionDraft !== undefined) {
+    const rawDraft = parsedObject.motionDraft && typeof parsedObject.motionDraft === "object"
+      ? (({ interactionDraft, ...rest }) => rest)(parsedObject.motionDraft as any)
+      : parsedObject.motionDraft;
+    const draftValidation = scene3dMotionDraftSchema.safeParse(rawDraft);
+    if (!draftValidation.success) {
+      throw new HttpError(502, "Scene3D motion draft output failed schema validation.", "SCENE3D_MOTION_DRAFT_SCHEMA_INVALID", {
+        issues: draftValidation.error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message
+        }))
+      });
+    }
+    const draftIssues = validateScene3DMotionDraftSemantics(draftValidation.data, request);
+    if (draftIssues.length) {
+      throw new HttpError(502, "Scene3D motion draft output failed semantic validation.", "SCENE3D_MOTION_DRAFT_SEMANTIC_INVALID", { issues: draftIssues });
+    }
+    motionDraft = draftValidation.data;
+  }
+  let interactionDraft: Scene3DInteractionDraft | undefined;
+  const rawInteractionDraft = parsedObject.interactionDraft ?? (
+    parsedObject.motionDraft && typeof parsedObject.motionDraft === "object"
+      ? (parsedObject.motionDraft as any).interactionDraft
+      : undefined
+  );
+  if (rawInteractionDraft !== undefined) {
+    const interactionValidation = scene3dInteractionDraftSchema.safeParse(rawInteractionDraft);
+    if (!interactionValidation.success) {
+      throw new HttpError(502, "Scene3D interaction draft output failed schema validation.", "SCENE3D_INTERACTION_DRAFT_SCHEMA_INVALID", {
+        issues: interactionValidation.error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message
+        }))
+      });
+    }
+    const interactionIssues = validateScene3DInteractionDraftSemantics(interactionValidation.data, request);
+    if (interactionIssues.length) {
+      throw new HttpError(502, "Scene3D interaction draft output failed semantic validation.", "SCENE3D_INTERACTION_DRAFT_SEMANTIC_INVALID", { issues: interactionIssues });
+    }
+    interactionDraft = interactionValidation.data;
+  }
+  const resultValidation = scene3dMotionRefineResultSchema.safeParse({ motionIntent: intent, motionDraft, interactionDraft });
+  if (!resultValidation.success) {
+    throw new HttpError(502, "Scene3D motion refinement output failed result validation.", "SCENE3D_MOTION_REFINE_RESULT_INVALID", {
+      issues: resultValidation.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message
+      }))
+    });
+  }
+  return resultValidation.data;
 }
 
 function parseScene3DPoseReferenceJson(raw: string, request: Scene3DPoseReferenceSolveRequest): Scene3DPoseReferenceSolveResult {
@@ -1536,18 +1967,23 @@ function scene3dDirectorUserPrompt(input: { request: Scene3DDirectorRequest; nod
 function scene3dMotionRefineSystemPrompt() {
   return [
     "You are a professional 3D character animation blocking assistant for a node-based film previs tool.",
-    "Generate a lightweight MotionIntent only. Do not generate video, assets, URLs, fake progress, final animation clips, transform keyframes, bone keyframes, contact keyframes, or constraints.",
+    "Generate structured JSON containing motionIntent plus optional but expected motionDraft and interactionDraft. Do not generate video, assets, URLs, fake progress, final animation clips, samples, tracks, raw frame arrays, or rendered results.",
     "Return JSON only. Do not return Markdown, comments, prose outside JSON, or trailing commas.",
-    "The local Scene3D compiler will generate positions, rotations, bone poses, contacts, and final animation samples.",
-    "Start, end, and any provided middle keyframe poses/transforms are hard constraints owned by the caller. Infer only the motion semantics between adjacent fixed poses.",
+    "The local Scene3D compiler will generate the final animation samples later. motionDraft is the selected character's executable intermediate plan between fixed poses; interactionDraft is the structured multi-character and prop interaction plan.",
+    "Start, end, and any provided middle keyframe poses/transforms are hard constraints owned by the caller. Do not include draft keyframes at 0 seconds or at durationSec; infer only the motion planning between adjacent fixed poses.",
     "Prefer localSemanticPlan and available stage templates. You may refine them, but must not invent random in-between actions or bypass the local compiler.",
     "localCompilerContract is the executable contract. If it says actionLockedByPrompt is true, actionType/actionFamily, contacts, targetObjectId, grounded/airborne limits, and quality expectations are not suggestions; preserve them.",
     "localCompilerContract.actionSequence and poseStages are the authoritative semantic timeline. You may clarify timing notes, contact notes, camera intent, and warnings, but must not replace the local sequence with unrelated actions.",
     "localCompilerContract.fixedPoseConstraints and middleKeyframeConstraints are mandatory pose checkpoints. Preserve their timing/order and explain the motion between them; do not replace, reorder, smooth away, or ignore middle keyframes.",
+    "localCompilerContract.fixedPoseSegments is the ordered adjacent hard-keyframe relationship contract. Use it to plan phasePlan/keyframes/contact timing segment-by-segment; never infer one blind global motion that ignores middle keyframes.",
     "localCompilerContract.actionChains are locked high-level compound-action chains such as approach-contact, turn-throw, and low-recovery-attack. Preserve their order and explain how the intent satisfies their qualityExpectationIds.",
     "Compound chain meanings: approach_contact = move/approach first, slow near target, then hand contact and force; turn_throw = turn/twist first, then wind up, release, and recover; low_recovery_attack = crouch/dodge/block first, rise/recover balance, then strike/throw.",
     "localCompilerContract.promptControl contains locally parsed direction, speed, force, timing, stage, and body-control words from the user prompt. Treat these as explicit user controls, not loose style suggestions.",
-    "Never return any field listed in localCompilerContract.forbiddenOutputFields. In particular, never return samples, animationClip, transforms, raw keyframes, bonePose, boneRotations, jointRotations, or constraints.",
+    "promptRequirementGraph is the local requirement graph compiled before AI refinement. Preserve required requirements, use their ids in motionDraft.promptRequirements and promptRequirementMap, and never silently omit a local required requirement.",
+    "motionStyleProfile is the caller's structured style-control contract. Its numeric fields such as timingScale, poseAmplitudeScale, rootMotionScale, armSwingScale, legStrideScale, crouchScale, verticalLiftScale, recoveryScale, contactHoldScale, and cameraIntensity must influence motionDraft phase timing, middle keyframe intent, contact hold, recovery, and camera hints. Do not treat style as notes only.",
+    "negativeConstraints is the local do-not/avoid contract. Treat error severity constraints as hard constraints. Never violate no_endpoint_override, no_manual_keyframe_override, no_unmapped_actor, no_target_ignore, no_unreachable_contact, no_collision, no_penetration, no_foot_slide, no_extreme_joint_rotation, no_camera_jump, or no_prop_teleport.",
+    "Never return animationClip, samples, tracks, videoUrl, assetUrl, rawFrames, bonePose, boneRotations, jointRotations, or final rendered output. Structured intermediate planning is allowed only inside motionDraft.transformKeyframes, motionDraft.boneKeyframes, motionDraft.contactFrames, motionDraft.constraints, and interactionDraft.propMotions.transformKeyframes.",
+    "If the prompt mentions multiple characters, handoff/receive, chase/avoid, fight, dodge, kicking or moving props, or coordinated contact timing, return interactionDraft. Use only existing character, prop, and camera ids from compact context. For abstract point targets, set targetType point and include worldPosition. If a required actor or target is missing, add warnings instead of inventing ids.",
     "You must align the intent to one local action skill. actionType must be one of: walk, run, dash, push, pull, throw, punch, block, kick, side_kick, jump, crouch, crawl, fall, get_up, turn, reach, idle, unknown.",
     "actionFamily must be one of: locomotion, combat, push_pull, throw, jump, fall, crawl, posture, turn, reach, unknown.",
     "If localSemanticPlan already identifies an actionType, preserve it unless the user prompt explicitly contradicts it. User words such as 双手推, 跑步, 投掷, 蹲下, 跳起, 格挡, 出拳 are higher priority than model guesses.",
@@ -1557,32 +1993,64 @@ function scene3dMotionRefineSystemPrompt() {
     "Keep values realistic by default: distance usually 0-1.2, turnDeg usually below 90 unless turning is explicit, roll 0 unless falling or rolling, verticalLift 0 unless jump/fly/airborne is explicit, armSwing below 0.6 for normal walk/run/push/combat.",
     "Use normalized scalar strengths from 0 to 1 unless a field specifies degrees or world units.",
     "Direction is a horizontal world-space vector where X is left/right and Z is depth. Keep Y at 0 unless the intent truly needs vertical direction.",
-    "The JSON object must exactly match this TypeScript shape:",
+    "The JSON object must exactly match this TypeScript shape. Keep the old MotionIntent fields compatible and add motionDraft/interactionDraft for intermediate planning:",
     `{
-  "version": 1,
-  "intent": "string",
-  "durationSec": 2,
-  "generatedMotionPrompt": "string",
-  "direction": { "x": 1, "y": 0, "z": 0 },
-  "distance": 0.4,
-  "turnDeg": 90,
-  "roll": 0,
-  "crouch": 0.2,
-  "verticalLift": 0,
-  "bodyLean": { "x": 0.2, "y": 0, "z": 0 },
-  "armSwing": 0.4,
-  "rhythm": "slow | normal | fast | impact | perform",
-  "contacts": ["leftFoot", "rightFoot"],
-  "lookAt": "none | camera | object | point",
-  "targetObjectId": "existing nearby object id when relevant",
-  "actionFamily": "locomotion | combat | push_pull | throw | jump | fall | crawl | posture | turn | reach | unknown",
-  "actionType": "walk | run | dash | push | pull | throw | punch | block | kick | side_kick | jump | crouch | crawl | fall | get_up | turn | reach | idle | unknown",
-  "motionFamilies": ["locomotion", "turn", "reach", "combat"],
-  "keyframeHints": [{ "timeRatio": 0.5, "label": "main anticipation or contact pose", "posePresetId": "optional existing preset id", "note": "why this key pose matters" }],
-  "contactHints": [{ "timeSec": 0.6, "contact": "rightFoot", "note": "right foot plants on the ground" }],
-  "cameraMotionHint": { "enabled": true, "type": "follow_character", "intensity": 0.6, "startTimeSec": 0, "endTimeSec": 2, "distance": 1.2, "heightOffset": 0, "orbitAngleDeg": 35, "keepCharacterInFrame": true },
-  "warnings": ["string"],
-  "confidence": 0.8
+  "motionIntent": {
+    "version": 1,
+    "intent": "string",
+    "durationSec": 2,
+    "generatedMotionPrompt": "string",
+    "direction": { "x": 1, "y": 0, "z": 0 },
+    "distance": 0.4,
+    "turnDeg": 90,
+    "roll": 0,
+    "crouch": 0.2,
+    "verticalLift": 0,
+    "bodyLean": { "x": 0.2, "y": 0, "z": 0 },
+    "armSwing": 0.4,
+    "rhythm": "slow | normal | fast | impact | perform",
+    "contacts": ["leftFoot", "rightFoot"],
+    "lookAt": "none | camera | object | point",
+    "targetObjectId": "existing nearby object id when relevant",
+    "actionFamily": "locomotion | combat | push_pull | throw | jump | fall | crawl | posture | turn | reach | unknown",
+    "actionType": "walk | run | dash | push | pull | throw | punch | block | kick | side_kick | jump | crouch | crawl | fall | get_up | turn | reach | idle | unknown",
+    "motionFamilies": ["locomotion", "turn", "reach", "combat"],
+    "keyframeHints": [{ "timeRatio": 0.5, "label": "main anticipation or contact pose", "posePresetId": "optional existing preset id", "note": "why this key pose matters" }],
+    "contactHints": [{ "timeSec": 0.6, "contact": "rightFoot", "note": "right foot plants on the ground" }],
+    "cameraMotionHint": { "enabled": true, "type": "follow_character", "intensity": 0.6, "startTimeSec": 0, "endTimeSec": 2, "distance": 1.2, "heightOffset": 0, "orbitAngleDeg": 35, "keepCharacterInFrame": true },
+    "warnings": ["string"],
+    "confidence": 0.8
+  },
+  "motionDraft": {
+    "version": 1,
+    "actionIntent": "string",
+    "durationSec": 2,
+    "fpsHint": 24,
+    "generatedMotionPrompt": "string",
+    "promptRequirements": [{ "id": "req_1", "text": "user requirement", "category": "action | body | timing | contact | camera | style | constraint | other", "priority": "low | normal | high" }],
+    "phasePlan": [{ "id": "phase_1", "label": "anticipation", "startSec": 0, "endSec": 0.4, "purpose": "why this phase exists", "keyJoints": ["chest", "rightUpperArm"], "contacts": ["leftFoot"], "requirementIds": ["req_1"] }],
+    "transformKeyframes": [{ "id": "root_1", "timeSec": 0.5, "position": { "x": 0, "y": 0, "z": 0.2 }, "rotation": { "x": 0, "y": 15, "z": 0 }, "scale": { "x": 1, "y": 1, "z": 1 }, "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "intermediate root motion only" }],
+    "boneKeyframes": [{ "id": "bone_1", "timeSec": 0.5, "joint": "rightUpperArm", "rotation": { "x": 25, "y": 0, "z": -10 }, "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "intermediate joint plan only" }],
+    "contactFrames": [{ "id": "contact_1", "timeSec": 0.5, "contact": "rightFoot", "type": "ground | prop | look | release | hold | other", "targetObjectId": "existing object id only when relevant", "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "contact event" }],
+    "constraints": [{ "id": "constraint_1", "type": "head_look | hand_target | foot_lock | body_aim | grounding | prop_contact | other", "target": "target description or id", "startSec": 0.2, "endSec": 1.5, "joints": ["head"], "requirementIds": ["req_1"], "note": "constraint meaning" }],
+    "promptRequirementMap": [{ "requirementId": "req_1", "appliedTo": [{ "kind": "phase | transformKeyframe | boneKeyframe | contactFrame | constraint | camera", "id": "phase_1", "timeSec": 0.5, "joint": "rightUpperArm", "phaseId": "phase_1" }], "note": "where the requirement is applied" }],
+    "timing": { "anticipation": 0.2, "mainActionStart": 0.5, "mainActionEnd": 1.5, "settle": 1.9 },
+    "warnings": ["string"],
+    "confidence": 0.8
+  },
+  "interactionDraft": {
+    "version": 1,
+    "primaryActorId": "existing selected or primary character id",
+    "actors": [{ "actorId": "existing character id", "role": "primary | secondary | target | obstacle", "actionType": "run", "startRatio": 0, "endRatio": 1, "targetObjectId": "existing object id when relevant", "relativePositionGoal": "approach front-left of target", "motionDraftRef": "optional", "notes": ["string"] }],
+    "targets": [{ "targetId": "existing object id or stable point id", "targetType": "character | prop | camera | point", "role": "push_target | receive_target | avoid_target | look_target | obstacle | held_object", "worldPosition": { "x": 0, "y": 0, "z": 0 }, "boundingHint": { "x": 1, "y": 1, "z": 1 }, "notes": ["string"] }],
+    "interactionClips": [{ "id": "clip_1", "label": "approach then push", "actionType": "approach | push | pull | handoff | receive | avoid | chase | fight_basic | kick_prop | pick_up | put_down", "actorIds": ["existing character id"], "targetIds": ["existing target id"], "startSec": 0.2, "endSec": 1.4, "requiredContacts": ["contact_1"], "relativePositionRules": ["keep 0.5m from target until contact"], "notes": ["string"] }],
+    "contacts": [{ "id": "contact_1", "timeSec": 0.8, "actorId": "existing character id", "limb": "leftHand | rightHand | leftFoot | rightFoot | head", "targetId": "existing object id or point id", "targetType": "character | prop | camera | point", "contactType": "reach | touch | hold | push | pull | hit | release | receive | avoid", "worldPosition": { "x": 0, "y": 1, "z": 0 }, "required": true }],
+    "syncMarkers": [{ "id": "sync_1", "timeSec": 0.8, "markerType": "contact | release | dodge | receive | impact | look | camera_cue", "actorId": "existing character id", "targetId": "existing target id", "triggers": ["secondary dodge starts"], "notes": ["string"] }],
+    "propMotions": [{ "propId": "existing prop id", "startSec": 0.8, "endSec": 1.5, "transformKeyframes": [{ "timeSec": 1.0, "transform": { "position": { "x": 0.2, "y": 0, "z": 0 } }, "note": "slide after push" }], "causedByActorId": "existing character id", "causeContactId": "contact_1", "physicalHint": "slide | roll | lift | drop | impact | carry", "notes": ["string"] }],
+    "spatialConstraints": ["string"],
+    "warnings": ["string"],
+    "confidence": 0.8
+  }
 }`
   ].join("\n");
 }
@@ -1615,29 +2083,56 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
       localSemanticPlan: input.request.localSemanticPlan,
       localActionPlan: input.request.localActionPlan,
       localCompilerContract: compilerContract,
+      promptRequirementGraph: input.request.promptRequirementGraph,
+      motionStyleProfile: input.request.motionStyleProfile,
+      negativeConstraints: input.request.negativeConstraints,
       availableSemanticStageTemplates: input.request.availableSemanticStageTemplates,
       availableActionSkills: input.request.availableActionSkills,
+      characters: input.request.characters,
+      characterRigMappings: input.request.characterRigMappings,
       cameras: input.request.cameras,
       props: input.request.props,
       fixedPoseConstraints: input.request.fixedPoseConstraints,
+      fixedPoseSegments: input.request.fixedPoseSegments,
       middleKeyframeConstraints: input.request.middleKeyframeConstraints,
       viewportScreenshotAssetId: input.request.viewportScreenshotAssetId || null,
       referenceImageAssetId: input.request.referenceImageAssetId || null
     }, 5000),
     "Motion rules:",
-    "- Do not return keyframes or bone rotations.",
+    "- Return motionIntent plus motionDraft. Also return interactionDraft when the prompt contains multiple actors, target props, handoff/receive, chase/avoid, fighting, kicking props, prop movement, or synchronized contact timing.",
+    "- motionDraft may include only intermediate transformKeyframes, boneKeyframes, contactFrames, constraints, phasePlan, timing, and requirement mapping.",
+    "- interactionDraft may include only actors, targets, interactionClips, contacts, syncMarkers, propMotions, spatialConstraints, warnings, and confidence.",
+    "- interactionDraft actors must use existing character ids from compact context. The selectedCharacterId is the default primaryActorId unless the prompt clearly names another existing character.",
+    "- interactionDraft targets must use existing character, prop, or camera ids. For point targets, use targetType point and include worldPosition. Never invent missing object ids.",
+    "- Use characterRigMappings only to judge whether hand, foot, head, or body IK may be reliable. If retarget confidence is low or hand/foot bones are missing, add warnings; do not invent rig bones, joint tracks, or final animation samples.",
+    "- Use syncMarkers to align contact/release/dodge/receive/impact/look/camera_cue events across actors. Use propMotions only for temporary animation/preview motion; do not imply permanent prop movement.",
+    "- For push/kick/impact on a prop, add both a contact and a propMotion with physicalHint slide, roll, impact, lift, drop, or carry as appropriate.",
+    "- For handoff/receive, align A release and B receive around the same timeSec and worldPosition.",
+    "- For chase/avoid/dodge, describe relativePositionGoal and syncMarkers rather than inventing extra animation samples.",
+    "- Do not return animationClip, samples, tracks, raw frame arrays, video URLs, fake progress, or final rendered results.",
+    "- Do not put any motionDraft keyframe at 0 seconds or at durationSec. The caller's start frame and end frame are hard constraints and cannot be edited by AI.",
     "- Treat localSemanticPlan as the deterministic local parser result. Preserve explicit user words from actionPrompt over your own guess.",
+    "- Treat promptRequirementGraph as the local PromptRequirementCompiler result. motionDraft.promptRequirements must preserve and cover promptRequirementGraph.requirements whenever possible, using the same requirement ids. motionDraft.promptRequirementMap must reference those ids and explain where each requirement is applied.",
+    "- Treat motionStyleProfile as structured numeric action style control. For realistic style reduce unsafe amplitude; for exaggerated increase readable pose amplitude within constraints; for fast/sprint increase stride/arm swing/root pacing; for slow/slow motion stretch timing and contact hold; for burst/impact add anticipation/contact/recover emphasis; for tired/heavy lower energy or center of gravity; for light add fluidity and limited lift; for cautious/nervous preserve smoothness and precision; for cinematic align camera hints and phase readability.",
+    "- If motionStyleProfile conflicts with negativeConstraints or hard keyframes, obey the hard constraints first and add warnings. Do not use style to create airborne motion, camera jumps, prop teleports, extreme joint rotations, or manual keyframe overrides.",
+    "- If promptRequirementGraph has required requirements that you cannot satisfy with middle planning, keep the requirement id in motionDraft.promptRequirements and add a warning. Do not silently drop local required requirements.",
+    "- Treat negativeConstraints as explicit forbidden outcomes. If a negative constraint conflicts with a possible positive fix, obey the negative constraint first and add a warning explaining the blocked fix.",
+    "- Never violate no_endpoint_override or no_manual_keyframe_override: do not move, replace, smooth away, or shadow start, end, or provided middle keyframes.",
+    "- Never violate no_unmapped_actor or no_target_ignore: use only existing ids from context, and when an action requires a target, map contacts/constraints to that target or warn that the target is missing.",
+    "- Never use unreachable hand/foot contacts, camera jumps, prop teleporting, obvious foot sliding, or non-jump airborne motion to satisfy a prompt requirement.",
     "- Treat localCompilerContract as the executable local compiler contract. If actionLockedByPrompt is true, do not change actionType/actionFamily; explain and refine only timing, contacts, camera intent, and semantic phase hints.",
     "- localCompilerContract.actionSequence is already the local parser's ordered motion plan. Do not reorder it, replace it, or add unrelated action phases; use keyframeHints only as semantic annotations near the existing stages.",
     "- fixedPoseConstraints and middleKeyframeConstraints are hard pose constraints equal in importance to startPose and endPose. Your intent must pass through them at their exact time ratios and describe only the motion between neighboring fixed poses.",
+    "- fixedPoseSegments is the ordered relationship contract between adjacent hard keyframes. Build motionDraft.phasePlan, transformKeyframes, boneKeyframes, contactFrames, timing, and promptRequirementMap around these segments. Do not plan one blind global motion from start to end when middle segments exist.",
+    "- Each motionDraft phase/keyframe should either sit inside one fixedPoseSegments time window or explain how it bridges that exact segment. Do not place a phase/keyframe that semantically contradicts the fixed segment's from/to pose delta.",
     "- If middleKeyframeConstraints exist, keyframeHints should support those checkpoints instead of overwriting, smoothing away, or moving them.",
     "- localCompilerContract.actionChains identify fixed compound-action meaning from the prompt. Mention these chains in intent/generatedMotionPrompt and keep their qualityExpectationIds satisfied.",
     "- For approach_contact chains, describe approach/deceleration/contact/force instead of treating the prompt as only locomotion or only pushing.",
     "- For turn_throw chains, describe turn/twist/windup/release/recovery in that order and keep feet grounded unless the prompt explicitly asks for a jump throw.",
     "- For low_recovery_attack chains, describe low dodge/block, rising recovery, then the final attack; do not collapse it into only crouch or only punch.",
     "- localCompilerContract.promptControl is the user's parsed control layer. Preserve its direction, speed, force, timingTags, stageTags, and bodyTags in your semantic explanation and generatedMotionPrompt.",
-    "- Never output fields listed in localCompilerContract.forbiddenOutputFields. If you think raw frames or joints are needed, add a warning instead; the local compiler will generate them.",
-    "- Use availableSemanticStageTemplates to choose or refine semantic stages. Do not invent raw joint values; describe action phases only.",
+    "- localCompilerContract.forbiddenOutputFields applies to top-level/final animation output. The only allowed structured intermediate keyframes are inside motionDraft.transformKeyframes, motionDraft.boneKeyframes, and motionDraft.contactFrames.",
+    "- Use availableSemanticStageTemplates to choose or refine semantic stages. Use motionDraft to explain the executable middle planning without replacing fixed start/end/middle constraints.",
     "- Use availableActionSkills as the executable skill contract. If your interpretation conflicts with a listed skill's grounded, allowAirborne, rootLimits, or quality targets, prefer the local skill contract and add a warning instead of inventing a new motion style.",
     "- Use localCompilerContract.qualityExpectations as the acceptance criteria for generatedMotionPrompt, keyframeHints, and contactHints. For example, if it includes gait, support, hand_contact, throw_release, punch_recovery, or prop_contact_motion, your intent must describe how those expectations are satisfied.",
     "- Prefer realistic human or 3D-game motion. Do not add exaggerated animation, random mid-air flips, sudden spins, drifting feet, or unrelated whole-body swings unless the user explicitly asks for 夸张, 翻滚, 飞跃, 浮空, or 离地.",
@@ -1647,7 +2142,7 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     "- For walk/run: use small alternating leg steps and opposite arm swing; do not treat locomotion as dance or acrobatics.",
     "- For combat: use guard, strike/contact, recovery with controlled amplitude; do not use random flailing.",
     "- If localSemanticPlan says 双手推 / two-hand push, keep both hands involved. If it says right hand, left hand, feet grounded, low center, or camera motion, preserve that intent unless impossible.",
-    "- Convert the action prompt into compact universal motion parameters, optional semantic keyframe hints, optional contact hints, and optional camera motion hints only.",
+    "- Convert the action prompt into compatible MotionIntent parameters and a MotionDraft that maps prompt requirements to middle phases, middle root keyframes, middle bone keyframes, contact events, constraints, and timing.",
     "- Explain the physical meaning of the action through intent, motionFamilies, keyframeHints, contacts, bodyLean, crouch, lift, rhythm, and warnings.",
     "- Keyframe hints are semantic anchors for the local compiler; they must not contain raw joint rotations or per-frame bone values.",
     "- Camera motion hints must stay generic and deterministic: dolly, truck, orbit, follow, tilt, handheld, or close follow.",
@@ -1658,6 +2153,466 @@ function scene3dMotionRefineUserPrompt(input: { request: Scene3DMotionRefineRequ
     "- If the prompt is underspecified, add warnings and choose conservative readable motion."
   ].join("\n");
 }
+
+function scene3dMotionRefineCompactSystemPrompt() {
+  return [
+    "You are a 3D character animation planning assistant for a node-based Scene3D director tool.",
+    "Return strict JSON only. Do not return Markdown or prose outside JSON.",
+    "The caller owns fixed start/end and middle keyframes. Do not include draft keyframes at 0 seconds or at durationSec.",
+    "Generate motionIntent and motionDraft only. Add interactionDraft only if the prompt explicitly needs multiple actors or prop interaction.",
+    "Do not generate animationClip, samples, tracks, raw frames, video URLs, fake progress, or final rendered output.",
+    "Use only existing ids from the compact context. If a target is missing, warn instead of inventing ids.",
+    "Keep motionDraft concise but executable: 3-6 phasePlan items, 1-4 transformKeyframes, 4-12 boneKeyframes for key joints, and contactFrames when feet/hands/head contact matters.",
+    "For walk/run/dash, include alternating feet contacts, opposite arm swing, grounded root motion, and recovery/settle.",
+    "For crouch/jump/fall/get_up/reach/turn/combat, include anticipation, main action/contact/release when relevant, and recover/settle.",
+    "Use actionType from: walk, run, dash, push, pull, throw, punch, block, kick, side_kick, jump, crouch, crawl, fall, get_up, turn, reach, idle, unknown.",
+    "Use actionFamily from: locomotion, combat, push_pull, throw, jump, fall, crawl, posture, turn, reach, unknown.",
+    "Return this top-level shape with valid values:",
+    `{
+  "motionIntent": {
+    "version": 1,
+    "intent": "string",
+    "durationSec": 1.2,
+    "generatedMotionPrompt": "string",
+    "direction": { "x": 0, "y": 0, "z": 1 },
+    "distance": 0.4,
+    "turnDeg": 0,
+    "roll": 0,
+    "crouch": 0,
+    "verticalLift": 0,
+    "bodyLean": { "x": 0, "y": 0, "z": 0.15 },
+    "armSwing": 0.45,
+    "rhythm": "slow | normal | fast | impact | perform",
+    "contacts": ["leftFoot", "rightFoot"],
+    "lookAt": "none | camera | object | point",
+    "targetObjectId": "existing id only when needed",
+    "actionFamily": "locomotion",
+    "actionType": "run",
+    "motionFamilies": ["locomotion"],
+    "keyframeHints": [{ "timeRatio": 0.5, "label": "main action", "note": "string" }],
+    "contactHints": [{ "timeSec": 0.4, "contact": "rightFoot", "note": "string" }],
+    "cameraMotionHint": { "enabled": false, "type": "none", "intensity": 0, "startTimeSec": 0, "endTimeSec": 1.2, "distance": 1.2, "heightOffset": 0, "orbitAngleDeg": 0, "keepCharacterInFrame": true },
+    "warnings": [],
+    "confidence": 0.75
+  },
+  "motionDraft": {
+    "version": 1,
+    "actionIntent": "string",
+    "durationSec": 1.2,
+    "fpsHint": 24,
+    "generatedMotionPrompt": "string",
+    "promptRequirements": [{ "id": "req_1", "text": "string", "category": "action", "priority": "high" }],
+    "promptRequirementMap": [{ "requirementId": "req_1", "appliedTo": [{ "kind": "phase", "id": "phase_1" }], "note": "string" }],
+    "phasePlan": [{ "id": "phase_1", "label": "launch", "startSec": 0.15, "endSec": 0.45, "purpose": "string", "keyJoints": ["chest", "rightUpperArm"], "contacts": ["leftFoot"], "requirementIds": ["req_1"] }],
+    "transformKeyframes": [{ "id": "root_1", "timeSec": 0.45, "position": { "x": 0, "y": 0, "z": 0.25 }, "rotation": { "x": 0, "y": 0, "z": 0 }, "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "string" }],
+    "boneKeyframes": [{ "id": "bone_1", "timeSec": 0.45, "joint": "rightUpperArm", "rotation": { "x": 25, "y": 0, "z": -12 }, "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "string" }],
+    "contactFrames": [{ "id": "contact_1", "timeSec": 0.35, "contact": "rightFoot", "type": "ground", "phaseId": "phase_1", "requirementIds": ["req_1"], "note": "string" }],
+    "constraints": [{ "id": "constraint_1", "type": "grounding", "startSec": 0.05, "endSec": 1.15, "joints": ["leftFoot", "rightFoot"], "requirementIds": ["req_1"], "note": "string" }],
+    "timing": { "anticipation": 0.12, "mainActionStart": 0.25, "mainActionEnd": 0.95, "settle": 1.1 },
+    "warnings": [],
+    "confidence": 0.75
+  }
+}`
+  ].join("\n");
+}
+
+function scene3dMotionRefineCompactUserPrompt(input: { request: Scene3DMotionRefineRequest; node: any }) {
+  const compilerContract = scene3DLocalCompilerContract(input.request);
+  return [
+    `Node id: ${input.request.nodeId}.`,
+    `Transition id: ${input.request.transitionId}.`,
+    `Selected character id: ${input.request.selectedCharacterId}.`,
+    `Duration: ${input.request.durationSec}s.`,
+    `Curve: ${input.request.curve}.`,
+    `Action prompt: ${input.request.actionPrompt}`,
+    "Hard start/end summary:",
+    compactJson({
+      startTransform: input.request.startTransform,
+      endTransform: input.request.endTransform,
+      startPose: input.request.startPose,
+      endPose: input.request.endPose
+    }, 2200),
+    "Compiler contract summary:",
+    compactJson({
+      actionType: compilerContract.actionType,
+      actionFamily: compilerContract.actionFamily,
+      contacts: compilerContract.contacts,
+      actionSequence: compilerContract.actionSequence,
+      poseStages: compilerContract.poseStages,
+      promptControl: compilerContract.promptControl,
+      fixedPoseConstraints: input.request.fixedPoseConstraints,
+      fixedPoseSegments: input.request.fixedPoseSegments,
+      middleKeyframeConstraints: input.request.middleKeyframeConstraints,
+      promptRequirementGraph: input.request.promptRequirementGraph,
+      motionStyleProfile: input.request.motionStyleProfile,
+      negativeConstraints: input.request.negativeConstraints
+    }, 3200),
+    "Compact scene objects:",
+    compactJson({
+      currentCharacterTransform: input.request.currentCharacterTransform,
+      characters: input.request.characters,
+      props: input.request.props,
+      cameras: input.request.cameras,
+      activeCameraId: input.request.activeCameraId || null
+    }, 2200),
+    "Rules:",
+    "- Preserve actionType/actionFamily from compiler contract unless actionType is unknown.",
+    "- Preserve promptRequirementGraph requirement ids in motionDraft.promptRequirements and promptRequirementMap.",
+    "- Obey negativeConstraints and hard keyframes first.",
+    "- Use fixedPoseSegments to plan phase/keyframe/contact timing between adjacent hard keyframes. Do not plan one blind global start-to-end motion when middle keyframes exist.",
+    "- Keep all motionDraft keyframes strictly inside (0, durationSec).",
+    "- For the prompt 跑步/run, return run locomotion with alternating foot contacts, arm swing boneKeyframes, grounded root motion, and recover/settle."
+  ].join("\n");
+}
+
+function scene3dMotionRefineUltraSystemPrompt() {
+  return [
+    "Return strict JSON only.",
+    "You create a compact Scene3D motion plan, not final animation.",
+    "Never output animationClip, samples, tracks, video, URLs, fake progress, or rendered results.",
+    "Do not modify start/end frames. All draft keyframes must be inside 0 < timeSec < durationSec.",
+    "Keep the answer short. Prefer 2-4 phases, 1-3 root keyframes, 4-8 bone keyframes, and 2-4 contact frames.",
+    "For run/walk/dash, include alternating foot contacts and opposite arm swing.",
+    "For jump, include crouch, lift, land, recover.",
+    "For turn/reach/crouch/fall/get_up/combat, include anticipation, main action/contact when relevant, and recover.",
+    "Allowed joints: pelvis, chest, neck, head, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot.",
+    "Return this compact top-level shape:",
+    `{
+  "motionIntent": {
+    "version": 1,
+    "intent": "run forward",
+    "durationSec": 1.2,
+    "generatedMotionPrompt": "grounded run with alternating footfalls and arm swing",
+    "direction": { "x": 0, "y": 0, "z": 1 },
+    "distance": 0.6,
+    "turnDeg": 0,
+    "roll": 0,
+    "crouch": 0.05,
+    "verticalLift": 0,
+    "bodyLean": { "x": 0.12, "y": 0, "z": 0.18 },
+    "armSwing": 0.55,
+    "rhythm": "fast",
+    "contacts": ["leftFoot", "rightFoot"],
+    "lookAt": "none",
+    "actionFamily": "locomotion",
+    "actionType": "run",
+    "motionFamilies": ["locomotion"],
+    "keyframeHints": [{ "timeRatio": 0.5, "label": "running stride", "note": "opposite arm and leg swing" }],
+    "contactHints": [{ "timeSec": 0.3, "contact": "leftFoot", "note": "left foot plant" }, { "timeSec": 0.75, "contact": "rightFoot", "note": "right foot plant" }],
+    "cameraMotionHint": { "enabled": false, "type": "none", "intensity": 0, "startTimeSec": 0, "endTimeSec": 1.2, "distance": 1.2, "heightOffset": 0, "orbitAngleDeg": 0, "keepCharacterInFrame": true },
+    "warnings": [],
+    "confidence": 0.75
+  },
+  "motionDraft": {
+    "version": 1,
+    "actionIntent": "run forward",
+    "durationSec": 1.2,
+    "fpsHint": 24,
+    "generatedMotionPrompt": "grounded run with alternating footfalls and arm swing",
+    "promptRequirements": [{ "id": "req_action", "text": "run", "category": "action", "priority": "high" }],
+    "promptRequirementMap": [{ "requirementId": "req_action", "appliedTo": [{ "kind": "phase", "id": "phase_stride" }], "note": "run is mapped to stride phase" }],
+    "phasePlan": [{ "id": "phase_launch", "label": "launch", "startSec": 0.12, "endSec": 0.32, "purpose": "start running", "keyJoints": ["pelvis", "chest"], "contacts": ["rightFoot"], "requirementIds": ["req_action"] }, { "id": "phase_stride", "label": "stride", "startSec": 0.32, "endSec": 0.9, "purpose": "alternating steps and arm swing", "keyJoints": ["leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"], "contacts": ["leftFoot", "rightFoot"], "requirementIds": ["req_action"] }, { "id": "phase_recover", "label": "recover", "startSec": 0.9, "endSec": 1.08, "purpose": "settle without sliding", "keyJoints": ["pelvis", "chest"], "contacts": ["leftFoot"], "requirementIds": ["req_action"] }],
+    "transformKeyframes": [{ "id": "root_stride", "timeSec": 0.6, "position": { "x": 0, "y": 0, "z": 0.35 }, "rotation": { "x": 0, "y": 0, "z": 0 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "forward grounded root travel" }],
+    "boneKeyframes": [{ "id": "left_arm_back", "timeSec": 0.35, "joint": "leftUpperArm", "rotation": { "x": -24, "y": 0, "z": 8 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "left arm back" }, { "id": "right_arm_forward", "timeSec": 0.35, "joint": "rightUpperArm", "rotation": { "x": 24, "y": 0, "z": -8 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "right arm forward" }, { "id": "left_leg_forward", "timeSec": 0.35, "joint": "leftUpperLeg", "rotation": { "x": 18, "y": 0, "z": 0 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "left leg forward" }, { "id": "right_leg_back", "timeSec": 0.35, "joint": "rightUpperLeg", "rotation": { "x": -18, "y": 0, "z": 0 }, "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "right leg back" }],
+    "contactFrames": [{ "id": "left_foot_plant", "timeSec": 0.3, "contact": "leftFoot", "type": "ground", "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "left foot plant" }, { "id": "right_foot_plant", "timeSec": 0.75, "contact": "rightFoot", "type": "ground", "phaseId": "phase_stride", "requirementIds": ["req_action"], "note": "right foot plant" }],
+    "constraints": [{ "id": "grounded", "type": "grounding", "startSec": 0.05, "endSec": 1.15, "joints": ["leftFoot", "rightFoot"], "requirementIds": ["req_action"], "note": "keep run grounded" }],
+    "timing": { "anticipation": 0.12, "mainActionStart": 0.28, "mainActionEnd": 0.95, "settle": 1.08 },
+    "warnings": [],
+    "confidence": 0.75
+  }
+}`
+  ].join("\n");
+}
+
+function scene3dMotionRefineUltraUserPrompt(input: { request: Scene3DMotionRefineRequest; node: any }) {
+  const compilerContract = scene3DLocalCompilerContract(input.request);
+  return [
+    `Action prompt: ${input.request.actionPrompt}`,
+    `durationSec: ${input.request.durationSec}`,
+    `selectedCharacterId: ${input.request.selectedCharacterId}`,
+    `local actionType: ${compilerContract.actionType || "unknown"}`,
+    `local actionFamily: ${compilerContract.actionFamily || "unknown"}`,
+    `local contacts: ${JSON.stringify(compilerContract.contacts || [])}`,
+    `local sequence: ${compactJson(compilerContract.actionSequence || [], 800)}`,
+    `fixed pose constraints: ${compactJson(input.request.fixedPoseConstraints || [], 1200)}`,
+    `fixed pose segments: ${compactJson(input.request.fixedPoseSegments || [], 1200)}`,
+    `prompt requirements: ${compactJson(input.request.promptRequirementGraph || {}, 1200)}`,
+    `style: ${compactJson(input.request.motionStyleProfile || {}, 700)}`,
+    "Hard constraints: no endpoint override, no manual keyframe override, no foot slide, no non-jump airborne motion, no extreme joint rotation.",
+    "Use fixed pose segments as the ordered adjacent-keyframe relationship. Plan only inside those segment windows; do not ignore or reinterpret middle keyframes.",
+    "Return valid JSON now. Keep it compact."
+  ].join("\n");
+}
+
+function scene3dMotionRefineShouldUseCompactPrompt(request: Scene3DMotionRefineRequest) {
+  const prompt = request.actionPrompt || "";
+  const compilerContract = scene3DLocalCompilerContract(request);
+  const compoundCount = Array.isArray(compilerContract.actionSequence) ? compilerContract.actionSequence.length : 0;
+  const hasCompoundChain = Array.isArray(compilerContract.actionChains) && compilerContract.actionChains.length > 0;
+  const interactionPrompt = /推|拉|拿|放|拾|捡|踢|打|击|撞|交接|传递|接住|追|躲|绕|避开|箱|桌|道具|物体|双人|多人|角色.*角色|push|pull|pick|put|kick|hit|strike|handoff|receive|chase|avoid|prop|box|table|object/i.test(prompt);
+  return !interactionPrompt && !hasCompoundChain && compoundCount <= 1;
+}
+
+function scene3dProviderErrorLooksTimeout(error: any) {
+  const text = [
+    error?.name,
+    error?.message,
+    error?.code,
+    error?.cause?.name,
+    error?.cause?.message,
+    error?.details?.error?.message
+  ].filter(Boolean).join(" ");
+  return /timeout|timed out|abort|aborted|UND_ERR_CONNECT_TIMEOUT|ECONNABORTED|ERR_CANCELED/i.test(text);
+}
+
+function scene3dMotionRefineLocalTimeoutFallbackJson(request: Scene3DMotionRefineRequest, reason: string) {
+  const compilerContract = scene3DLocalCompilerContract(request);
+  const prompt = request.actionPrompt || "motion";
+  const inferredActionType = String(compilerContract.actionType || (/run|dash|sprint/i.test(prompt) ? "run" : /walk/i.test(prompt) ? "walk" : "unknown"));
+  const allowedActionTypes = new Set(scene3dMotionSemanticActionTypeSchema.options);
+  const actionType = allowedActionTypes.has(inferredActionType as any) ? inferredActionType : "unknown";
+  const inferredActionFamily = String(compilerContract.actionFamily || (actionType === "run" || actionType === "walk" || actionType === "dash" ? "locomotion" : "unknown"));
+  const allowedActionFamilies = new Set(scene3dMotionSemanticActionFamilySchema.options);
+  const actionFamily = allowedActionFamilies.has(inferredActionFamily as any) ? inferredActionFamily : "unknown";
+  const familyToMotionFamily: Record<string, string[]> = {
+    locomotion: ["locomotion"],
+    combat: ["combat"],
+    push_pull: ["reach"],
+    throw: ["reach"],
+    jump: ["locomotion"],
+    fall: ["fall"],
+    crawl: ["crawl"],
+    posture: ["kneel"],
+    turn: ["turn"],
+    reach: ["reach"],
+    unknown: []
+  };
+  const durationSec = request.durationSec;
+  const t = (ratio: number) => Number(Math.min(Math.max(durationSec * ratio, 0.01), Math.max(0.011, durationSec - 0.01)).toFixed(4));
+  const end = (ratio: number) => Number(Math.min(durationSec, Math.max(0, durationSec * ratio)).toFixed(4));
+  const isJump = actionType === "jump";
+  const isRunLike = actionType === "run" || actionType === "dash" || actionType === "walk" || actionFamily === "locomotion";
+  const rhythm = actionType === "dash" || actionType === "run" ? "fast" : "normal";
+  const contacts = isJump ? ["leftFoot", "rightFoot"] : isRunLike ? ["leftFoot", "rightFoot"] : (compilerContract.contacts?.length ? compilerContract.contacts : ["leftFoot", "rightFoot"]);
+  const startPosition = coerceScene3DVec3((request.startTransform as any)?.position);
+  const endPosition = coerceScene3DVec3((request.endTransform as any)?.position, startPosition);
+  const fixedConstraintList = Array.isArray(request.fixedPoseConstraints) ? request.fixedPoseConstraints : [];
+  const fixedConstraintById = new Map<string, any>();
+  fixedConstraintList.forEach((item: any) => {
+    const id = typeof item?.id === "string" ? item.id : "";
+    if (id) fixedConstraintById.set(id, item);
+  });
+  const frameForSegmentEndpoint = (endpoint: any, fallbackTransform: any) => {
+    const byId = typeof endpoint?.id === "string" ? fixedConstraintById.get(endpoint.id) : undefined;
+    if (byId) return byId;
+    const endpointTime = coerceScene3DNumber(endpoint?.timeSec, -1, -1, durationSec + 1);
+    return fixedConstraintList.find((item: any) => Math.abs(coerceScene3DNumber(item?.timeSec, -1000, -1000, durationSec + 1000) - endpointTime) <= 0.002) || {
+      id: typeof endpoint?.id === "string" ? endpoint.id : "",
+      label: typeof endpoint?.label === "string" ? endpoint.label : "",
+      timeSec: endpointTime,
+      transform: fallbackTransform
+    };
+  };
+  const safeInteriorTime = (timeSec: number, segmentStartSec = 0, segmentEndSec = durationSec) => {
+    const segmentDuration = Math.max(0.001, segmentEndSec - segmentStartSec);
+    const padding = Math.min(0.04, Math.max(0.006, segmentDuration * 0.08));
+    const minTime = Math.max(0.01, segmentStartSec + padding);
+    const maxTime = Math.min(Math.max(0.011, durationSec - 0.01), segmentEndSec - padding);
+    if (maxTime <= minTime) return t(0.5);
+    return Number(Math.min(Math.max(timeSec, minTime), maxTime).toFixed(4));
+  };
+  const fixedSegments = Array.isArray(request.fixedPoseSegments) ? request.fixedPoseSegments : [];
+  const segmentWindows = fixedSegments.map((segment: any, index: number) => {
+    const startSec = coerceScene3DNumber(segment?.from?.timeSec, Number.NaN, 0, durationSec);
+    const endSec = coerceScene3DNumber(segment?.to?.timeSec, Number.NaN, 0, durationSec);
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec - startSec < 0.03) return undefined;
+    const fromFrame = frameForSegmentEndpoint(segment?.from, { position: startPosition });
+    const toFrame = frameForSegmentEndpoint(segment?.to, { position: endPosition });
+    const fromPosition = coerceScene3DVec3(fromFrame?.transform?.position, startPosition);
+    const toPosition = coerceScene3DVec3(toFrame?.transform?.position, endPosition);
+    const duration = endSec - startSec;
+    return {
+      id: typeof segment?.id === "string" && segment.id ? segment.id.slice(0, 80) : `fixed_segment_${index + 1}`,
+      index,
+      startSec: Number(startSec.toFixed(4)),
+      endSec: Number(endSec.toFixed(4)),
+      midSec: safeInteriorTime(startSec + duration * 0.5, startSec, endSec),
+      contactASec: safeInteriorTime(startSec + duration * 0.32, startSec, endSec),
+      contactBSec: safeInteriorTime(startSec + duration * 0.68, startSec, endSec),
+      fromLabel: typeof segment?.from?.label === "string" && segment.from.label ? segment.from.label.slice(0, 80) : `frame ${index + 1}`,
+      toLabel: typeof segment?.to?.label === "string" && segment.to.label ? segment.to.label.slice(0, 80) : `frame ${index + 2}`,
+      fromPosition,
+      toPosition,
+      travelDistance: coerceScene3DNumber(segment?.transformDelta?.travelDistance, Math.hypot(toPosition.x - fromPosition.x, toPosition.z - fromPosition.z), 0, 200)
+    };
+  }).filter(Boolean) as Array<{
+    id: string;
+    index: number;
+    startSec: number;
+    endSec: number;
+    midSec: number;
+    contactASec: number;
+    contactBSec: number;
+    fromLabel: string;
+    toLabel: string;
+    fromPosition: { x: number; y: number; z: number };
+    toPosition: { x: number; y: number; z: number };
+    travelDistance: number;
+  }>;
+  const travelX = endPosition.x - startPosition.x;
+  const travelZ = endPosition.z - startPosition.z;
+  const requestedTravelDistance = Math.hypot(travelX, travelZ);
+  const fallbackDistance = actionType === "dash" ? 0.9 : actionType === "run" ? 0.65 : actionType === "walk" ? 0.35 : 0.25;
+  const distance = Number(Math.max(fallbackDistance, requestedTravelDistance || 0).toFixed(4));
+  const midPosition = {
+    x: Number(((startPosition.x + endPosition.x) * 0.5).toFixed(4)),
+    y: Number(((startPosition.y + endPosition.y) * 0.5 + (isJump ? 0.35 : 0)).toFixed(4)),
+    z: Number(((startPosition.z + endPosition.z) * 0.5).toFixed(4))
+  };
+  const direction = requestedTravelDistance > 0.001
+    ? { x: Number((travelX / requestedTravelDistance).toFixed(4)), y: 0, z: Number((travelZ / requestedTravelDistance).toFixed(4)) }
+    : { x: 0, y: 0, z: 1 };
+  const warnings = [
+    "AI 服务响应超时，已使用 3D导演台本地动作规划完成解析。"
+  ];
+  if (segmentWindows.length) {
+    warnings.push(`Local fallback respected ${segmentWindows.length} fixed pose segments, including manual middle keyframes.`);
+  }
+  const reqId = "req_action";
+  const actionText = actionType === "unknown" ? prompt.slice(0, 80) : actionType;
+  const phasePlan = segmentWindows.length
+    ? segmentWindows.map((segment) => ({
+      id: `phase_${segment.id}`.slice(0, 80),
+      label: segment.index === 0 ? (isJump ? "anticipation segment" : "launch segment") : segment.index === segmentWindows.length - 1 ? "recover segment" : isRunLike ? "stride segment" : "motion segment",
+      startSec: segment.startSec,
+      endSec: segment.endSec,
+      purpose: `Follow fixed hard-keyframe segment ${segment.fromLabel} -> ${segment.toLabel}; plan only inside this adjacent segment.`,
+      keyJoints: isJump
+        ? ["pelvis", "chest", "leftUpperLeg", "rightUpperLeg"]
+        : isRunLike
+          ? ["leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"]
+          : ["pelvis", "chest"],
+      contacts: contacts.slice(0, 4),
+      requirementIds: [reqId]
+    }))
+    : isJump
+    ? [
+      { id: "phase_crouch", label: "crouch", startSec: 0, endSec: end(0.25), purpose: "anticipation before jump", keyJoints: ["pelvis", "chest"], contacts: ["leftFoot", "rightFoot"], requirementIds: [reqId] },
+      { id: "phase_lift", label: "lift", startSec: end(0.25), endSec: end(0.65), purpose: "vertical lift", keyJoints: ["pelvis", "leftUpperLeg", "rightUpperLeg"], contacts: [], requirementIds: [reqId] },
+      { id: "phase_land", label: "land", startSec: end(0.65), endSec: durationSec, purpose: "land and recover", keyJoints: ["pelvis", "leftFoot", "rightFoot"], contacts: ["leftFoot", "rightFoot"], requirementIds: [reqId] }
+    ]
+    : [
+      { id: "phase_launch", label: "launch", startSec: 0, endSec: end(0.25), purpose: "start action", keyJoints: ["pelvis", "chest"], contacts: [contacts[0] || "leftFoot"], requirementIds: [reqId] },
+      { id: "phase_stride", label: isRunLike ? "stride" : "main action", startSec: end(0.25), endSec: end(0.78), purpose: isRunLike ? "alternating steps and arm swing" : "main motion", keyJoints: ["leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"], contacts: contacts.slice(0, 4), requirementIds: [reqId] },
+      { id: "phase_recover", label: "recover", startSec: end(0.78), endSec: durationSec, purpose: "settle without sliding", keyJoints: ["pelvis", "chest"], contacts: [contacts[1] || contacts[0] || "rightFoot"], requirementIds: [reqId] }
+    ];
+  const segmentTransformKeyframes = segmentWindows.map((segment) => ({
+    id: `root_${segment.id}`.slice(0, 80),
+    timeSec: segment.midSec,
+    position: {
+      x: Number(((segment.fromPosition.x + segment.toPosition.x) * 0.5).toFixed(4)),
+      y: Number(((segment.fromPosition.y + segment.toPosition.y) * 0.5 + (isJump ? 0.22 : 0)).toFixed(4)),
+      z: Number(((segment.fromPosition.z + segment.toPosition.z) * 0.5).toFixed(4))
+    },
+    rotation: { x: 0, y: 0, z: 0 },
+    phaseId: `phase_${segment.id}`.slice(0, 80),
+    requirementIds: [reqId],
+    note: `Segment midpoint aligned to fixed hard-keyframe segment ${segment.fromLabel} -> ${segment.toLabel}.`
+  }));
+  const segmentBoneKeyframes = segmentWindows.slice(0, 10).flatMap((segment, segmentIndex) => {
+    const strideSign = segmentIndex % 2 === 0 ? 1 : -1;
+    const phaseId = `phase_${segment.id}`.slice(0, 80);
+    return [
+      { id: `left_arm_${segment.id}`.slice(0, 80), timeSec: segment.midSec, joint: "leftUpperArm", rotation: { x: isRunLike ? -26 * strideSign : -8, y: 0, z: 8 }, phaseId, requirementIds: [reqId], note: "segment-aware left arm counter swing" },
+      { id: `right_arm_${segment.id}`.slice(0, 80), timeSec: segment.midSec, joint: "rightUpperArm", rotation: { x: isRunLike ? 26 * strideSign : 8, y: 0, z: -8 }, phaseId, requirementIds: [reqId], note: "segment-aware right arm counter swing" },
+      { id: `left_leg_${segment.id}`.slice(0, 80), timeSec: segment.midSec, joint: "leftUpperLeg", rotation: { x: isJump ? -18 : 20 * strideSign, y: 0, z: 0 }, phaseId, requirementIds: [reqId], note: "segment-aware left leg action" },
+      { id: `right_leg_${segment.id}`.slice(0, 80), timeSec: segment.midSec, joint: "rightUpperLeg", rotation: { x: isJump ? -18 : -20 * strideSign, y: 0, z: 0 }, phaseId, requirementIds: [reqId], note: "segment-aware right leg action" }
+    ];
+  });
+  const segmentContactFrames = segmentWindows.slice(0, 12).flatMap((segment, segmentIndex) => {
+    const phaseId = `phase_${segment.id}`.slice(0, 80);
+    const contactCount = Math.max(1, contacts.length);
+    const firstContact = contacts[segmentIndex % contactCount] || "leftFoot";
+    const secondContact = contacts[(segmentIndex + 1) % contactCount] || contacts[0] || "rightFoot";
+    return [
+      { id: `contact_a_${segment.id}`.slice(0, 80), timeSec: segment.contactASec, contact: firstContact as any, type: "ground", phaseId, requirementIds: [reqId], note: `first contact inside fixed segment ${segment.fromLabel} -> ${segment.toLabel}` },
+      { id: `contact_b_${segment.id}`.slice(0, 80), timeSec: segment.contactBSec, contact: secondContact as any, type: "ground", phaseId, requirementIds: [reqId], note: `second contact inside fixed segment ${segment.fromLabel} -> ${segment.toLabel}` }
+    ];
+  }).slice(0, 32);
+  const mappedPhaseIds = phasePlan.map((phase: any) => phase.id).slice(0, 12);
+  const motionDraft = {
+    version: 1,
+    actionIntent: prompt.slice(0, 300),
+    durationSec,
+    fpsHint: 60,
+    generatedMotionPrompt: segmentWindows.length
+      ? `Deterministic local ${actionText} motion plan constrained by ${segmentWindows.length} adjacent fixed pose segments.`
+      : `Deterministic local ${actionText} motion plan with fixed endpoints preserved.`,
+    promptRequirements: [{ id: reqId, text: prompt.slice(0, 300), category: "action", priority: "high" }],
+    promptRequirementMap: [{
+      requirementId: reqId,
+      appliedTo: mappedPhaseIds.length
+        ? mappedPhaseIds.map((id: string) => ({ kind: "phase", id }))
+        : [{ kind: "phase", id: phasePlan[1]?.id || phasePlan[0].id }],
+      note: segmentWindows.length
+        ? "Mapped by deterministic local fallback across every fixed adjacent pose segment after provider timeout."
+        : "Mapped by deterministic local fallback after provider timeout."
+    }],
+    phasePlan,
+    transformKeyframes: segmentTransformKeyframes.length ? segmentTransformKeyframes : [{
+      id: "root_mid",
+      timeSec: t(0.5),
+      position: midPosition,
+      rotation: { x: 0, y: 0, z: 0 },
+      phaseId: phasePlan[1]?.id || phasePlan[0].id,
+      requirementIds: [reqId],
+      note: "Middle root motion from local fallback, aligned to fixed start/end transforms."
+    }],
+    boneKeyframes: segmentBoneKeyframes.length ? segmentBoneKeyframes.slice(0, 80) : [
+      { id: "left_arm", timeSec: t(0.35), joint: "leftUpperArm", rotation: { x: isRunLike ? -24 : -8, y: 0, z: 8 }, phaseId: phasePlan[1]?.id || phasePlan[0].id, requirementIds: [reqId], note: "left arm counter swing" },
+      { id: "right_arm", timeSec: t(0.35), joint: "rightUpperArm", rotation: { x: isRunLike ? 24 : 8, y: 0, z: -8 }, phaseId: phasePlan[1]?.id || phasePlan[0].id, requirementIds: [reqId], note: "right arm counter swing" },
+      { id: "left_leg", timeSec: t(0.35), joint: "leftUpperLeg", rotation: { x: isJump ? -18 : 18, y: 0, z: 0 }, phaseId: phasePlan[1]?.id || phasePlan[0].id, requirementIds: [reqId], note: "left leg action" },
+      { id: "right_leg", timeSec: t(0.35), joint: "rightUpperLeg", rotation: { x: isJump ? -18 : -18, y: 0, z: 0 }, phaseId: phasePlan[1]?.id || phasePlan[0].id, requirementIds: [reqId], note: "right leg action" }
+    ],
+    contactFrames: segmentContactFrames.length ? segmentContactFrames : [
+      { id: "contact_a", timeSec: t(0.28), contact: (contacts[0] || "leftFoot") as any, type: "ground", phaseId: phasePlan[0].id, requirementIds: [reqId], note: "first stable contact" },
+      { id: "contact_b", timeSec: t(0.68), contact: (contacts[1] || contacts[0] || "rightFoot") as any, type: "ground", phaseId: phasePlan[1]?.id || phasePlan[0].id, requirementIds: [reqId], note: "second stable contact" }
+    ],
+    constraints: [{ id: "grounded", type: "grounding", startSec: 0, endSec: durationSec, joints: ["leftFoot", "rightFoot"], requirementIds: [reqId], note: "Preserve grounded contact unless the action is airborne." }],
+    timing: { anticipation: end(0.12), mainActionStart: end(0.25), mainActionEnd: end(0.82), settle: end(0.92) },
+    warnings,
+    confidence: 0.55
+  };
+  return JSON.stringify({
+    motionIntent: {
+      version: 1,
+      intent: prompt.slice(0, 1200),
+      durationSec,
+      generatedMotionPrompt: motionDraft.generatedMotionPrompt,
+      direction,
+      distance,
+      turnDeg: 0,
+      roll: 0,
+      crouch: isJump ? 0.35 : 0.05,
+      verticalLift: isJump ? 0.45 : 0,
+      bodyLean: { x: isRunLike ? 0.12 : 0, y: 0, z: isRunLike ? 0.18 : 0.06 },
+      armSwing: isRunLike ? 0.55 : 0.25,
+      rhythm,
+      contacts,
+      lookAt: "none",
+      actionFamily,
+      actionType,
+      motionFamilies: familyToMotionFamily[actionFamily] || [],
+      keyframeHints: [{ timeRatio: 0.5, label: isRunLike ? "stride" : "main action", note: "Deterministic local fallback semantic anchor." }],
+      contactHints: motionDraft.contactFrames.map((frame: any) => ({ timeSec: frame.timeSec, contact: frame.contact, note: frame.note })),
+      cameraMotionHint: { enabled: false, type: "none", intensity: 0, startTimeSec: 0, endTimeSec: durationSec, distance: 1.2, heightOffset: 0, orbitAngleDeg: 0, keepCharacterInFrame: true },
+      warnings,
+      confidence: 0.55
+    },
+    motionDraft
+  });
+}
+
 function scene3dPoseReferenceSystemPrompt() {
   return [
     "You are a professional 3D character pose estimation adapter for a node-based film previs tool.",
@@ -2203,8 +3158,12 @@ async function callScene3DMotionRefineModel(input: {
   node: any;
   getAI: () => GoogleGenAI;
 }) {
-  const systemPrompt = scene3dMotionRefineSystemPrompt();
-  const userPrompt = scene3dMotionRefineUserPrompt({ request: input.request, node: input.node });
+  const useCompactPrompt = scene3dMotionRefineShouldUseCompactPrompt(input.request);
+  const promptMode: "full" | "ultra" = useCompactPrompt ? "ultra" : "full";
+  const systemPrompt = promptMode === "ultra" ? scene3dMotionRefineUltraSystemPrompt() : scene3dMotionRefineSystemPrompt();
+  const userPrompt = promptMode === "ultra" ? scene3dMotionRefineUltraUserPrompt({ request: input.request, node: input.node }) : scene3dMotionRefineUserPrompt({ request: input.request, node: input.node });
+  const ultraSystemPrompt = promptMode === "ultra" ? systemPrompt : scene3dMotionRefineUltraSystemPrompt();
+  const ultraUserPrompt = promptMode === "ultra" ? userPrompt : scene3dMotionRefineUltraUserPrompt({ request: input.request, node: input.node });
   const runtime = await selectScene3DTextRuntime({ requestUser: input.requestUser, req: input.req, source: "scene3d-motion-refine" });
   if (!runtime) {
     throw new HttpError(503, "No Scene3D motion refinement text model is configured in the model center.", "SCENE3D_MOTION_REFINE_AI_NOT_CONFIGURED");
@@ -2215,29 +3174,52 @@ async function callScene3DMotionRefineModel(input: {
     requestUser: input.requestUser,
     textCapabilities: runtime.textCapabilities
   });
-  const callProvider = (retryAttachments: ProviderAttachment[], retryLabel: "primary" | "text-only-retry") => callTextProvider({
+  const callProvider = (retryAttachments: ProviderAttachment[], retryLabel: "primary" | "text-only-retry" | "ultra-timeout-retry") => callTextProvider({
     baseUrl: runtime.customUrl,
     apiKey: runtime.customKey,
     modelName: runtime.customModel,
-    systemPrompt,
-    userPrompt,
-    attachments: retryAttachments,
-    timeoutMs: SCENE3D_MOTION_REFINE_TIMEOUT_MS,
-    maxOutputTokens: retryLabel === "primary" ? 1200 : 900,
-    maxPromptChars: retryLabel === "primary" ? 12000 : 9000,
-    isRealtimeSpeed: false,
+    systemPrompt: retryLabel === "ultra-timeout-retry" ? ultraSystemPrompt : systemPrompt,
+    userPrompt: retryLabel === "ultra-timeout-retry" ? ultraUserPrompt : userPrompt,
+    attachments: retryLabel === "ultra-timeout-retry" ? [] : retryAttachments,
+    timeoutMs: promptMode === "ultra" || retryLabel === "ultra-timeout-retry" ? SCENE3D_MOTION_REFINE_ULTRA_TIMEOUT_MS : SCENE3D_MOTION_REFINE_TIMEOUT_MS,
+    maxOutputTokens: promptMode === "full" && retryLabel === "primary" ? 3600 : 1100,
+    maxPromptChars: promptMode === "full" && retryLabel === "primary" ? 12000 : 3600,
+    isRealtimeSpeed: promptMode === "ultra" || retryLabel === "ultra-timeout-retry",
     temperature: retryLabel === "primary" ? 0.25 : 0.15,
     capabilities: runtime.textCapabilities
   });
   try {
-    const response = await callProvider(attachments, "primary");
+    const response = await callProvider(promptMode === "ultra" ? [] : attachments, "primary");
     return response.text;
   } catch (error: any) {
+    if (scene3dProviderErrorLooksTimeout(error)) {
+      if (promptMode !== "ultra") {
+        try {
+          const retryResponse = await callProvider([], "ultra-timeout-retry");
+          return retryResponse.text;
+        } catch (retryError: any) {
+          if (scene3dProviderErrorLooksTimeout(retryError)) {
+            return scene3dMotionRefineLocalTimeoutFallbackJson(input.request, summarizeWorkflowError(retryError).message);
+          }
+          throw new HttpError(502, "Scene3D motion refinement AI provider request failed.", "SCENE3D_MOTION_REFINE_PROVIDER_FAILED", {
+            provider: "custom",
+            configId: runtime.configId,
+            retry: "ultra-timeout",
+            error: summarizeWorkflowError(retryError),
+            firstError: summarizeWorkflowError(error)
+          });
+        }
+      }
+      return scene3dMotionRefineLocalTimeoutFallbackJson(input.request, summarizeWorkflowError(error).message);
+    }
     if (attachments.length > 0 || error?.status === 502 || error?.message === "Provider returned empty text.") {
       try {
         const retryResponse = await callProvider([], "text-only-retry");
         return retryResponse.text;
       } catch (retryError: any) {
+        if (scene3dProviderErrorLooksTimeout(retryError)) {
+          return scene3dMotionRefineLocalTimeoutFallbackJson(input.request, summarizeWorkflowError(retryError).message);
+        }
         throw new HttpError(502, "Scene3D motion refinement AI provider request failed.", "SCENE3D_MOTION_REFINE_PROVIDER_FAILED", {
           provider: "custom",
           configId: runtime.configId,
@@ -2252,6 +3234,7 @@ async function callScene3DMotionRefineModel(input: {
       provider: "custom",
       configId: runtime.configId,
       attachments: attachments.length,
+      promptMode,
       error: summarizeWorkflowError(error)
     });
   }
@@ -2349,7 +3332,10 @@ async function planScene3DDirector(req: express.Request, options: RegisterWorkfl
 async function refineScene3DMotion(req: express.Request, options: RegisterWorkflowExecuteRoutesOptions) {
   const requestUser = await requireAuth(req);
   const body = parseScene3DMotionRefineRequest(req.body);
-  const { node } = await assertScene3DWorkflowNode({ workflowId: body.workflowId, projectId: body.projectId, nodeId: body.nodeId, requestUser });
+  const fallbackNode = body.sceneContext
+    ? { id: body.nodeId, type: "scene3d", scene3dState: body.sceneContext }
+    : undefined;
+  const { node } = await assertScene3DWorkflowNode({ workflowId: body.workflowId, projectId: body.projectId, nodeId: body.nodeId, requestUser, fallbackNode });
   validateScene3DMotionRequestAgainstContext(body, node);
   const rawText = await callScene3DMotionRefineModel({
     requestUser,
@@ -2361,7 +3347,7 @@ async function refineScene3DMotion(req: express.Request, options: RegisterWorkfl
   if (!rawText.trim()) {
     throw new HttpError(502, "Scene3D motion intent model returned empty output.", "SCENE3D_MOTION_REFINE_EMPTY_OUTPUT");
   }
-  return parseScene3DMotionIntentJson(rawText, body);
+  return parseScene3DMotionRefineJson(rawText, body);
 }
 
 async function solveScene3DPoseReference(req: express.Request) {
@@ -3010,7 +3996,8 @@ export function registerWorkflowExecuteRoutes(app: express.Express, options: Reg
 
   app.post("/api/workflow/scene3d/refine-motion", async (req, res) => {
     try {
-      const motionIntent = await refineScene3DMotion(req, options);
+      const motionRefine = await refineScene3DMotion(req, options);
+      const { motionIntent, motionDraft, interactionDraft } = motionRefine;
       const requestUser = await requireAuth(req);
       await writeAuditLog({
         actor: requestUser,
@@ -3029,10 +4016,20 @@ export function registerWorkflowExecuteRoutes(app: express.Express, options: Reg
           distance: motionIntent.distance,
           turnDeg: motionIntent.turnDeg,
           confidence: motionIntent.confidence,
+          motionDraftPhaseCount: motionDraft?.phasePlan.length || 0,
+          motionDraftRootKeyframeCount: motionDraft?.transformKeyframes.length || 0,
+          motionDraftBoneKeyframeCount: motionDraft?.boneKeyframes.length || 0,
+          motionDraftContactFrameCount: motionDraft?.contactFrames.length || 0,
+          interactionActorCount: interactionDraft?.actors.length || 0,
+          interactionTargetCount: interactionDraft?.targets.length || 0,
+          interactionClipCount: interactionDraft?.interactionClips.length || 0,
+          interactionContactCount: interactionDraft?.contacts.length || 0,
+          interactionSyncMarkerCount: interactionDraft?.syncMarkers.length || 0,
+          interactionPropMotionCount: interactionDraft?.propMotions.length || 0,
           warningCount: motionIntent.warnings.length
         }
       });
-      res.json({ motionIntent });
+      res.json(motionRefine);
     } catch (error: any) {
       sendApiError(res, error, "Scene3D motion refinement failed.");
     }

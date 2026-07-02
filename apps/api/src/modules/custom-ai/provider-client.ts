@@ -189,7 +189,7 @@ export function buildPayload(input: {
     model: input.modelName || "gpt-4o",
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: contentParts }
+      { role: "user", content: attachments.length > 0 ? contentParts : finalUserPrompt }
     ],
     stream: Boolean(input.stream),
     max_tokens: maxOutputTokens,

@@ -120,6 +120,20 @@ type Scene3DBonePose = {
   adapter?: 'runninghub-tv-to-xbot';
 };
 type Scene3DCollectedRig = { byName: Map<string, THREE.Bone>; rest: Map<string, THREE.Quaternion> };
+type CharacterRigMapping = {
+  characterId: string;
+  sourceRigType: 'mixamo' | 'humanoid' | 'custom';
+  targetRigType: 'scene3d-standard-human';
+  boneMap: Partial<Record<PoseJointKey, string[]>>;
+  inverseBoneMap: Record<string, PoseJointKey>;
+  restPose: Partial<Record<PoseJointKey, RigRotation>>;
+  jointAxisOverrides: Partial<Record<PoseJointKey, Partial<Record<'x' | 'y' | 'z', 'x' | 'y' | 'z'>>>>;
+  scaleProfile: { height: number; shoulderWidth: number; armReach: number; legLength: number };
+  handProfile: { leftGripBones: string[]; rightGripBones: string[]; gripStrength: number };
+  footProfile: { leftFootBones: string[]; rightFootBones: string[]; plantHeight: number };
+  confidence: number;
+  warnings: string[];
+};
 
 type PoseTransform = {
   position: Vec3;
@@ -365,6 +379,449 @@ type MotionIntent = {
   warnings: string[];
   confidence: number;
 };
+type MotionDraftRequirement = {
+  id: string;
+  text: string;
+  category: 'action' | 'body' | 'timing' | 'contact' | 'camera' | 'style' | 'constraint' | 'other';
+  priority?: 'low' | 'normal' | 'high';
+};
+type MotionDraftPhase = {
+  id: string;
+  label: string;
+  startSec: number;
+  endSec: number;
+  purpose?: string;
+  keyJoints?: PoseJointKey[];
+  contacts?: MotionContactHint[];
+  requirementIds?: string[];
+};
+type MotionDraftTransformKeyframe = {
+  id: string;
+  timeSec: number;
+  position?: Vec3;
+  rotation?: Vec3;
+  scale?: Vec3;
+  phaseId?: string;
+  requirementIds?: string[];
+  note?: string;
+};
+type MotionDraftBoneKeyframe = {
+  id: string;
+  timeSec: number;
+  joint: PoseJointKey;
+  rotation: Vec3;
+  phaseId?: string;
+  requirementIds?: string[];
+  note?: string;
+};
+type MotionDraftContactFrame = {
+  id: string;
+  timeSec: number;
+  contact: MotionContactHint;
+  type?: 'ground' | 'prop' | 'look' | 'release' | 'hold' | 'other';
+  targetObjectId?: string;
+  phaseId?: string;
+  requirementIds?: string[];
+  note?: string;
+};
+type MotionDraftConstraint = {
+  id: string;
+  type: 'head_look' | 'hand_target' | 'foot_lock' | 'body_aim' | 'grounding' | 'prop_contact' | 'other';
+  target?: string;
+  startSec?: number;
+  endSec?: number;
+  joints?: PoseJointKey[];
+  requirementIds?: string[];
+  note?: string;
+};
+type MotionDraftRequirementMapEntry = {
+  requirementId: string;
+  appliedTo: Array<{
+    kind: 'phase' | 'transformKeyframe' | 'boneKeyframe' | 'contactFrame' | 'constraint' | 'camera';
+    id?: string;
+    timeSec?: number;
+    joint?: PoseJointKey;
+    phaseId?: string;
+  }>;
+  note?: string;
+};
+type MotionDraftTiming = {
+  anticipation?: number;
+  mainActionStart?: number;
+  mainActionEnd?: number;
+  settle?: number;
+};
+type MotionDraft = {
+  version: 1;
+  actionIntent: string;
+  durationSec: number;
+  fpsHint?: number;
+  generatedMotionPrompt: string;
+  promptRequirements: MotionDraftRequirement[];
+  promptRequirementMap: MotionDraftRequirementMapEntry[];
+  phasePlan: MotionDraftPhase[];
+  transformKeyframes: MotionDraftTransformKeyframe[];
+  boneKeyframes: MotionDraftBoneKeyframe[];
+  contactFrames: MotionDraftContactFrame[];
+  constraints: MotionDraftConstraint[];
+  timing?: MotionDraftTiming;
+  warnings: string[];
+  confidence: number;
+};
+type PromptRequirementCategory = 'actor_action' | 'object_motion' | 'contact' | 'spatial' | 'timing' | 'style' | 'camera' | 'avoidance' | 'constraint';
+type PromptRequirementVerification = 'sample_root_motion' | 'joint_delta' | 'hand_target_distance' | 'foot_contact' | 'prop_motion' | 'actor_distance_change' | 'camera_motion_sample' | 'collision_absence' | 'phase_exists' | 'release_event' | 'recover_event' | 'skill_step_active' | 'ik_target_reached';
+type PromptRequirement = {
+  id: string;
+  text: string;
+  normalizedText: string;
+  priority: 'required' | 'preferred';
+  category: PromptRequirementCategory;
+  actorId?: string;
+  actorRole?: 'primary' | 'secondary' | 'target' | 'obstacle';
+  targetId?: string;
+  targetType?: InteractionTarget['targetType'];
+  actionType?: MotionSemanticActionType;
+  skillHint?: string;
+  bodyParts: AnimationContactFrame['limb'][];
+  contactType?: InteractionContact['contactType'];
+  spatialGoal?: string;
+  timingGoal?: string;
+  styleTags: string[];
+  verification: PromptRequirementVerification[];
+  negative: boolean;
+  dependsOn: string[];
+  conflictsWith: string[];
+  sourceSpan?: { start: number; end: number };
+  confidence: number;
+};
+type PromptConstraint = {
+  id: string;
+  type: 'must_contact' | 'must_move' | 'must_face' | 'must_avoid' | 'must_not_collide' | 'must_not_airborne' | 'must_keep_grounded' | 'must_release' | 'must_recover' | 'must_frame_camera';
+  actorId?: string;
+  targetId?: string;
+  bodyPart?: AnimationContactFrame['limb'];
+  startRatio: number;
+  endRatio: number;
+  threshold?: number;
+  required: boolean;
+  reason: string;
+};
+type PromptTimelineItem = {
+  id: string;
+  requirementIds: string[];
+  label: string;
+  startRatio: number;
+  endRatio: number;
+  order: number;
+  canOverlap: boolean;
+  syncWith?: string[];
+};
+type PromptRequirementGraph = {
+  version: 1;
+  sourcePrompt: string;
+  language: 'zh' | 'en' | 'mixed' | 'unknown';
+  requirements: PromptRequirement[];
+  constraints: PromptConstraint[];
+  actors: Array<{ actorId: string; role: 'primary' | 'secondary' | 'target' | 'obstacle'; name?: string; actionType?: MotionSemanticActionType }>;
+  targets: Array<{ targetId: string; targetType: InteractionTarget['targetType']; name?: string; role?: InteractionTarget['role']; worldPosition?: Vec3 }>;
+  timeline: PromptTimelineItem[];
+  unresolved: string[];
+  warnings: string[];
+  confidence: number;
+};
+type NegativeMotionConstraint = {
+  id: string;
+  sourceRequirementId?: string;
+  type: 'no_airborne' | 'no_collision' | 'no_penetration' | 'no_foot_slide' | 'no_target_ignore' | 'no_static_actor' | 'no_endpoint_override' | 'no_manual_keyframe_override' | 'no_unmapped_actor' | 'no_unreachable_contact' | 'no_extreme_joint_rotation' | 'no_camera_jump' | 'no_prop_teleport';
+  actorId?: string;
+  targetId?: string;
+  bodyPart?: AnimationContactFrame['limb'];
+  startRatio: number;
+  endRatio: number;
+  threshold?: number;
+  severity: 'error' | 'warning' | 'info';
+  enforcement: 'clamp' | 'reject_keyframe' | 'reroute' | 'add_ik' | 'add_contact' | 'add_prop_constraint' | 'add_warning';
+  reason: string;
+  evidence: string[];
+};
+type NegativeConstraintViolation = {
+  constraintId: string;
+  type: NegativeMotionConstraint['type'];
+  severity: NegativeMotionConstraint['severity'];
+  timeSec?: number;
+  actorId?: string;
+  targetId?: string;
+  measuredValue?: number;
+  threshold?: number;
+  message: string;
+  suggestedFix?: string;
+};
+type NegativeConstraintReport = {
+  version: 1;
+  checkedAt: string;
+  violations: NegativeConstraintViolation[];
+  blockedCorrections: string[];
+  scorePenalty: number;
+  warnings: string[];
+};
+type MotionStyleTagCategory = 'realism' | 'energy' | 'weight' | 'speed' | 'emotion' | 'cinematic' | 'impact' | 'caution' | 'precision';
+type MotionStyleApplyScope = 'whole_body' | 'upper_body' | 'lower_body' | 'hands' | 'feet' | 'root' | 'camera';
+type MotionStyleTag = {
+  id: string;
+  text: string;
+  category: MotionStyleTagCategory;
+  strength: number;
+  appliesTo: MotionStyleApplyScope;
+  startRatio: number;
+  endRatio: number;
+};
+type MotionStyleProfile = {
+  id: string;
+  label: string;
+  source: 'prompt' | 'local' | 'ai' | 'default';
+  realism: number;
+  exaggeration: number;
+  energy: number;
+  weight: number;
+  speed: number;
+  fluidity: number;
+  tension: number;
+  precision: number;
+  impact: number;
+  softness: number;
+  cameraIntensity: number;
+  timingScale: number;
+  poseAmplitudeScale: number;
+  rootMotionScale: number;
+  armSwingScale: number;
+  legStrideScale: number;
+  crouchScale: number;
+  verticalLiftScale: number;
+  recoveryScale: number;
+  contactHoldScale: number;
+  tags: MotionStyleTag[];
+  warnings: string[];
+  confidence: number;
+};
+type MotionEvidenceType = 'root_motion' | 'joint_delta' | 'limb_contact' | 'foot_contact' | 'hand_target_distance' | 'prop_motion' | 'actor_distance_change' | 'camera_motion' | 'collision_absence' | 'phase_coverage' | 'skill_step_active' | 'ik_target_reached' | 'release_event' | 'recover_event' | 'constraint_violation';
+type MotionEvidenceSource = 'samples' | 'contacts' | 'cameraSamples' | 'propMotions' | 'collision' | 'ik' | 'phasePlan' | 'skillSequence' | 'qualityReport';
+type MotionEvidence = {
+  id: string;
+  type: MotionEvidenceType;
+  requirementId?: string;
+  actorId?: string;
+  targetId?: string;
+  bodyPart?: AnimationContactFrame['limb'];
+  startSec?: number;
+  endSec?: number;
+  timeSec?: number;
+  measuredValue?: number;
+  threshold?: number;
+  passed: boolean;
+  confidence: number;
+  source: MotionEvidenceSource;
+  message: string;
+  rawRef?: { kind: string; id?: string; metric?: string };
+};
+type RequirementCoverage = {
+  requirementId: string;
+  passed: boolean;
+  evidenceIds: string[];
+  missingEvidenceTypes: MotionEvidenceType[];
+  score: number;
+  reason: string;
+};
+type MotionEvidenceBundle = {
+  version: 1;
+  generatedAt: string;
+  transitionId: string;
+  evidences: MotionEvidence[];
+  requirementCoverage: RequirementCoverage[];
+  warnings: string[];
+};
+type LocalResolveRegion = {
+  id: string;
+  requirementIds: string[];
+  reason: string;
+  startSec: number;
+  endSec: number;
+  affectedActorIds: string[];
+  affectedTargetIds: string[];
+  affectedJoints: PoseJointKey[];
+  affectedBodyParts: AnimationContactFrame['limb'][];
+  affectedSkillStepIds: string[];
+  affectedContactIds: string[];
+  priority: number;
+  lockedBoundaries: string[];
+  source: 'promptAdherence' | 'evidence' | 'negativeConstraint' | 'quality';
+};
+type LocalResolvePatch = {
+  id: string;
+  regionId: string;
+  type: 'transform_keyframe' | 'bone_keyframe' | 'ik_constraint' | 'contact_frame' | 'prop_constraint' | 'camera_sequence' | 'skill_weight' | 'phase_timing' | 'warning_only';
+  startSec: number;
+  endSec: number;
+  payload: any;
+  reason: string;
+  blockedByConstraints: string[];
+  warnings: string[];
+};
+type LocalResolveResult = {
+  version: 1;
+  createdAt: string;
+  regions: LocalResolveRegion[];
+  patches: LocalResolvePatch[];
+  appliedPatchIds: string[];
+  blockedPatchIds: string[];
+  warnings: string[];
+  confidence: number;
+};
+type InteractionActor = {
+  actorId: string;
+  role: 'primary' | 'secondary' | 'target' | 'obstacle';
+  actionType: MotionSemanticActionType;
+  startRatio: number;
+  endRatio: number;
+  targetObjectId?: string;
+  relativePositionGoal?: string;
+  motionDraftRef?: string;
+  motionDraft?: MotionDraft;
+  notes: string[];
+};
+type InteractionTarget = {
+  targetId: string;
+  targetType: 'character' | 'prop' | 'camera' | 'point';
+  role: 'push_target' | 'receive_target' | 'avoid_target' | 'look_target' | 'obstacle' | 'held_object';
+  worldPosition?: Vec3;
+  boundingHint?: Vec3;
+  notes: string[];
+};
+type InteractionContact = {
+  id: string;
+  timeSec: number;
+  actorId: string;
+  limb: AnimationContactFrame['limb'];
+  targetId: string;
+  targetType: InteractionTarget['targetType'];
+  contactType: 'reach' | 'touch' | 'hold' | 'push' | 'pull' | 'hit' | 'release' | 'receive' | 'avoid';
+  worldPosition?: Vec3;
+  required: boolean;
+};
+type InteractionSyncMarker = {
+  id: string;
+  timeSec: number;
+  markerType: 'contact' | 'release' | 'dodge' | 'receive' | 'impact' | 'look' | 'camera_cue';
+  actorId?: string;
+  targetId?: string;
+  triggers: string[];
+  notes: string[];
+};
+type InteractionClip = {
+  id: string;
+  label: string;
+  actionType: 'approach' | 'push' | 'pull' | 'handoff' | 'receive' | 'avoid' | 'chase' | 'fight_basic' | 'kick_prop' | 'pick_up' | 'put_down';
+  actorIds: string[];
+  targetIds: string[];
+  startSec: number;
+  endSec: number;
+  requiredContacts: string[];
+  relativePositionRules: string[];
+  notes: string[];
+};
+type PropMotionDraft = {
+  propId: string;
+  startSec: number;
+  endSec: number;
+  transformKeyframes: Array<{ timeSec: number; transform: Partial<PoseTransform>; note?: string }>;
+  causedByActorId?: string;
+  causeContactId?: string;
+  physicalHint: 'slide' | 'roll' | 'lift' | 'drop' | 'impact' | 'carry';
+  notes: string[];
+};
+type InteractionDraft = {
+  version: 1;
+  primaryActorId?: string;
+  actors: InteractionActor[];
+  targets: InteractionTarget[];
+  interactionClips: InteractionClip[];
+  contacts: InteractionContact[];
+  syncMarkers: InteractionSyncMarker[];
+  propMotions: PropMotionDraft[];
+  spatialConstraints: string[];
+  warnings: string[];
+  confidence: number;
+};
+type MotionIkConstraint = {
+  id: string;
+  actorId: string;
+  limb: 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot' | 'head' | 'body';
+  targetType: InteractionTarget['targetType'];
+  targetId?: string;
+  targetPosition?: Vec3;
+  startSec: number;
+  endSec: number;
+  weight: number;
+  lockMode: 'reach' | 'hold' | 'plant' | 'push' | 'pull' | 'receive' | 'release' | 'avoid';
+  source: 'interactionDraft' | 'contactFrame' | 'syncMarker' | 'local';
+  note: string;
+};
+type SceneCollider = {
+  id: string;
+  ownerType: 'character' | 'prop' | 'ground' | 'zone';
+  ownerId?: string;
+  shape: 'capsule' | 'box' | 'sphere' | 'plane';
+  center: Vec3;
+  size?: Vec3;
+  radius?: number;
+  height?: number;
+  rotation?: Vec3;
+  isStatic: boolean;
+  collisionRole: 'body' | 'hand' | 'foot' | 'prop' | 'obstacle' | 'ground' | 'trigger';
+  enabled: boolean;
+};
+type ContactConstraint = {
+  id: string;
+  actorId?: string;
+  targetId?: string;
+  contactType: 'push' | 'pull' | 'hit' | 'kick' | 'hold' | 'block' | 'avoid' | 'ground';
+  timeSec: number;
+  durationSec: number;
+  contactPoint: Vec3;
+  normal: Vec3;
+  impulseHint: number;
+  required: boolean;
+  source: 'interactionDraft' | 'detected' | 'contactFrame' | 'local';
+};
+type PropConstraint = {
+  id: string;
+  propId: string;
+  startSec: number;
+  endSec: number;
+  mode: 'slide' | 'roll' | 'lift' | 'carry' | 'drop' | 'fixed' | 'blocked';
+  driverActorId?: string;
+  driverLimb?: AnimationContactFrame['limb'];
+  targetPath: Vec3[];
+  friction: number;
+  massHint: number;
+  lockedAxes: Array<'x' | 'y' | 'z' | 'rotX' | 'rotY' | 'rotZ'>;
+  notes: string[];
+};
+type SceneContactDiagnostic = {
+  id: string;
+  colliderAId: string;
+  colliderBId: string;
+  contactPoint: Vec3;
+  normal: Vec3;
+  penetrationDepth: number;
+  timeSec?: number;
+  role: 'body_prop' | 'body_body' | 'foot_ground' | 'prop_ground' | 'obstacle' | 'trigger';
+};
+type MotionRefineResult = {
+  motionIntent: MotionIntent;
+  motionDraft?: MotionDraft;
+  interactionDraft?: InteractionDraft;
+  promptRequirementGraph?: PromptRequirementGraph;
+};
 type MotionKeyframeHint = {
   timeRatio: number;
   label: string;
@@ -379,13 +836,15 @@ type MotionRefineHistoryEntry = {
   mode: 'resolve' | 'generate';
   requestSummary: { actionPrompt: string; durationSec: number; selectedCharacterId: string; usedReferenceAssetId?: string };
   motionIntent?: MotionIntent;
+  motionDraft?: MotionDraft;
+  interactionDraft?: InteractionDraft;
   error?: string;
 };
 type MotionRegenerateLockScope = 'none' | 'rootPosition' | 'rootRotation' | 'upperBody' | 'lowerBody' | 'contacts';
 type MotionQualityIssue = {
   id: string;
   severity: 'error' | 'warning' | 'info';
-  metric: 'endpoint' | 'speed' | 'rotation' | 'foot_lock' | 'contact' | 'pose' | 'sequence';
+  metric: 'endpoint' | 'speed' | 'rotation' | 'foot_lock' | 'contact' | 'pose' | 'sequence' | 'collision';
   message: string;
   timeSec?: number;
   value?: number;
@@ -441,7 +900,40 @@ type MotionQualityReport = {
     motionExpectationCount?: number;
     motionExpectationFailedCount?: number;
     motionExpectationPassRatio?: number;
+    ikHandTargetMaxDistance?: number;
+    ikFootPlantDrift?: number;
+    ikHandoffSyncDistance?: number;
+    ikPropContactDistance?: number;
+    retargetConfidence?: number;
+    colliderPenetrationCount?: number;
+    maxPenetrationDepth?: number;
+    propContactSuccessRatio?: number;
+    obstacleAvoidanceSuccess?: number;
+    propConstraintMotionDistance?: number;
+    characterOverlapCount?: number;
+    groundViolationCount?: number;
   };
+};
+type PromptAdherenceRequirementResult = {
+  requirementId: string;
+  text: string;
+  priority?: MotionDraftRequirement['priority'];
+  passed: boolean;
+  evidence: string[];
+  failedReason?: string;
+  relatedFrames: number[];
+  relatedJoints: PoseJointKey[];
+  relatedContacts: MotionContactHint[];
+  suggestedFix?: string;
+};
+type PromptAdherenceReport = {
+  version: 1;
+  checkedAt: string;
+  score: number;
+  requirementResults: PromptAdherenceRequirementResult[];
+  missingRequirements: string[];
+  correctionHints: string[];
+  warnings: string[];
 };
 type MotionPipelineStepState = 'blocked' | 'ready' | 'running' | 'done' | 'failed' | 'stale';
 type PoseTransitionTemplate = {
@@ -475,6 +967,76 @@ type MotionSkillQualityTarget = {
   maxFootPlantDrift?: number;
   maxRootStepJitter?: number;
   minPrimaryJointDelta?: number;
+};
+type MotionSkillPhaseId = 'anticipation' | 'launch' | 'travel' | 'contact' | 'release' | 'recover' | 'settle';
+type MotionSkillTemplatePhase = {
+  id: MotionSkillPhaseId;
+  label: string;
+  startRatio: number;
+  endRatio: number;
+  purpose: string;
+  keyJoints?: PoseJointKey[];
+};
+type MotionSkillPoseCurvePoint = {
+  timeRatio: number;
+  joint: PoseJointKey;
+  rotation: Partial<RigRotation>;
+  phaseId?: MotionSkillPhaseId;
+  strength?: number;
+};
+type MotionSkillRootCurvePoint = {
+  timeRatio: number;
+  position?: Vec3;
+  rotation?: Vec3;
+  height?: number;
+  weightShift?: number;
+  strength?: number;
+};
+type MotionSkillContactPatternPoint = {
+  timeRatio: number;
+  contact: MotionContactHint;
+  kind: 'reach' | 'grasp' | 'release' | 'foot_lock';
+  phaseId?: MotionSkillPhaseId;
+  targetRole?: 'ground' | 'prompt_target' | 'forward_space';
+  note: string;
+};
+type MotionSkillTemplate = {
+  id: string;
+  label: string;
+  actionType: MotionSemanticActionType;
+  actionFamily: MotionSemanticActionFamily;
+  supportedPromptTags: string[];
+  grounded: boolean;
+  allowAirborne: boolean;
+  durationProfile: { minSec: number; idealSec: number; maxSec: number };
+  phaseTemplates: MotionSkillTemplatePhase[];
+  rootMotionCurve: MotionSkillRootCurvePoint[];
+  poseCurve: MotionSkillPoseCurvePoint[];
+  contactPattern: MotionSkillContactPatternPoint[];
+  requiredJoints: PoseJointKey[];
+  qualityTargets: Partial<MotionSkillQualityTarget>;
+};
+type MotionSkillSequenceStep = {
+  id: string;
+  skillTemplateId: string;
+  actionType: MotionSemanticActionType;
+  label: string;
+  startRatio: number;
+  endRatio: number;
+  fadeInRatio: number;
+  fadeOutRatio: number;
+  weight: number;
+  source: 'motionDraft' | 'semanticPlan' | 'actionChain' | 'interactionDraft' | 'local';
+  phaseId?: string;
+  promptRequirementIds?: string[];
+  targetObjectId?: string;
+  notes: string[];
+};
+type MotionSkillSequence = {
+  version: 1;
+  steps: MotionSkillSequenceStep[];
+  warnings: string[];
+  summary: string;
 };
 type MotionActionSkill = {
   actionType: MotionSemanticActionType;
@@ -563,6 +1125,31 @@ type CameraMotionSample = {
   targetPosition: Vec3;
   fov?: number;
 };
+type CameraMotionSequenceStep = {
+  id: string;
+  type: CameraMotionType;
+  label: string;
+  startRatio: number;
+  endRatio: number;
+  fadeInRatio: number;
+  fadeOutRatio: number;
+  intensity: number;
+  distance: number;
+  heightOffset: number;
+  orbitAngleDeg: number;
+  targetCharacterId?: string;
+  targetPhaseId?: string;
+  targetSkillStepId?: string;
+  trigger: 'phase' | 'contact' | 'release' | 'impact' | 'prompt' | 'manual';
+  keepCharacterInFrame: boolean;
+  notes: string[];
+};
+type CameraMotionSequence = {
+  version: 1;
+  steps: CameraMotionSequenceStep[];
+  warnings: string[];
+  summary: string;
+};
 type PoseTransition = {
   id: string;
   name: string;
@@ -572,9 +1159,18 @@ type PoseTransition = {
   aiActionIntent?: string;
   generatedMotionPrompt?: string;
   motionIntent?: MotionIntent;
+  motionDraft?: MotionDraft;
+  interactionDraft?: InteractionDraft;
+  promptRequirementGraph?: PromptRequirementGraph;
+  propConstraints?: PropConstraint[];
   motionRefineHistory: MotionRefineHistoryEntry[];
   regenerateLockScope: MotionRegenerateLockScope;
   qualityReport?: MotionQualityReport;
+  promptAdherenceReport?: PromptAdherenceReport;
+  negativeConstraintReport?: NegativeConstraintReport;
+  motionStyleProfile?: MotionStyleProfile;
+  motionEvidenceBundle?: MotionEvidenceBundle;
+  localResolveResult?: LocalResolveResult;
   constraints: PoseTransitionConstraints;
   durationSec: number;
   curve: CurveType;
@@ -690,6 +1286,8 @@ type Scene3DHistorySnapshot = {
   activeCameraId?: string;
   selectedObjectId?: string;
   activeViewMode?: 'director' | 'camera';
+  directorViewTarget?: Vec3;
+  directorViewFocusNonce?: number;
   activeTransitionId?: string;
   aspectRatio: string;
   gridSnapEnabled: boolean;
@@ -709,6 +1307,8 @@ type Scene3DState = {
   objects: { characters: CharacterObject[]; props: PropObject[]; cameras: CameraObject[]; lights: LightObject[] };
   selectedObjectId?: string;
   activeViewMode: 'director' | 'camera';
+  directorViewTarget?: Vec3;
+  directorViewFocusNonce?: number;
   activeCameraId?: string;
   transformMode: TransformMode;
   aspectRatio: string;
@@ -762,6 +1362,7 @@ const MODEL_URL = '/models/x-bot.glb';
 const MAX_SCENE_HISTORY = 60;
 const GROUND_SNAP_SETTLE_FRAMES = 45;
 const GRID_SNAP_STEP = 0.25;
+const DEFAULT_DIRECTOR_VIEW_TARGET: Vec3 = { x: 0, y: 0.95, z: 0 };
 const GRID_ROTATION_SNAP_DEG = 5;
 const GRID_SCALE_SNAP_STEP = 0.05;
 const CURVE_OPTIONS: CurveType[] = ['linear', 'ease_in', 'ease_out', 'ease_in_out', 'bullet_time', 'pulse', 'hold_then_burst'];
@@ -2501,6 +3102,100 @@ function findRigRest(rig: Scene3DCollectedRig, name: string) {
   return undefined;
 }
 
+const CUSTOM_RIG_BONE_PATTERNS: Record<PoseJointKey, RegExp[]> = {
+  pelvis: [/hips?/, /pelvis/, /root/],
+  chest: [/spine2?/, /chest/, /torso/],
+  neck: [/neck/],
+  head: [/head/],
+  leftUpperArm: [/left.*(upper)?arm/, /l[_-]?(upper)?arm/, /leftshoulder/],
+  leftLowerArm: [/left.*forearm/, /left.*lowerarm/, /l[_-]?forearm/, /l[_-]?lowerarm/],
+  rightUpperArm: [/right.*(upper)?arm/, /r[_-]?(upper)?arm/, /rightshoulder/],
+  rightLowerArm: [/right.*forearm/, /right.*lowerarm/, /r[_-]?forearm/, /r[_-]?lowerarm/],
+  leftHand: [/left.*hand/, /l[_-]?hand/, /leftwrist/],
+  rightHand: [/right.*hand/, /r[_-]?hand/, /rightwrist/],
+  leftUpperLeg: [/left.*upleg/, /left.*upperleg/, /left.*thigh/, /l[_-]?(upleg|upperleg|thigh)/],
+  leftLowerLeg: [/left.*leg/, /left.*calf/, /left.*shin/, /l[_-]?(leg|calf|shin)/],
+  rightUpperLeg: [/right.*upleg/, /right.*upperleg/, /right.*thigh/, /r[_-]?(upleg|upperleg|thigh)/],
+  rightLowerLeg: [/right.*leg/, /right.*calf/, /right.*shin/, /r[_-]?(leg|calf|shin)/],
+  leftFoot: [/left.*foot/, /left.*ankle/, /l[_-]?(foot|ankle)/],
+  rightFoot: [/right.*foot/, /right.*ankle/, /r[_-]?(foot|ankle)/]
+};
+
+function normalizedRigBoneSearchName(name: string) {
+  return runtimeBoneName(name).replace(/mixamorig/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+function inferCustomRigBoneForJoint(joint: PoseJointKey, boneNames: string[]) {
+  const patterns = CUSTOM_RIG_BONE_PATTERNS[joint];
+  return boneNames.find((name) => patterns.some((pattern) => pattern.test(normalizedRigBoneSearchName(name))));
+}
+
+function inferCharacterRigMapping(character: CharacterObject): CharacterRigMapping {
+  const explicitBoneNames = Array.from(new Set([
+    ...Object.keys(character.bonePose?.bones || {}),
+    ...Object.keys(character.fingerPose?.bones || {})
+  ]));
+  const isDefaultMixamo = character.model.type === 'proxy'
+    || character.bonePose?.space === 'mixamo-local'
+    || /mixamo|x-?bot|xbot/i.test(`${character.model.sourceName || ''} ${character.model.url || ''}`);
+  const sourceRigType: CharacterRigMapping['sourceRigType'] = isDefaultMixamo
+    ? 'mixamo'
+    : explicitBoneNames.length
+      ? 'humanoid'
+      : 'custom';
+  const boneMap: Partial<Record<PoseJointKey, string[]>> = {};
+  const warnings: string[] = [];
+  POSE_KEYS.forEach((joint) => {
+    if (isDefaultMixamo) {
+      boneMap[joint] = BONE_TARGETS[joint].map((target) => target.name);
+      return;
+    }
+    const inferred = inferCustomRigBoneForJoint(joint, explicitBoneNames);
+    if (inferred) {
+      boneMap[joint] = [inferred];
+    } else {
+      warnings.push(`Retarget mapping missing ${joint} for ${character.name}`);
+    }
+  });
+  const inverseBoneMap = Object.entries(boneMap).reduce<Record<string, PoseJointKey>>((acc, [joint, bones]) => {
+    (bones || []).forEach((bone) => {
+      acc[bone] = joint as PoseJointKey;
+      acc[runtimeBoneName(bone)] = joint as PoseJointKey;
+    });
+    return acc;
+  }, {});
+  const mappedCount = POSE_KEYS.filter((joint) => boneMap[joint]?.length).length;
+  const confidence = isDefaultMixamo ? 1 : clampNumber(mappedCount / POSE_KEYS.length, 0, 0.92);
+  const height = character.model.normalizedHeight || Math.max(1.2, character.scale.y || 1.7);
+  return {
+    characterId: character.id,
+    sourceRigType,
+    targetRigType: 'scene3d-standard-human',
+    boneMap,
+    inverseBoneMap,
+    restPose: clonePose(character.rigPose || zeroPose()),
+    jointAxisOverrides: {},
+    scaleProfile: {
+      height,
+      shoulderWidth: Number((0.32 * Math.max(0.5, character.scale.x || 1)).toFixed(3)),
+      armReach: Number((height * 0.42 * Math.max(0.5, character.scale.x || 1)).toFixed(3)),
+      legLength: Number((height * 0.48).toFixed(3))
+    },
+    handProfile: {
+      leftGripBones: explicitBoneNames.filter((name) => /left.*hand|l.*hand|left.*finger|left.*thumb/i.test(name)).slice(0, 16),
+      rightGripBones: explicitBoneNames.filter((name) => /right.*hand|r.*hand|right.*finger|right.*thumb/i.test(name)).slice(0, 16),
+      gripStrength: 0.72
+    },
+    footProfile: {
+      leftFootBones: (boneMap.leftFoot || []).slice(0, 4),
+      rightFootBones: (boneMap.rightFoot || []).slice(0, 4),
+      plantHeight: 0
+    },
+    confidence,
+    warnings: warnings.slice(0, 12)
+  };
+}
+
 const FINGER_BONE_CHAINS = {
   left: {
     thumb: ['mixamorigLeftHandThumb1', 'mixamorigLeftHandThumb2', 'mixamorigLeftHandThumb3'],
@@ -3338,6 +4033,8 @@ function defaultScene(): Scene3DState {
     },
     selectedObjectId: camera.id,
     activeViewMode: 'director',
+    directorViewTarget: { ...DEFAULT_DIRECTOR_VIEW_TARGET },
+    directorViewFocusNonce: 0,
     activeCameraId: camera.id,
     transformMode: 'translate',
     aspectRatio: '16:9',
@@ -3887,6 +4584,440 @@ function normalizeMotionIntent(value: any, durationFallback = 1.2): MotionIntent
   };
 }
 
+function normalizeMotionDraftTime(value: any, durationSec: number): number | undefined {
+  const timeSec = Number(value);
+  if (!Number.isFinite(timeSec)) return undefined;
+  const maxMiddleTime = Math.max(0, durationSec - 0.001);
+  if (timeSec <= 0.001 || timeSec >= maxMiddleTime) return undefined;
+  return clampNumber(timeSec, 0.001, maxMiddleTime);
+}
+
+function normalizeMotionDraftVec(value: any, fallback = vec(), min = -50, max = 50): Vec3 {
+  const raw = normalizeVec(value, fallback);
+  return {
+    x: clampNumber(raw.x, min, max),
+    y: clampNumber(raw.y, min, max),
+    z: clampNumber(raw.z, min, max)
+  };
+}
+
+function normalizeMotionDraftRequirementIds(value: any): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
+    : [];
+}
+
+function normalizeMotionDraft(value: any, durationFallback = 1.2): MotionDraft | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  const durationSec = Number.isFinite(Number(value.durationSec)) ? Math.max(0.2, Number(value.durationSec)) : durationFallback;
+  const categories: MotionDraftRequirement['category'][] = ['action', 'body', 'timing', 'contact', 'camera', 'style', 'constraint', 'other'];
+  const priorities: NonNullable<MotionDraftRequirement['priority']>[] = ['low', 'normal', 'high'];
+  const constraintTypes: MotionDraftConstraint['type'][] = ['head_look', 'hand_target', 'foot_lock', 'body_aim', 'grounding', 'prop_contact', 'other'];
+  const contactTypes: NonNullable<MotionDraftContactFrame['type']>[] = ['ground', 'prop', 'look', 'release', 'hold', 'other'];
+  const mapKinds: MotionDraftRequirementMapEntry['appliedTo'][number]['kind'][] = ['phase', 'transformKeyframe', 'boneKeyframe', 'contactFrame', 'constraint', 'camera'];
+  const validJoint = (joint: any): PoseJointKey | undefined => {
+    const key = String(joint || '');
+    return POSE_KEYS.includes(key as PoseJointKey) ? key as PoseJointKey : undefined;
+  };
+  const promptRequirements = Array.isArray(value.promptRequirements) ? value.promptRequirements.map((item: any, index: number): MotionDraftRequirement | null => {
+    if (!item || typeof item !== 'object') return null;
+    const text = typeof item.text === 'string' ? item.text.trim() : '';
+    if (!text) return null;
+    const category = categories.includes(item.category) ? item.category : 'other';
+    return {
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `req_${index + 1}`,
+      text: text.slice(0, 300),
+      category,
+      priority: priorities.includes(item.priority) ? item.priority : undefined
+    };
+  }).filter((item): item is MotionDraftRequirement => Boolean(item)).slice(0, 20) : [];
+  const phasePlan = Array.isArray(value.phasePlan) ? value.phasePlan.map((item: any, index: number): MotionDraftPhase | null => {
+    if (!item || typeof item !== 'object') return null;
+    const label = typeof item.label === 'string' ? item.label.trim() : '';
+    const startSec = Number.isFinite(Number(item.startSec)) ? clampNumber(Number(item.startSec), 0, durationSec) : undefined;
+    const endSec = Number.isFinite(Number(item.endSec)) ? clampNumber(Number(item.endSec), 0, durationSec) : undefined;
+    if (!label || startSec === undefined || endSec === undefined || endSec < startSec) return null;
+    return {
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `phase_${index + 1}`,
+      label: label.slice(0, 120),
+      startSec,
+      endSec,
+      purpose: typeof item.purpose === 'string' ? item.purpose.slice(0, 300) : undefined,
+      keyJoints: Array.isArray(item.keyJoints) ? item.keyJoints.map(validJoint).filter(Boolean).slice(0, 8) as PoseJointKey[] : undefined,
+      contacts: normalizeMotionContacts(item.contacts),
+      requirementIds: normalizeMotionDraftRequirementIds(item.requirementIds)
+    };
+  }).filter((item): item is MotionDraftPhase => Boolean(item)).slice(0, 12) : [];
+  const transformKeyframes = Array.isArray(value.transformKeyframes) ? value.transformKeyframes.map((item: any, index: number): MotionDraftTransformKeyframe | null => {
+    const timeSec = normalizeMotionDraftTime(item?.timeSec, durationSec);
+    if (timeSec === undefined) return null;
+    return {
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `root_${index + 1}`,
+      timeSec,
+      position: item.position ? normalizeMotionDraftVec(item.position, vec(), -50, 50) : undefined,
+      rotation: item.rotation ? normalizeMotionDraftVec(item.rotation, vec(), -180, 180) : undefined,
+      scale: item.scale ? normalizeMotionDraftVec(item.scale, { x: 1, y: 1, z: 1 }, 0.01, 20) : undefined,
+      phaseId: typeof item.phaseId === 'string' ? item.phaseId : undefined,
+      requirementIds: normalizeMotionDraftRequirementIds(item.requirementIds),
+      note: typeof item.note === 'string' ? item.note.slice(0, 300) : undefined
+    };
+  }).filter((item): item is MotionDraftTransformKeyframe => Boolean(item)).slice(0, 24) : [];
+  const boneKeyframes = Array.isArray(value.boneKeyframes) ? value.boneKeyframes.map((item: any, index: number): MotionDraftBoneKeyframe | null => {
+    const timeSec = normalizeMotionDraftTime(item?.timeSec, durationSec);
+    const joint = validJoint(item?.joint);
+    if (timeSec === undefined || !joint) return null;
+    return {
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `bone_${index + 1}`,
+      timeSec,
+      joint,
+      rotation: normalizeMotionDraftVec(item.rotation, vec(), -180, 180),
+      phaseId: typeof item.phaseId === 'string' ? item.phaseId : undefined,
+      requirementIds: normalizeMotionDraftRequirementIds(item.requirementIds),
+      note: typeof item.note === 'string' ? item.note.slice(0, 300) : undefined
+    };
+  }).filter((item): item is MotionDraftBoneKeyframe => Boolean(item)).slice(0, 80) : [];
+  const contactFrames = Array.isArray(value.contactFrames) ? value.contactFrames.map((item: any, index: number): MotionDraftContactFrame | null => {
+    const timeSec = normalizeMotionDraftTime(item?.timeSec, durationSec);
+    const contact = normalizeMotionContacts([item?.contact])[0];
+    if (timeSec === undefined || !contact) return null;
+    return {
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `contact_${index + 1}`,
+      timeSec,
+      contact,
+      type: contactTypes.includes(item.type) ? item.type : undefined,
+      targetObjectId: typeof item.targetObjectId === 'string' && item.targetObjectId.trim() ? item.targetObjectId.trim() : undefined,
+      phaseId: typeof item.phaseId === 'string' ? item.phaseId : undefined,
+      requirementIds: normalizeMotionDraftRequirementIds(item.requirementIds),
+      note: typeof item.note === 'string' ? item.note.slice(0, 300) : undefined
+    };
+  }).filter((item): item is MotionDraftContactFrame => Boolean(item)).slice(0, 32) : [];
+  const constraints = Array.isArray(value.constraints) ? value.constraints.map((item: any, index: number): MotionDraftConstraint | null => {
+    if (!item || typeof item !== 'object') return null;
+    const startSec = Number.isFinite(Number(item.startSec)) ? clampNumber(Number(item.startSec), 0, durationSec) : undefined;
+    const endSec = Number.isFinite(Number(item.endSec)) ? clampNumber(Number(item.endSec), 0, durationSec) : undefined;
+    return {
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `constraint_${index + 1}`,
+      type: constraintTypes.includes(item.type) ? item.type : 'other',
+      target: typeof item.target === 'string' ? item.target.slice(0, 160) : undefined,
+      startSec,
+      endSec: endSec !== undefined && startSec !== undefined && endSec < startSec ? startSec : endSec,
+      joints: Array.isArray(item.joints) ? item.joints.map(validJoint).filter(Boolean).slice(0, 8) as PoseJointKey[] : undefined,
+      requirementIds: normalizeMotionDraftRequirementIds(item.requirementIds),
+      note: typeof item.note === 'string' ? item.note.slice(0, 300) : undefined
+    };
+  }).filter((item): item is MotionDraftConstraint => Boolean(item)).slice(0, 24) : [];
+  const promptRequirementMap = Array.isArray(value.promptRequirementMap) ? value.promptRequirementMap.map((item: any): MotionDraftRequirementMapEntry | null => {
+    const requirementId = typeof item?.requirementId === 'string' ? item.requirementId.trim() : '';
+    if (!requirementId) return null;
+    const appliedTo = Array.isArray(item.appliedTo) ? item.appliedTo.map((target: any) => {
+      const kind = mapKinds.includes(target?.kind) ? target.kind : undefined;
+      if (!kind) return null;
+      const joint = validJoint(target?.joint);
+      return {
+        kind,
+        id: typeof target.id === 'string' ? target.id : undefined,
+        timeSec: Number.isFinite(Number(target.timeSec)) ? clampNumber(Number(target.timeSec), 0, durationSec) : undefined,
+        joint,
+        phaseId: typeof target.phaseId === 'string' ? target.phaseId : undefined
+      };
+    }).filter(Boolean).slice(0, 16) as MotionDraftRequirementMapEntry['appliedTo'] : [];
+    return {
+      requirementId,
+      appliedTo,
+      note: typeof item.note === 'string' ? item.note.slice(0, 300) : undefined
+    };
+  }).filter((item): item is MotionDraftRequirementMapEntry => Boolean(item)).slice(0, 20) : [];
+  const timingRaw = value.timing && typeof value.timing === 'object' ? value.timing : undefined;
+  const timing = timingRaw ? {
+    anticipation: Number.isFinite(Number(timingRaw.anticipation)) ? clampNumber(Number(timingRaw.anticipation), 0, durationSec) : undefined,
+    mainActionStart: Number.isFinite(Number(timingRaw.mainActionStart)) ? clampNumber(Number(timingRaw.mainActionStart), 0, durationSec) : undefined,
+    mainActionEnd: Number.isFinite(Number(timingRaw.mainActionEnd)) ? clampNumber(Number(timingRaw.mainActionEnd), 0, durationSec) : undefined,
+    settle: Number.isFinite(Number(timingRaw.settle)) ? clampNumber(Number(timingRaw.settle), 0, durationSec) : undefined
+  } : undefined;
+  return {
+    version: 1,
+    actionIntent: typeof value.actionIntent === 'string' ? value.actionIntent.slice(0, 1200) : '',
+    durationSec,
+    fpsHint: Number.isFinite(Number(value.fpsHint)) ? clampNumber(Number(value.fpsHint), 12, 60) : undefined,
+    generatedMotionPrompt: typeof value.generatedMotionPrompt === 'string' ? value.generatedMotionPrompt.slice(0, 4000) : '',
+    promptRequirements,
+    promptRequirementMap,
+    phasePlan,
+    transformKeyframes,
+    boneKeyframes,
+    contactFrames,
+    constraints,
+    timing,
+    warnings: Array.isArray(value.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 24) : [],
+    confidence: Number.isFinite(Number(value.confidence)) ? clampNumber(Number(value.confidence), 0, 1) : 0
+  };
+}
+
+function normalizeInteractionDraft(value: any, durationFallback = 1.2): InteractionDraft | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  const durationSec = Math.max(0.2, durationFallback || 1.2);
+  const actorRoles: InteractionActor['role'][] = ['primary', 'secondary', 'target', 'obstacle'];
+  const targetTypes: InteractionTarget['targetType'][] = ['character', 'prop', 'camera', 'point'];
+  const targetRoles: InteractionTarget['role'][] = ['push_target', 'receive_target', 'avoid_target', 'look_target', 'obstacle', 'held_object'];
+  const clipTypes: InteractionClip['actionType'][] = ['approach', 'push', 'pull', 'handoff', 'receive', 'avoid', 'chase', 'fight_basic', 'kick_prop', 'pick_up', 'put_down'];
+  const contactTypes: InteractionContact['contactType'][] = ['reach', 'touch', 'hold', 'push', 'pull', 'hit', 'release', 'receive', 'avoid'];
+  const markerTypes: InteractionSyncMarker['markerType'][] = ['contact', 'release', 'dodge', 'receive', 'impact', 'look', 'camera_cue'];
+  const physicalHints: PropMotionDraft['physicalHint'][] = ['slide', 'roll', 'lift', 'drop', 'impact', 'carry'];
+  const limbs: AnimationContactFrame['limb'][] = ['head', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot'];
+  const stringList = (raw: any, max = 8) => Array.isArray(raw) ? raw.map((item) => String(item).trim()).filter(Boolean).slice(0, max) : [];
+  const safeId = (raw: any) => typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 120) : undefined;
+  const safeTime = (raw: any) => Number.isFinite(Number(raw)) ? clampNumber(Number(raw), 0, durationSec) : 0;
+  const actors = Array.isArray(value.actors) ? value.actors.map((item: any, index: number): InteractionActor | null => {
+    const actorId = safeId(item?.actorId);
+    if (!actorId) return null;
+    const startRatio = clamp01(Number.isFinite(Number(item.startRatio)) ? Number(item.startRatio) : 0);
+    const endRatio = clampNumber(Number.isFinite(Number(item.endRatio)) ? Number(item.endRatio) : 1, startRatio, 1);
+    return {
+      actorId,
+      role: actorRoles.includes(item.role) ? item.role : index === 0 ? 'primary' : 'secondary',
+      actionType: normalizeSemanticActionType(item.actionType),
+      startRatio,
+      endRatio,
+      targetObjectId: safeId(item.targetObjectId),
+      relativePositionGoal: typeof item.relativePositionGoal === 'string' ? item.relativePositionGoal.slice(0, 240) : undefined,
+      motionDraftRef: safeId(item.motionDraftRef),
+      motionDraft: normalizeMotionDraft(item.motionDraft, durationSec),
+      notes: stringList(item.notes, 8)
+    };
+  }).filter((item): item is InteractionActor => Boolean(item)).slice(0, 8) : [];
+  const targets = Array.isArray(value.targets) ? value.targets.map((item: any): InteractionTarget | null => {
+    const targetId = safeId(item?.targetId);
+    if (!targetId) return null;
+    return {
+      targetId,
+      targetType: targetTypes.includes(item.targetType) ? item.targetType : 'point',
+      role: targetRoles.includes(item.role) ? item.role : 'look_target',
+      worldPosition: item.worldPosition ? normalizeMotionDraftVec(item.worldPosition, vec(), -100, 100) : undefined,
+      boundingHint: item.boundingHint ? normalizeMotionDraftVec(item.boundingHint, vec(1, 1, 1), 0, 20) : undefined,
+      notes: stringList(item.notes, 8)
+    };
+  }).filter((item): item is InteractionTarget => Boolean(item)).slice(0, 16) : [];
+  const contacts = Array.isArray(value.contacts) ? value.contacts.map((item: any, index: number): InteractionContact | null => {
+    const actorId = safeId(item?.actorId);
+    const targetId = safeId(item?.targetId);
+    if (!actorId || !targetId) return null;
+    return {
+      id: safeId(item.id) || `interaction_contact_${index + 1}`,
+      timeSec: safeTime(item.timeSec),
+      actorId,
+      limb: limbs.includes(item.limb) ? item.limb : 'rightHand',
+      targetId,
+      targetType: targetTypes.includes(item.targetType) ? item.targetType : 'prop',
+      contactType: contactTypes.includes(item.contactType) ? item.contactType : 'touch',
+      worldPosition: item.worldPosition ? normalizeMotionDraftVec(item.worldPosition, vec(), -100, 100) : undefined,
+      required: item.required !== false
+    };
+  }).filter((item): item is InteractionContact => Boolean(item)).slice(0, 48) : [];
+  const interactionClips = Array.isArray(value.interactionClips) ? value.interactionClips.map((item: any, index: number): InteractionClip | null => {
+    const label = typeof item?.label === 'string' && item.label.trim() ? item.label.trim() : `interaction ${index + 1}`;
+    const startSec = safeTime(item.startSec);
+    const endSec = Math.max(startSec, safeTime(item.endSec));
+    return {
+      id: safeId(item.id) || `interaction_clip_${index + 1}`,
+      label: label.slice(0, 120),
+      actionType: clipTypes.includes(item.actionType) ? item.actionType : 'approach',
+      actorIds: stringList(item.actorIds, 8),
+      targetIds: stringList(item.targetIds, 8),
+      startSec,
+      endSec,
+      requiredContacts: stringList(item.requiredContacts, 12),
+      relativePositionRules: stringList(item.relativePositionRules, 8),
+      notes: stringList(item.notes, 8)
+    };
+  }).filter((item): item is InteractionClip => Boolean(item)).slice(0, 16) : [];
+  const syncMarkers = Array.isArray(value.syncMarkers) ? value.syncMarkers.map((item: any, index: number): InteractionSyncMarker => ({
+    id: safeId(item.id) || `sync_${index + 1}`,
+    timeSec: safeTime(item.timeSec),
+    markerType: markerTypes.includes(item.markerType) ? item.markerType : 'contact',
+    actorId: safeId(item.actorId),
+    targetId: safeId(item.targetId),
+    triggers: stringList(item.triggers, 8),
+    notes: stringList(item.notes, 8)
+  })).slice(0, 32) : [];
+  const propMotions = Array.isArray(value.propMotions) ? value.propMotions.map((item: any, index: number): PropMotionDraft | null => {
+    const propId = safeId(item?.propId);
+    if (!propId) return null;
+    const startSec = safeTime(item.startSec);
+    const endSec = Math.max(startSec, safeTime(item.endSec));
+    const transformKeyframes = Array.isArray(item.transformKeyframes) ? item.transformKeyframes.map((frame: any) => ({
+      timeSec: safeTime(frame?.timeSec),
+      transform: {
+        position: frame?.transform?.position ? normalizeMotionDraftVec(frame.transform.position, vec(), -100, 100) : undefined,
+        rotation: frame?.transform?.rotation ? normalizeMotionDraftVec(frame.transform.rotation, vec(), -360, 360) : undefined,
+        scale: frame?.transform?.scale ? normalizeMotionDraftVec(frame.transform.scale, vec(1, 1, 1), 0.01, 20) : undefined
+      },
+      note: typeof frame?.note === 'string' ? frame.note.slice(0, 200) : undefined
+    })).filter((frame: any) => frame.timeSec >= startSec && frame.timeSec <= endSec).slice(0, 12) : [];
+    return {
+      propId,
+      startSec,
+      endSec,
+      transformKeyframes,
+      causedByActorId: safeId(item.causedByActorId),
+      causeContactId: safeId(item.causeContactId),
+      physicalHint: physicalHints.includes(item.physicalHint) ? item.physicalHint : 'slide',
+      notes: stringList(item.notes, 8)
+    };
+  }).filter((item): item is PropMotionDraft => Boolean(item)).slice(0, 12) : [];
+  return {
+    version: 1,
+    primaryActorId: safeId(value.primaryActorId),
+    actors,
+    targets,
+    interactionClips,
+    contacts,
+    syncMarkers,
+    propMotions,
+    spatialConstraints: stringList(value.spatialConstraints, 12),
+    warnings: stringList(value.warnings, 24),
+    confidence: Number.isFinite(Number(value.confidence)) ? clampNumber(Number(value.confidence), 0, 1) : 0
+  };
+}
+
+function normalizePromptRequirementGraph(value: any, durationFallback = 1.2): PromptRequirementGraph | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  void durationFallback;
+  const categories: PromptRequirementCategory[] = ['actor_action', 'object_motion', 'contact', 'spatial', 'timing', 'style', 'camera', 'avoidance', 'constraint'];
+  const verificationTypes: PromptRequirementVerification[] = ['sample_root_motion', 'joint_delta', 'hand_target_distance', 'foot_contact', 'prop_motion', 'actor_distance_change', 'camera_motion_sample', 'collision_absence', 'phase_exists', 'release_event', 'recover_event', 'skill_step_active', 'ik_target_reached'];
+  const priorities: PromptRequirement['priority'][] = ['required', 'preferred'];
+  const targetTypes: InteractionTarget['targetType'][] = ['character', 'prop', 'camera', 'point'];
+  const roles: NonNullable<PromptRequirement['actorRole']>[] = ['primary', 'secondary', 'target', 'obstacle'];
+  const contactTypes: InteractionContact['contactType'][] = ['reach', 'touch', 'hold', 'push', 'pull', 'hit', 'release', 'receive', 'avoid'];
+  const limbs: AnimationContactFrame['limb'][] = ['head', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot'];
+  const constraintTypes: PromptConstraint['type'][] = ['must_contact', 'must_move', 'must_face', 'must_avoid', 'must_not_collide', 'must_not_airborne', 'must_keep_grounded', 'must_release', 'must_recover', 'must_frame_camera'];
+  const safeText = (raw: any, max = 300) => typeof raw === 'string' ? raw.trim().slice(0, max) : '';
+  const safeId = (raw: any, fallback: string) => {
+    const valueId = typeof raw === 'string' ? raw.trim().slice(0, 120) : '';
+    return valueId || fallback;
+  };
+  const sourcePrompt = safeText(value.sourcePrompt, 4000);
+  const requirements = Array.isArray(value.requirements) ? value.requirements.map((item: any, index: number): PromptRequirement | null => {
+    const text = safeText(item?.text);
+    if (!text) return null;
+    return {
+      id: safeId(item.id, `req_${index + 1}`),
+      text,
+      normalizedText: safeText(item.normalizedText || text).toLowerCase(),
+      priority: priorities.includes(item.priority) ? item.priority : 'preferred',
+      category: categories.includes(item.category) ? item.category : 'actor_action',
+      actorId: safeText(item.actorId, 120) || undefined,
+      actorRole: roles.includes(item.actorRole) ? item.actorRole : undefined,
+      targetId: safeText(item.targetId, 120) || undefined,
+      targetType: targetTypes.includes(item.targetType) ? item.targetType : undefined,
+      actionType: normalizeSemanticActionType(item.actionType),
+      skillHint: safeText(item.skillHint, 120) || undefined,
+      bodyParts: Array.isArray(item.bodyParts) ? item.bodyParts.filter((limb: any) => limbs.includes(limb)).slice(0, 8) : [],
+      contactType: contactTypes.includes(item.contactType) ? item.contactType : undefined,
+      spatialGoal: safeText(item.spatialGoal, 240) || undefined,
+      timingGoal: safeText(item.timingGoal, 240) || undefined,
+      styleTags: Array.isArray(item.styleTags) ? item.styleTags.map((tag: any) => safeText(tag, 80)).filter(Boolean).slice(0, 10) : [],
+      verification: Array.isArray(item.verification) ? item.verification.filter((entry: any) => verificationTypes.includes(entry)).slice(0, 8) : ['phase_exists'],
+      negative: Boolean(item.negative),
+      dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.map((entry: any) => safeText(entry, 120)).filter(Boolean).slice(0, 8) : [],
+      conflictsWith: Array.isArray(item.conflictsWith) ? item.conflictsWith.map((entry: any) => safeText(entry, 120)).filter(Boolean).slice(0, 8) : [],
+      sourceSpan: item.sourceSpan && Number.isFinite(Number(item.sourceSpan.start)) && Number.isFinite(Number(item.sourceSpan.end))
+        ? { start: Math.max(0, Number(item.sourceSpan.start)), end: Math.max(0, Number(item.sourceSpan.end)) }
+        : undefined,
+      confidence: Number.isFinite(Number(item.confidence)) ? clampNumber(Number(item.confidence), 0, 1) : 0.7
+    };
+  }).filter((item): item is PromptRequirement => Boolean(item)).slice(0, 40) : [];
+  const constraints = Array.isArray(value.constraints) ? value.constraints.map((item: any, index: number): PromptConstraint | null => {
+    if (!constraintTypes.includes(item?.type)) return null;
+    const startRatio = clamp01(Number.isFinite(Number(item.startRatio)) ? Number(item.startRatio) : 0);
+    return {
+      id: safeId(item.id, `constraint_${index + 1}`),
+      type: item.type,
+      actorId: safeText(item.actorId, 120) || undefined,
+      targetId: safeText(item.targetId, 120) || undefined,
+      bodyPart: limbs.includes(item.bodyPart) ? item.bodyPart : undefined,
+      startRatio,
+      endRatio: clampNumber(Number.isFinite(Number(item.endRatio)) ? Number(item.endRatio) : 1, startRatio, 1),
+      threshold: Number.isFinite(Number(item.threshold)) ? clampNumber(Number(item.threshold), 0, 100) : undefined,
+      required: item.required !== false,
+      reason: safeText(item.reason, 240) || 'prompt constraint'
+    };
+  }).filter((item): item is PromptConstraint => Boolean(item)).slice(0, 40) : [];
+  const timeline = Array.isArray(value.timeline) ? value.timeline.map((item: any, index: number): PromptTimelineItem => {
+    const startRatio = clamp01(Number.isFinite(Number(item?.startRatio)) ? Number(item.startRatio) : index / Math.max(1, value.timeline.length));
+    return {
+      id: safeId(item.id, `timeline_${index + 1}`),
+      requirementIds: Array.isArray(item.requirementIds) ? item.requirementIds.map((entry: any) => safeText(entry, 120)).filter(Boolean).slice(0, 12) : [],
+      label: safeText(item.label, 120) || `stage ${index + 1}`,
+      startRatio,
+      endRatio: clampNumber(Number.isFinite(Number(item.endRatio)) ? Number(item.endRatio) : Math.min(1, startRatio + 0.25), startRatio, 1),
+      order: Number.isFinite(Number(item.order)) ? Number(item.order) : index,
+      canOverlap: Boolean(item.canOverlap),
+      syncWith: Array.isArray(item.syncWith) ? item.syncWith.map((entry: any) => safeText(entry, 120)).filter(Boolean).slice(0, 8) : undefined
+    };
+  }).slice(0, 24) : [];
+  const actors = Array.isArray(value.actors) ? value.actors.map((item: any) => ({
+    actorId: safeText(item?.actorId, 120),
+    role: roles.includes(item?.role) ? item.role : 'secondary',
+    name: safeText(item?.name, 120) || undefined,
+    actionType: normalizeSemanticActionType(item?.actionType)
+  })).filter((item) => item.actorId).slice(0, 12) : [];
+  const targets = Array.isArray(value.targets) ? value.targets.map((item: any) => ({
+    targetId: safeText(item?.targetId, 120),
+    targetType: targetTypes.includes(item?.targetType) ? item.targetType : 'point',
+    name: safeText(item?.name, 120) || undefined,
+    role: safeText(item?.role, 80) as InteractionTarget['role'] | undefined,
+    worldPosition: item?.worldPosition ? normalizeMotionDraftVec(item.worldPosition, vec(), -100, 100) : undefined
+  })).filter((item) => item.targetId).slice(0, 24) : [];
+  return {
+    version: 1,
+    sourcePrompt,
+    language: value.language === 'zh' || value.language === 'en' || value.language === 'mixed' ? value.language : 'unknown',
+    requirements,
+    constraints,
+    actors,
+    targets,
+    timeline,
+    unresolved: Array.isArray(value.unresolved) ? value.unresolved.map((item: any) => safeText(item, 160)).filter(Boolean).slice(0, 20) : [],
+    warnings: Array.isArray(value.warnings) ? value.warnings.map((item: any) => safeText(item, 240)).filter(Boolean).slice(0, 24) : [],
+    confidence: Number.isFinite(Number(value.confidence)) ? clampNumber(Number(value.confidence), 0, 1) : (requirements.length ? 0.72 : 0)
+  };
+}
+
+function normalizePropConstraints(value: any, durationFallback = 1.2): PropConstraint[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const durationSec = Math.max(0.2, durationFallback || 1.2);
+  const modes: PropConstraint['mode'][] = ['slide', 'roll', 'lift', 'carry', 'drop', 'fixed', 'blocked'];
+  const limbs: AnimationContactFrame['limb'][] = ['head', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot'];
+  const axes: PropConstraint['lockedAxes'][number][] = ['x', 'y', 'z', 'rotX', 'rotY', 'rotZ'];
+  const safeId = (raw: any) => typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 120) : undefined;
+  return value
+    .map((item: any, index: number): PropConstraint | null => {
+      const propId = safeId(item?.propId);
+      if (!propId) return null;
+      const startSec = clampNumber(Number.isFinite(Number(item.startSec)) ? Number(item.startSec) : 0, 0, durationSec);
+      const endSec = clampNumber(Number.isFinite(Number(item.endSec)) ? Number(item.endSec) : durationSec, startSec, durationSec);
+      const targetPath = Array.isArray(item.targetPath)
+        ? item.targetPath.map((point: any) => normalizeMotionDraftVec(point, vec(), -100, 100)).slice(0, 32)
+        : [];
+      return {
+        id: safeId(item.id) || `prop_constraint_${index + 1}`,
+        propId,
+        startSec,
+        endSec,
+        mode: modes.includes(item.mode) ? item.mode : 'slide',
+        driverActorId: safeId(item.driverActorId),
+        driverLimb: limbs.includes(item.driverLimb) ? item.driverLimb : undefined,
+        targetPath,
+        friction: clampNumber(Number.isFinite(Number(item.friction)) ? Number(item.friction) : 0.45, 0, 1),
+        massHint: clampNumber(Number.isFinite(Number(item.massHint)) ? Number(item.massHint) : 1, 0.1, 10),
+        lockedAxes: Array.isArray(item.lockedAxes) ? item.lockedAxes.filter((axis: any) => axes.includes(axis)).slice(0, 6) : [],
+        notes: Array.isArray(item.notes) ? item.notes.map((note: any) => String(note)).filter(Boolean).slice(0, 8) : []
+      };
+    })
+    .filter((item): item is PropConstraint => Boolean(item))
+    .slice(0, 32);
+}
+
 function normalizeMotionRefineHistory(value: any, durationFallback: number): MotionRefineHistoryEntry[] {
   if (!Array.isArray(value)) return [];
   return value.slice(-20).map((entry: any) => ({
@@ -3902,6 +5033,8 @@ function normalizeMotionRefineHistory(value: any, durationFallback: number): Mot
       usedReferenceAssetId: typeof entry?.requestSummary?.usedReferenceAssetId === 'string' ? entry.requestSummary.usedReferenceAssetId : undefined
     },
     motionIntent: normalizeMotionIntent(entry?.motionIntent, durationFallback),
+    motionDraft: normalizeMotionDraft(entry?.motionDraft, durationFallback),
+    interactionDraft: normalizeInteractionDraft(entry?.interactionDraft, durationFallback),
     error: typeof entry?.error === 'string' ? entry.error : undefined
   }));
 }
@@ -3922,7 +5055,7 @@ function normalizeMotionQualityReport(value: any): MotionQualityReport | undefin
     ? value.issues.slice(0, 32).map((issue: any): MotionQualityIssue => ({
         id: typeof issue?.id === 'string' ? issue.id : createId('quality'),
         severity: issue?.severity === 'error' || issue?.severity === 'warning' ? issue.severity : 'info',
-        metric: ['endpoint', 'speed', 'rotation', 'foot_lock', 'contact', 'pose', 'sequence'].includes(issue?.metric) ? issue.metric : 'pose',
+        metric: ['endpoint', 'speed', 'rotation', 'foot_lock', 'contact', 'pose', 'sequence', 'collision'].includes(issue?.metric) ? issue.metric : 'pose',
         message: typeof issue?.message === 'string' ? issue.message : '',
         timeSec: Number.isFinite(Number(issue?.timeSec)) ? Number(issue.timeSec) : undefined,
         value: Number.isFinite(Number(issue?.value)) ? Number(issue.value) : undefined
@@ -3976,8 +5109,251 @@ function normalizeMotionQualityReport(value: any): MotionQualityReport | undefin
       sequenceBoundarySmoothnessRatio: Number.isFinite(Number(metrics.sequenceBoundarySmoothnessRatio)) ? Number(metrics.sequenceBoundarySmoothnessRatio) : undefined,
       motionExpectationCount: Number.isFinite(Number(metrics.motionExpectationCount)) ? Number(metrics.motionExpectationCount) : undefined,
       motionExpectationFailedCount: Number.isFinite(Number(metrics.motionExpectationFailedCount)) ? Number(metrics.motionExpectationFailedCount) : undefined,
-      motionExpectationPassRatio: Number.isFinite(Number(metrics.motionExpectationPassRatio)) ? Number(metrics.motionExpectationPassRatio) : undefined
+      motionExpectationPassRatio: Number.isFinite(Number(metrics.motionExpectationPassRatio)) ? Number(metrics.motionExpectationPassRatio) : undefined,
+      ikHandTargetMaxDistance: Number.isFinite(Number(metrics.ikHandTargetMaxDistance)) ? Number(metrics.ikHandTargetMaxDistance) : undefined,
+      ikFootPlantDrift: Number.isFinite(Number(metrics.ikFootPlantDrift)) ? Number(metrics.ikFootPlantDrift) : undefined,
+      ikHandoffSyncDistance: Number.isFinite(Number(metrics.ikHandoffSyncDistance)) ? Number(metrics.ikHandoffSyncDistance) : undefined,
+      ikPropContactDistance: Number.isFinite(Number(metrics.ikPropContactDistance)) ? Number(metrics.ikPropContactDistance) : undefined,
+      retargetConfidence: Number.isFinite(Number(metrics.retargetConfidence)) ? Number(metrics.retargetConfidence) : undefined,
+      colliderPenetrationCount: Number.isFinite(Number(metrics.colliderPenetrationCount)) ? Number(metrics.colliderPenetrationCount) : undefined,
+      maxPenetrationDepth: Number.isFinite(Number(metrics.maxPenetrationDepth)) ? Number(metrics.maxPenetrationDepth) : undefined,
+      propContactSuccessRatio: Number.isFinite(Number(metrics.propContactSuccessRatio)) ? Number(metrics.propContactSuccessRatio) : undefined,
+      obstacleAvoidanceSuccess: Number.isFinite(Number(metrics.obstacleAvoidanceSuccess)) ? Number(metrics.obstacleAvoidanceSuccess) : undefined,
+      propConstraintMotionDistance: Number.isFinite(Number(metrics.propConstraintMotionDistance)) ? Number(metrics.propConstraintMotionDistance) : undefined,
+      characterOverlapCount: Number.isFinite(Number(metrics.characterOverlapCount)) ? Number(metrics.characterOverlapCount) : undefined,
+      groundViolationCount: Number.isFinite(Number(metrics.groundViolationCount)) ? Number(metrics.groundViolationCount) : undefined
     }
+  };
+}
+
+function normalizePromptAdherenceReport(value: any): PromptAdherenceReport | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  const validJoint = (joint: any): PoseJointKey | null => {
+    const key = String(joint || '');
+    return POSE_KEYS.includes(key as PoseJointKey) ? key as PoseJointKey : null;
+  };
+  const requirementResults = Array.isArray(value.requirementResults)
+    ? value.requirementResults.map((item: any): PromptAdherenceRequirementResult | null => {
+        const requirementId = typeof item?.requirementId === 'string' ? item.requirementId : '';
+        const text = typeof item?.text === 'string' ? item.text : '';
+        if (!requirementId || !text) return null;
+        return {
+          requirementId,
+          text,
+          priority: item.priority === 'low' || item.priority === 'normal' || item.priority === 'high' ? item.priority : undefined,
+          passed: Boolean(item.passed),
+          evidence: Array.isArray(item.evidence) ? item.evidence.map((entry: any) => String(entry)).filter(Boolean).slice(0, 8) : [],
+          failedReason: typeof item.failedReason === 'string' ? item.failedReason : undefined,
+          relatedFrames: Array.isArray(item.relatedFrames) ? item.relatedFrames.map((entry: any) => Number(entry)).filter(Number.isFinite).slice(0, 12) : [],
+          relatedJoints: Array.isArray(item.relatedJoints) ? item.relatedJoints.map(validJoint).filter(Boolean).slice(0, 12) as PoseJointKey[] : [],
+          relatedContacts: normalizeMotionContacts(item.relatedContacts),
+          suggestedFix: typeof item.suggestedFix === 'string' ? item.suggestedFix : undefined
+        };
+      }).filter((item): item is PromptAdherenceRequirementResult => Boolean(item)).slice(0, 30)
+    : [];
+  return {
+    version: 1,
+    checkedAt: typeof value.checkedAt === 'string' ? value.checkedAt : new Date().toISOString(),
+    score: Number.isFinite(Number(value.score)) ? clampNumber(Number(value.score), 0, 100) : 0,
+    requirementResults,
+    missingRequirements: Array.isArray(value.missingRequirements) ? value.missingRequirements.map((item: any) => String(item)).filter(Boolean).slice(0, 20) : [],
+    correctionHints: Array.isArray(value.correctionHints) ? value.correctionHints.map((item: any) => String(item)).filter(Boolean).slice(0, 20) : [],
+    warnings: Array.isArray(value.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 20) : []
+  };
+}
+
+function normalizeNegativeConstraintReport(value: any): NegativeConstraintReport | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  const types: NegativeMotionConstraint['type'][] = ['no_airborne', 'no_collision', 'no_penetration', 'no_foot_slide', 'no_target_ignore', 'no_static_actor', 'no_endpoint_override', 'no_manual_keyframe_override', 'no_unmapped_actor', 'no_unreachable_contact', 'no_extreme_joint_rotation', 'no_camera_jump', 'no_prop_teleport'];
+  const severities: NegativeMotionConstraint['severity'][] = ['error', 'warning', 'info'];
+  return {
+    version: 1,
+    checkedAt: typeof value.checkedAt === 'string' ? value.checkedAt : new Date().toISOString(),
+    violations: Array.isArray(value.violations)
+      ? value.violations.map((item: any, index: number): NegativeConstraintViolation | null => {
+          if (!types.includes(item?.type)) return null;
+          return {
+            constraintId: typeof item.constraintId === 'string' ? item.constraintId : `negative_${index + 1}`,
+            type: item.type,
+            severity: severities.includes(item.severity) ? item.severity : 'warning',
+            timeSec: Number.isFinite(Number(item.timeSec)) ? Number(item.timeSec) : undefined,
+            actorId: typeof item.actorId === 'string' ? item.actorId : undefined,
+            targetId: typeof item.targetId === 'string' ? item.targetId : undefined,
+            measuredValue: Number.isFinite(Number(item.measuredValue)) ? Number(item.measuredValue) : undefined,
+            threshold: Number.isFinite(Number(item.threshold)) ? Number(item.threshold) : undefined,
+            message: typeof item.message === 'string' ? item.message : '',
+            suggestedFix: typeof item.suggestedFix === 'string' ? item.suggestedFix : undefined
+          };
+        }).filter((item): item is NegativeConstraintViolation => Boolean(item)).slice(0, 80)
+      : [],
+    blockedCorrections: Array.isArray(value.blockedCorrections) ? value.blockedCorrections.map((item: any) => String(item)).filter(Boolean).slice(0, 40) : [],
+    scorePenalty: Number.isFinite(Number(value.scorePenalty)) ? clampNumber(Number(value.scorePenalty), 0, 100) : 0,
+    warnings: Array.isArray(value.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 40) : []
+  };
+}
+
+function normalizeMotionStyleTag(value: any, index = 0): MotionStyleTag | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const categories: MotionStyleTagCategory[] = ['realism', 'energy', 'weight', 'speed', 'emotion', 'cinematic', 'impact', 'caution', 'precision'];
+  const scopes: MotionStyleApplyScope[] = ['whole_body', 'upper_body', 'lower_body', 'hands', 'feet', 'root', 'camera'];
+  const text = typeof value.text === 'string' ? value.text.trim() : '';
+  if (!text) return undefined;
+  const startRatio = Number.isFinite(Number(value.startRatio)) ? clamp01(Number(value.startRatio)) : 0;
+  const endRatio = Number.isFinite(Number(value.endRatio)) ? clampNumber(Number(value.endRatio), startRatio, 1) : 1;
+  return {
+    id: typeof value.id === 'string' ? value.id : `style_tag_${index + 1}`,
+    text: text.slice(0, 120),
+    category: categories.includes(value.category) ? value.category : 'energy',
+    strength: Number.isFinite(Number(value.strength)) ? clampNumber(Number(value.strength), 0, 1) : 0.55,
+    appliesTo: scopes.includes(value.appliesTo) ? value.appliesTo : 'whole_body',
+    startRatio,
+    endRatio
+  };
+}
+
+function normalizeMotionStyleProfile(value: any): MotionStyleProfile | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const sources: MotionStyleProfile['source'][] = ['prompt', 'local', 'ai', 'default'];
+  const tags = Array.isArray(value.tags)
+    ? value.tags.map(normalizeMotionStyleTag).filter((item): item is MotionStyleTag => Boolean(item)).slice(0, 32)
+    : [];
+  const scalar = (key: keyof MotionStyleProfile, fallback: number, min = 0, max = 1) => {
+    const raw = Number((value as any)[key]);
+    return Number.isFinite(raw) ? Number(clampNumber(raw, min, max).toFixed(3)) : fallback;
+  };
+  return {
+    id: typeof value.id === 'string' ? value.id : 'motion_style_default',
+    label: typeof value.label === 'string' ? value.label : 'Default motion style',
+    source: sources.includes(value.source) ? value.source : 'default',
+    realism: scalar('realism', 0.72),
+    exaggeration: scalar('exaggeration', 0.18),
+    energy: scalar('energy', 0.5),
+    weight: scalar('weight', 0.5),
+    speed: scalar('speed', 0.5),
+    fluidity: scalar('fluidity', 0.55),
+    tension: scalar('tension', 0.22),
+    precision: scalar('precision', 0.62),
+    impact: scalar('impact', 0.24),
+    softness: scalar('softness', 0.45),
+    cameraIntensity: scalar('cameraIntensity', 0.45),
+    timingScale: scalar('timingScale', 1, 0.45, 1.65),
+    poseAmplitudeScale: scalar('poseAmplitudeScale', 1, 0.45, 1.45),
+    rootMotionScale: scalar('rootMotionScale', 1, 0.45, 1.45),
+    armSwingScale: scalar('armSwingScale', 1, 0.35, 1.6),
+    legStrideScale: scalar('legStrideScale', 1, 0.35, 1.6),
+    crouchScale: scalar('crouchScale', 1, 0.45, 1.6),
+    verticalLiftScale: scalar('verticalLiftScale', 1, 0.35, 1.45),
+    recoveryScale: scalar('recoveryScale', 1, 0.45, 1.55),
+    contactHoldScale: scalar('contactHoldScale', 1, 0.45, 1.8),
+    tags,
+    warnings: Array.isArray(value.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 32) : [],
+    confidence: scalar('confidence', tags.length ? 0.65 : 0.35)
+  };
+}
+
+function normalizeMotionEvidenceBundle(value: any): MotionEvidenceBundle | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  const evidenceTypes: MotionEvidenceType[] = ['root_motion', 'joint_delta', 'limb_contact', 'foot_contact', 'hand_target_distance', 'prop_motion', 'actor_distance_change', 'camera_motion', 'collision_absence', 'phase_coverage', 'skill_step_active', 'ik_target_reached', 'release_event', 'recover_event', 'constraint_violation'];
+  const sources: MotionEvidenceSource[] = ['samples', 'contacts', 'cameraSamples', 'propMotions', 'collision', 'ik', 'phasePlan', 'skillSequence', 'qualityReport'];
+  const evidences = Array.isArray(value.evidences)
+    ? value.evidences.map((item: any): MotionEvidence | null => {
+        if (!item || typeof item !== 'object' || !evidenceTypes.includes(item.type) || !sources.includes(item.source)) return null;
+        return {
+          id: typeof item.id === 'string' ? item.id : createId('evidence'),
+          type: item.type,
+          requirementId: typeof item.requirementId === 'string' ? item.requirementId : undefined,
+          actorId: typeof item.actorId === 'string' ? item.actorId : undefined,
+          targetId: typeof item.targetId === 'string' ? item.targetId : undefined,
+          bodyPart: typeof item.bodyPart === 'string' ? item.bodyPart : undefined,
+          startSec: Number.isFinite(Number(item.startSec)) ? Number(item.startSec) : undefined,
+          endSec: Number.isFinite(Number(item.endSec)) ? Number(item.endSec) : undefined,
+          timeSec: Number.isFinite(Number(item.timeSec)) ? Number(item.timeSec) : undefined,
+          measuredValue: Number.isFinite(Number(item.measuredValue)) ? Number(item.measuredValue) : undefined,
+          threshold: Number.isFinite(Number(item.threshold)) ? Number(item.threshold) : undefined,
+          passed: Boolean(item.passed),
+          confidence: Number.isFinite(Number(item.confidence)) ? clampNumber(Number(item.confidence), 0, 1) : 0.5,
+          source: item.source,
+          message: typeof item.message === 'string' ? item.message : '',
+          rawRef: item.rawRef && typeof item.rawRef === 'object'
+            ? {
+                kind: String(item.rawRef.kind || 'unknown'),
+                id: typeof item.rawRef.id === 'string' ? item.rawRef.id : undefined,
+                metric: typeof item.rawRef.metric === 'string' ? item.rawRef.metric : undefined
+              }
+            : undefined
+        };
+      }).filter((item): item is MotionEvidence => Boolean(item)).slice(0, 240)
+    : [];
+  const requirementCoverage = Array.isArray(value.requirementCoverage)
+    ? value.requirementCoverage.map((item: any): RequirementCoverage | null => {
+        if (!item || typeof item.requirementId !== 'string') return null;
+        return {
+          requirementId: item.requirementId,
+          passed: Boolean(item.passed),
+          evidenceIds: Array.isArray(item.evidenceIds) ? item.evidenceIds.map((id: any) => String(id)).filter(Boolean).slice(0, 24) : [],
+          missingEvidenceTypes: Array.isArray(item.missingEvidenceTypes) ? item.missingEvidenceTypes.filter((type: any) => evidenceTypes.includes(type)).slice(0, 16) : [],
+          score: Number.isFinite(Number(item.score)) ? clampNumber(Number(item.score), 0, 100) : 0,
+          reason: typeof item.reason === 'string' ? item.reason : ''
+        };
+      }).filter((item): item is RequirementCoverage => Boolean(item)).slice(0, 80)
+    : [];
+  return {
+    version: 1,
+    generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : new Date().toISOString(),
+    transitionId: typeof value.transitionId === 'string' ? value.transitionId : '',
+    evidences,
+    requirementCoverage,
+    warnings: Array.isArray(value.warnings) ? value.warnings.map((item: any) => String(item)).filter(Boolean).slice(0, 40) : []
+  };
+}
+
+function normalizeLocalResolveResult(value: any): LocalResolveResult | undefined {
+  if (!value || typeof value !== 'object' || value.version !== 1) return undefined;
+  const sources: LocalResolveRegion['source'][] = ['promptAdherence', 'evidence', 'negativeConstraint', 'quality'];
+  const patchTypes: LocalResolvePatch['type'][] = ['transform_keyframe', 'bone_keyframe', 'ik_constraint', 'contact_frame', 'prop_constraint', 'camera_sequence', 'skill_weight', 'phase_timing', 'warning_only'];
+  const normalizeStringArray = (items: any, limit = 24) => Array.isArray(items) ? items.map((item: any) => String(item)).filter(Boolean).slice(0, limit) : [];
+  const normalizeRegion = (item: any, index: number): LocalResolveRegion | null => {
+    if (!item || typeof item !== 'object') return null;
+    return {
+      id: typeof item.id === 'string' ? item.id : `local_region_${index + 1}`,
+      requirementIds: normalizeStringArray(item.requirementIds),
+      reason: typeof item.reason === 'string' ? item.reason : '',
+      startSec: Number.isFinite(Number(item.startSec)) ? Number(item.startSec) : 0,
+      endSec: Number.isFinite(Number(item.endSec)) ? Number(item.endSec) : 0,
+      affectedActorIds: normalizeStringArray(item.affectedActorIds),
+      affectedTargetIds: normalizeStringArray(item.affectedTargetIds),
+      affectedJoints: Array.isArray(item.affectedJoints) ? item.affectedJoints.filter((joint: any) => POSE_KEYS.includes(joint)).slice(0, 20) : [],
+      affectedBodyParts: Array.isArray(item.affectedBodyParts) ? item.affectedBodyParts.map((part: any) => String(part)).filter(Boolean).slice(0, 12) as AnimationContactFrame['limb'][] : [],
+      affectedSkillStepIds: normalizeStringArray(item.affectedSkillStepIds),
+      affectedContactIds: normalizeStringArray(item.affectedContactIds),
+      priority: Number.isFinite(Number(item.priority)) ? clampNumber(Number(item.priority), 0, 100) : 50,
+      lockedBoundaries: normalizeStringArray(item.lockedBoundaries),
+      source: sources.includes(item.source) ? item.source : 'evidence'
+    };
+  };
+  const normalizePatch = (item: any, index: number): LocalResolvePatch | null => {
+    if (!item || typeof item !== 'object' || !patchTypes.includes(item.type)) return null;
+    return {
+      id: typeof item.id === 'string' ? item.id : `local_patch_${index + 1}`,
+      regionId: typeof item.regionId === 'string' ? item.regionId : '',
+      type: item.type,
+      startSec: Number.isFinite(Number(item.startSec)) ? Number(item.startSec) : 0,
+      endSec: Number.isFinite(Number(item.endSec)) ? Number(item.endSec) : 0,
+      payload: item.payload,
+      reason: typeof item.reason === 'string' ? item.reason : '',
+      blockedByConstraints: normalizeStringArray(item.blockedByConstraints),
+      warnings: normalizeStringArray(item.warnings)
+    };
+  };
+  return {
+    version: 1,
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
+    regions: Array.isArray(value.regions) ? value.regions.map(normalizeRegion).filter((item): item is LocalResolveRegion => Boolean(item)).slice(0, 40) : [],
+    patches: Array.isArray(value.patches) ? value.patches.map(normalizePatch).filter((item): item is LocalResolvePatch => Boolean(item)).slice(0, 80) : [],
+    appliedPatchIds: normalizeStringArray(value.appliedPatchIds, 80),
+    blockedPatchIds: normalizeStringArray(value.blockedPatchIds, 80),
+    warnings: normalizeStringArray(value.warnings, 40),
+    confidence: Number.isFinite(Number(value.confidence)) ? clampNumber(Number(value.confidence), 0, 1) : 0
   };
 }
 
@@ -3993,9 +5369,18 @@ function normalizeTransition(value: any): PoseTransition | null {
     aiActionIntent: typeof value.aiActionIntent === 'string' ? value.aiActionIntent : undefined,
     generatedMotionPrompt: typeof value.generatedMotionPrompt === 'string' ? value.generatedMotionPrompt : undefined,
     motionIntent: normalizeMotionIntent(value.motionIntent, durationSec),
+    motionDraft: normalizeMotionDraft(value.motionDraft, durationSec),
+    interactionDraft: normalizeInteractionDraft(value.interactionDraft, durationSec),
+    promptRequirementGraph: normalizePromptRequirementGraph(value.promptRequirementGraph, durationSec),
+    propConstraints: normalizePropConstraints(value.propConstraints, durationSec),
     motionRefineHistory: normalizeMotionRefineHistory(value.motionRefineHistory, durationSec),
     regenerateLockScope: normalizeRegenerateLockScope(value.regenerateLockScope),
     qualityReport: normalizeMotionQualityReport(value.qualityReport),
+    promptAdherenceReport: normalizePromptAdherenceReport(value.promptAdherenceReport),
+    negativeConstraintReport: normalizeNegativeConstraintReport(value.negativeConstraintReport),
+    motionStyleProfile: normalizeMotionStyleProfile(value.motionStyleProfile),
+    motionEvidenceBundle: normalizeMotionEvidenceBundle(value.motionEvidenceBundle),
+    localResolveResult: normalizeLocalResolveResult(value.localResolveResult),
     constraints: normalizeConstraints(value.constraints),
     durationSec,
     curve: CURVE_OPTIONS.includes(value.curve) ? value.curve : 'linear',
@@ -4031,6 +5416,8 @@ function createHistorySnapshot(scene: Scene3DState): Scene3DHistorySnapshot {
     activeCameraId: scene.activeCameraId,
     selectedObjectId: scene.selectedObjectId,
     activeViewMode: scene.activeViewMode,
+    directorViewTarget: scene.directorViewTarget,
+    directorViewFocusNonce: scene.directorViewFocusNonce,
     activeTransitionId: scene.activeTransitionId,
     aspectRatio: scene.aspectRatio,
     gridSnapEnabled: scene.gridSnapEnabled,
@@ -4195,6 +5582,8 @@ function normalizeScene(value: any): Scene3DState {
     selectedObjectId: typeof value.selectedObjectId === 'string' ? value.selectedObjectId : fallback.selectedObjectId,
     activeCameraId,
     activeViewMode: value.activeViewMode === 'camera' ? 'camera' : 'director',
+    directorViewTarget: normalizeVec(value.directorViewTarget, fallback.directorViewTarget || DEFAULT_DIRECTOR_VIEW_TARGET),
+    directorViewFocusNonce: Number.isFinite(Number(value.directorViewFocusNonce)) ? Number(value.directorViewFocusNonce) : fallback.directorViewFocusNonce,
     transformMode: value.transformMode === 'rotate' || value.transformMode === 'scale' ? value.transformMode : 'translate',
     aspectRatio: typeof value.aspectRatio === 'string' ? value.aspectRatio : '16:9',
     gridSnapEnabled: Boolean(value.gridSnapEnabled),
@@ -4550,6 +5939,7 @@ function sampleTimesForKeyframeTrack(durationSec: number, sampleCount: number, k
     times.set(timeSec.toFixed(4), timeSec);
   }
   keyframeTrack.forEach((frame) => {
+    if (isMotionDraftKeyframe(frame)) return;
     const timeSec = Number(clampNumber(frame.timeSec, 0, durationSec).toFixed(4));
     times.set(timeSec.toFixed(4), timeSec);
   });
@@ -4558,6 +5948,14 @@ function sampleTimesForKeyframeTrack(durationSec: number, sampleCount: number, k
 
 function exactKeyframeAtTime(keyframeTrack: TransitionKeyframe[], timeSec: number) {
   return keyframeTrack.find((frame) => Math.abs(frame.timeSec - timeSec) <= 0.0006);
+}
+
+function isMotionDraftKeyframe(frame: TransitionKeyframe) {
+  return frame.id.startsWith('motion_draft_') || frame.label.startsWith('AI') || /AI MotionDraft/i.test(frame.note || '');
+}
+
+function isManualMiddleKeyframe(frame: TransitionKeyframe, durationSec: number) {
+  return frame.timeSec > 0 && frame.timeSec < durationSec && !isMotionDraftKeyframe(frame);
 }
 
 function animationSampleFromKeyframe(frame: TransitionKeyframe, timeSec = frame.timeSec): AnimationClipSample {
@@ -4576,7 +5974,7 @@ function restoreExplicitMiddleKeyframeSamples(samples: AnimationClipSample[], tr
   if (!samples.length || !transition.keyframes.length) return samples;
   const durationSec = Math.max(0.1, transition.durationSec || samples[samples.length - 1].timeSec || 1);
   const middleKeyframes = normalizeTransitionKeyframes(transition.keyframes, durationSec)
-    .filter((frame) => frame.timeSec > 0 && frame.timeSec < durationSec);
+    .filter((frame) => isManualMiddleKeyframe(frame, durationSec));
   if (!middleKeyframes.length) return samples;
 
   const next = samples.map(cloneAnimationSample);
@@ -4593,9 +5991,406 @@ function restoreExplicitMiddleKeyframeSamples(samples: AnimationClipSample[], tr
   return next.sort((a, b) => a.timeSec - b.timeSec);
 }
 
-function explicitMiddleKeyframeTimes(transition: PoseTransition, durationSec: number) {
+const MOTION_DRAFT_ENDPOINT_EPSILON_SEC = 0.001;
+const MOTION_DRAFT_MANUAL_KEYFRAME_EPSILON_SEC = 0.045;
+
+type MotionDraftKeyframeCompileResult = {
+  keyframes: TransitionKeyframe[];
+  notes: string[];
+  warnings: string[];
+};
+
+function motionDraftPhaseLabel(motionDraft: MotionDraft, phaseId?: string) {
+  if (!phaseId) return '';
+  return motionDraft.phasePlan.find((phase) => phase.id === phaseId)?.label || phaseId;
+}
+
+function safeMotionDraftTime(timeSec: number, durationSec: number) {
+  if (!Number.isFinite(timeSec)) return undefined;
+  return clampNumber(timeSec, MOTION_DRAFT_ENDPOINT_EPSILON_SEC, Math.max(MOTION_DRAFT_ENDPOINT_EPSILON_SEC, durationSec - MOTION_DRAFT_ENDPOINT_EPSILON_SEC));
+}
+
+function motionDraftManualKeyframeAt(transition: PoseTransition, durationSec: number, timeSec: number) {
   return normalizeTransitionKeyframes(transition.keyframes, durationSec)
     .filter((frame) => frame.timeSec > 0 && frame.timeSec < durationSec)
+    .find((frame) => Math.abs(frame.timeSec - timeSec) <= MOTION_DRAFT_MANUAL_KEYFRAME_EPSILON_SEC);
+}
+
+function motionDraftHardKeyframeTrack(transition: PoseTransition, durationSec: number) {
+  return transitionKeyframeTrack(
+    {
+      ...transition,
+      keyframes: normalizeTransitionKeyframes(transition.keyframes, durationSec)
+        .filter((frame) => isManualMiddleKeyframe(frame, durationSec))
+    },
+    durationSec
+  );
+}
+
+function motionDraftHardSegmentAt(transition: PoseTransition, durationSec: number, timeSec: number) {
+  return keyframeSegmentAt(motionDraftHardKeyframeTrack(transition, durationSec), timeSec);
+}
+
+function motionDraftBaseKeyframeAt(transition: PoseTransition, durationSec: number, timeSec: number): TransitionKeyframe {
+  const segment = motionDraftHardSegmentAt(transition, durationSec, timeSec);
+  const sample = interpolateKeyframeSample(segment.from, segment.to, segment.localT, timeSec);
+  return {
+    id: createId('motion_draft_frame'),
+    label: 'AI MotionDraft',
+    timeSec: Number(timeSec.toFixed(4)),
+    transform: sample.transform,
+    pose: sample.pose,
+    bonePose: sample.bonePose,
+    fingerPose: sample.fingerPose || cloneFingerPose(segment.from.fingerPose) || cloneFingerPose(segment.to.fingerPose) || FINGER_POSE_RELAXED,
+    toePose: sample.toePose || cloneToePose(segment.from.toePose) || cloneToePose(segment.to.toePose) || TOE_POSE_NEUTRAL,
+    libTvJointAngles: sample.libTvJointAngles
+  };
+}
+
+function clampMotionDraftPosition(value: Vec3, base: Vec3, start: Vec3, end: Vec3) {
+  const minX = Math.min(start.x, end.x, base.x) - 5;
+  const maxX = Math.max(start.x, end.x, base.x) + 5;
+  const minY = Math.min(start.y, end.y, base.y) - 2;
+  const maxY = Math.max(start.y, end.y, base.y) + 3;
+  const minZ = Math.min(start.z, end.z, base.z) - 5;
+  const maxZ = Math.max(start.z, end.z, base.z) + 5;
+  return vec(
+    clampNumber(value.x, minX, maxX),
+    clampNumber(value.y, minY, maxY),
+    clampNumber(value.z, minZ, maxZ)
+  );
+}
+
+function clampMotionDraftRotation(value: Vec3, base: Vec3) {
+  return vec(
+    clampNumber(value.x, Math.max(-180, base.x - 160), Math.min(180, base.x + 160)),
+    clampNumber(value.y, Math.max(-180, base.y - 180), Math.min(180, base.y + 180)),
+    clampNumber(value.z, Math.max(-180, base.z - 160), Math.min(180, base.z + 160))
+  );
+}
+
+function alignMotionDraftLocomotionPosition(
+  transition: PoseTransition,
+  durationSec: number,
+  timeSec: number,
+  position: Vec3,
+  base: Vec3,
+  start: Vec3,
+  end: Vec3
+) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType)) return { position, corrected: false };
+  const travelX = end.x - start.x;
+  const travelZ = end.z - start.z;
+  const travelDistance = Math.hypot(travelX, travelZ);
+  if (travelDistance < 0.35) return { position, corrected: false };
+  const ratio = clamp01(timeSec / Math.max(0.001, durationSec));
+  const directionX = travelX / travelDistance;
+  const directionZ = travelZ / travelDistance;
+  const perpendicularX = -directionZ;
+  const perpendicularZ = directionX;
+  const relativeX = position.x - start.x;
+  const relativeZ = position.z - start.z;
+  const projection = relativeX * directionX + relativeZ * directionZ;
+  const lateral = relativeX * perpendicularX + relativeZ * perpendicularZ;
+  const expectedProjection = travelDistance * ratio;
+  const projectionDrift = Math.abs(projection - expectedProjection);
+  const lateralDrift = Math.abs(lateral);
+  const projectionLimit = Math.max(0.42, travelDistance * 0.18);
+  const lateralLimit = Math.max(0.28, travelDistance * 0.1);
+  if (projectionDrift <= projectionLimit && lateralDrift <= lateralLimit) return { position, corrected: false };
+  return {
+    position: vec(base.x, position.y, base.z),
+    corrected: true
+  };
+}
+
+function buildMotionDraftKeyframePlan(
+  transition: PoseTransition,
+  motionDraft?: MotionDraft,
+  options?: { jointProfile?: Scene3DJointAxisProfile; negativeConstraints?: NegativeMotionConstraint[] }
+): MotionDraftKeyframeCompileResult {
+  if (!motionDraft) return { keyframes: [], notes: [], warnings: [] };
+  const durationSec = Math.max(0.1, transition.durationSec || motionDraft.durationSec || 1);
+  const negativeConstraints = options?.negativeConstraints || [];
+  const noAirborneConstraint = negativeConstraints.find((constraint) => constraint.type === 'no_airborne');
+  type MotionDraftKeyframeBucket = {
+    timeSec: number;
+    transform?: MotionDraftTransformKeyframe;
+    bones: MotionDraftBoneKeyframe[];
+    phaseId?: string;
+    notes: string[];
+  };
+  const buckets: MotionDraftKeyframeBucket[] = [];
+  const warnings: string[] = [];
+  const notes: string[] = [];
+  const addBucket = (timeSec: number, sourceNote: string, phaseId?: string) => {
+    const existing = buckets.find((bucket) => Math.abs(bucket.timeSec - timeSec) <= MOTION_DRAFT_MANUAL_KEYFRAME_EPSILON_SEC);
+    if (existing) {
+      existing.notes.push(sourceNote);
+      if (!existing.phaseId && phaseId) existing.phaseId = phaseId;
+      return existing;
+    }
+    const bucket: MotionDraftKeyframeBucket = { timeSec, bones: [], phaseId, notes: [sourceNote] };
+    buckets.push(bucket);
+    return bucket;
+  };
+
+  for (const keyframe of motionDraft.transformKeyframes) {
+    const safeTime = safeMotionDraftTime(keyframe.timeSec, durationSec);
+    if (safeTime === undefined) continue;
+    if (Math.abs(safeTime - keyframe.timeSec) > 0.0001) {
+      warnings.push(`MotionDraft 根节点关键帧 ${keyframe.id} 过于接近首尾帧，已夹到 ${safeTime.toFixed(3)}s。`);
+    }
+    const manualFrame = motionDraftManualKeyframeAt(transition, durationSec, safeTime);
+    if (manualFrame) {
+      warnings.push(`MotionDraft 根节点关键帧 ${safeTime.toFixed(2)}s 接近手动中间帧「${manualFrame.label}」，已保留手动帧。`);
+      continue;
+    }
+    const bucket = addBucket(safeTime, keyframe.note || motionDraftPhaseLabel(motionDraft, keyframe.phaseId) || '根节点规划', keyframe.phaseId);
+    bucket.transform = keyframe;
+  }
+
+  for (const keyframe of motionDraft.boneKeyframes) {
+    const safeTime = safeMotionDraftTime(keyframe.timeSec, durationSec);
+    if (safeTime === undefined) continue;
+    if (Math.abs(safeTime - keyframe.timeSec) > 0.0001) {
+      warnings.push(`MotionDraft 骨骼关键帧 ${keyframe.id} 过于接近首尾帧，已夹到 ${safeTime.toFixed(3)}s。`);
+    }
+    const manualFrame = motionDraftManualKeyframeAt(transition, durationSec, safeTime);
+    if (manualFrame) {
+      warnings.push(`MotionDraft 骨骼关键帧 ${safeTime.toFixed(2)}s 接近手动中间帧「${manualFrame.label}」，已保留手动帧。`);
+      continue;
+    }
+    const bucket = addBucket(safeTime, keyframe.note || `${keyframe.joint} 局部姿势规划`, keyframe.phaseId);
+    bucket.bones.push(keyframe);
+  }
+
+  const keyframes = buckets
+    .filter((bucket) => bucket.transform || bucket.bones.length)
+    .sort((a, b) => a.timeSec - b.timeSec)
+    .map((bucket, index): TransitionKeyframe => {
+      const base = motionDraftBaseKeyframeAt(transition, durationSec, bucket.timeSec);
+      const hardSegment = motionDraftHardSegmentAt(transition, durationSec, bucket.timeSec);
+      const segmentStartTransform = hardSegment.from.transform;
+      const segmentEndTransform = hardSegment.to.transform;
+      const transform = clonePoseTransform(base.transform);
+      if (bucket.transform?.position) {
+        transform.position = clampMotionDraftPosition(bucket.transform.position, transform.position, segmentStartTransform.position, segmentEndTransform.position);
+        const aligned = alignMotionDraftLocomotionPosition(
+          transition,
+          Math.max(0.001, hardSegment.to.timeSec - hardSegment.from.timeSec),
+          bucket.timeSec - hardSegment.from.timeSec,
+          transform.position,
+          base.transform.position,
+          segmentStartTransform.position,
+          segmentEndTransform.position
+        );
+        if (aligned.corrected) {
+          transform.position = aligned.position;
+          warnings.push(`MotionDraft 根节点关键帧 ${bucket.timeSec.toFixed(2)}s 偏离走跑首尾轨迹，已按首尾帧重新对齐。`);
+        }
+        if (noAirborneConstraint) {
+          const baseY = lerp(segmentStartTransform.position.y, segmentEndTransform.position.y, hardSegment.localT);
+          const maxLift = noAirborneConstraint.threshold ?? 0.08;
+          const clampedY = clampNumber(transform.position.y, baseY - 0.18, baseY + maxLift);
+          if (Math.abs(clampedY - transform.position.y) > 0.0001) {
+            transform.position.y = clampedY;
+            warnings.push(`负向约束 no_airborne 已限制 MotionDraft 根节点 ${bucket.timeSec.toFixed(2)}s 的离地高度。`);
+          }
+        }
+        if (transform.position.x !== bucket.transform.position.x || transform.position.y !== bucket.transform.position.y || transform.position.z !== bucket.transform.position.z) {
+          warnings.push(`MotionDraft 根节点位置 ${bucket.timeSec.toFixed(2)}s 超出安全范围，已限制位移。`);
+        }
+      }
+      if (bucket.transform?.rotation) {
+        transform.rotation = clampMotionDraftRotation(bucket.transform.rotation, transform.rotation);
+        if (transform.rotation.x !== bucket.transform.rotation.x || transform.rotation.y !== bucket.transform.rotation.y || transform.rotation.z !== bucket.transform.rotation.z) {
+          warnings.push(`MotionDraft 根节点旋转 ${bucket.timeSec.toFixed(2)}s 超出安全范围，已限制旋转。`);
+        }
+      }
+      if (bucket.transform?.scale) {
+        transform.scale = vec(
+          clampNumber(bucket.transform.scale.x, 0.05, 20),
+          clampNumber(bucket.transform.scale.y, 0.05, 20),
+          clampNumber(bucket.transform.scale.z, 0.05, 20)
+        );
+      }
+      let pose = clonePose(base.pose);
+      for (const bone of bucket.bones) {
+        if (!POSE_KEYS.includes(bone.joint)) {
+          warnings.push(`MotionDraft 骨骼关键帧 ${bone.id} 使用了不支持的关节 ${bone.joint}，已忽略。`);
+          continue;
+        }
+        pose[bone.joint] = { ...bone.rotation };
+      }
+      if (transition.constraints.jointLimitsEnabled) {
+        const before = clonePose(pose);
+        pose = clampPoseWithJointProfile(pose, options?.jointProfile);
+        for (const joint of POSE_KEYS) {
+          if (
+            before[joint].x !== pose[joint].x ||
+            before[joint].y !== pose[joint].y ||
+            before[joint].z !== pose[joint].z
+          ) {
+            warnings.push(`MotionDraft ${joint} 在 ${bucket.timeSec.toFixed(2)}s 超出关节限制，已按关节范围修正。`);
+            break;
+          }
+        }
+      }
+      const phaseLabel = motionDraftPhaseLabel(motionDraft, bucket.phaseId);
+      const note = [`AI MotionDraft${phaseLabel ? `: ${phaseLabel}` : ''}`, ...bucket.notes].filter(Boolean).join(' / ');
+      return {
+        ...base,
+        id: createId(`motion_draft_${index + 1}`),
+        label: phaseLabel || `AI中间帧 ${index + 1}`,
+        timeSec: Number(bucket.timeSec.toFixed(4)),
+        transform,
+        pose,
+        note
+      };
+    });
+
+  if ((motionDraft.transformKeyframes.length || motionDraft.boneKeyframes.length) && !keyframes.length) {
+    warnings.push('MotionDraft 没有生成可用的中间关键帧，已继续使用首尾帧和手动中间帧。');
+  } else if (motionDraft.promptRequirements.length && keyframes.length < Math.min(2, motionDraft.promptRequirements.length)) {
+    warnings.push('MotionDraft 中间关键帧数量偏少，可能不足以覆盖动作提示词中的全部要求。');
+  }
+
+  const coveredRequirementIds = new Set<string>();
+  motionDraft.promptRequirementMap.forEach((item) => {
+    if (item.appliedTo.length) coveredRequirementIds.add(item.requirementId);
+  });
+  motionDraft.phasePlan.forEach((phase) => phase.requirementIds?.forEach((id) => coveredRequirementIds.add(id)));
+  motionDraft.transformKeyframes.forEach((frame) => frame.requirementIds?.forEach((id) => coveredRequirementIds.add(id)));
+  motionDraft.boneKeyframes.forEach((frame) => frame.requirementIds?.forEach((id) => coveredRequirementIds.add(id)));
+  motionDraft.contactFrames.forEach((frame) => frame.requirementIds?.forEach((id) => coveredRequirementIds.add(id)));
+  const uncovered = motionDraft.promptRequirements.filter((item) => !coveredRequirementIds.has(item.id));
+  if (uncovered.length) {
+    warnings.push(`MotionDraft 有 ${uncovered.length} 条提示词要求没有映射到阶段、关键帧或接触帧：${uncovered.map((item) => item.text).slice(0, 3).join('；')}`);
+  }
+
+  if (keyframes.length) notes.push(`MotionDraft 已转换 ${keyframes.length} 个 AI 中间关键帧。`);
+  return { keyframes, notes, warnings };
+}
+
+function buildMotionDraftKeyframes(transition: PoseTransition, motionDraft?: MotionDraft): TransitionKeyframe[] {
+  return buildMotionDraftKeyframePlan(transition, motionDraft).keyframes;
+}
+
+function motionDraftPhaseStages(motionDraft: MotionDraft, durationSec: number): MotionSemanticStage[] {
+  return motionDraft.phasePlan.map((phase): MotionSemanticStage => {
+    const midSec = (phase.startSec + phase.endSec) / 2;
+    return {
+      id: `motion_draft_${phase.id}`,
+      label: phase.label,
+      timeRatio: clamp01(midSec / Math.max(0.001, durationSec)),
+      poseHint: phase.purpose || phase.label,
+      rootMotionHint: `MotionDraft 阶段 ${phase.startSec.toFixed(2)}-${phase.endSec.toFixed(2)}s`,
+      contactHint: (phase.contacts || []).map((contact) => MOTION_CONTACT_LABELS[contact] || contact).join('、')
+    };
+  });
+}
+
+function motionDraftContactToSemanticContact(contact: MotionContactHint): MotionContactHint {
+  if (contact === 'leftHand' || contact === 'rightHand' || contact === 'hands') return 'hands';
+  if (contact === 'leftFoot' || contact === 'rightFoot' || contact === 'feet') return 'feet';
+  return contact;
+}
+
+function transitionWithMotionDraftCompileInput(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  draftPlan: MotionDraftKeyframeCompileResult,
+  warningSet: Set<string>
+): PoseTransition {
+  const motionDraft = transition.motionDraft;
+  if (!motionDraft) return transition;
+  draftPlan.warnings.forEach((warning) => warningSet.add(warning));
+  const durationSec = Math.max(0.1, transition.durationSec || motionDraft.durationSec || 1);
+  const existingKeyframes = normalizeTransitionKeyframes(transition.keyframes, durationSec);
+  const mergedKeyframes = [...existingKeyframes, ...draftPlan.keyframes].sort((a, b) => a.timeSec - b.timeSec);
+  const draftNotes = [
+    ...draftPlan.notes,
+    motionDraft.phasePlan.length ? `MotionDraft 阶段进入编译：${motionDraft.phasePlan.map((phase) => phase.label).slice(0, 6).join(' → ')}` : '',
+    motionDraft.contactFrames.length ? `MotionDraft 接触事件进入编译：${motionDraft.contactFrames.length} 个。` : ''
+  ].filter(Boolean);
+  draftNotes.forEach((note) => warningSet.add(note));
+  const targetObjectId = motionDraft.contactFrames.find((frame) => frame.targetObjectId && findSceneObject(scene, frame.targetObjectId))?.targetObjectId
+    || motionDraft.constraints.find((constraint) => constraint.target && findSceneObject(scene, constraint.target))?.target;
+  const motionDraftContacts: MotionContactHint[] = Array.from(new Set<MotionContactHint>([
+    ...motionDraft.contactFrames.map((frame) => motionDraftContactToSemanticContact(frame.contact)),
+    ...motionDraft.phasePlan.flatMap((phase) => phase.contacts || []).map(motionDraftContactToSemanticContact)
+  ])).filter(Boolean);
+  const phaseStages = motionDraftPhaseStages(motionDraft, durationSec);
+  const semanticPlan = transition.actionPlan.semanticPlan
+    ? {
+        ...transition.actionPlan.semanticPlan,
+        poseStages: [
+          ...transition.actionPlan.semanticPlan.poseStages,
+          ...phaseStages.filter((stage) => !transition.actionPlan.semanticPlan?.poseStages.some((item) => item.id === stage.id))
+        ].sort((a, b) => a.timeRatio - b.timeRatio).slice(0, 18),
+        contacts: Array.from(new Map([
+          ...transition.actionPlan.semanticPlan.contacts,
+          ...motionDraftContacts.map((contact) => ({
+            label: MOTION_CONTACT_LABELS[contact] || contact,
+            contact,
+            required: true
+          }))
+        ].map((item) => [item.contact, item])).values()).slice(0, 12),
+        targetObjectId: transition.actionPlan.semanticPlan.targetObjectId || targetObjectId,
+        explain: [...transition.actionPlan.semanticPlan.explain, ...draftNotes],
+        warnings: transition.actionPlan.semanticPlan.warnings
+      }
+    : transition.actionPlan.semanticPlan;
+  let constraints = transition.constraints;
+  const hasFootLock = motionDraft.contactFrames.some((frame) => frame.contact === 'leftFoot' || frame.contact === 'rightFoot' || frame.contact === 'feet')
+    || motionDraft.constraints.some((constraint) => constraint.type === 'foot_lock' || constraint.type === 'grounding');
+  const handTarget = motionDraft.contactFrames.find((frame) => (frame.contact === 'leftHand' || frame.contact === 'rightHand' || frame.contact === 'hands') && frame.targetObjectId && findSceneObject(scene, frame.targetObjectId));
+  const headLookTarget = motionDraft.constraints.find((constraint) => constraint.type === 'head_look' && constraint.target && findSceneObject(scene, constraint.target));
+  if (hasFootLock || handTarget || headLookTarget) {
+    constraints = {
+      ...constraints,
+      footLock: hasFootLock ? { enabled: true, left: true, right: true } : constraints.footLock,
+      handTarget: handTarget
+        ? {
+            ...constraints.handTarget,
+            enabled: true,
+            hand: handTarget.contact === 'leftHand' ? 'left' : handTarget.contact === 'rightHand' ? 'right' : constraints.handTarget.hand,
+            targetMode: 'object',
+            targetObjectId: handTarget.targetObjectId
+          }
+        : constraints.handTarget,
+      headLookAt: headLookTarget
+        ? {
+            ...constraints.headLookAt,
+            enabled: true,
+            targetMode: 'object',
+            targetObjectId: headLookTarget.target
+          }
+        : constraints.headLookAt
+    };
+  }
+  motionDraft.contactFrames.forEach((frame) => {
+    if (frame.targetObjectId && !findSceneObject(scene, frame.targetObjectId)) {
+      warningSet.add(`MotionDraft 接触帧 ${frame.id} 的目标对象不存在，已忽略目标绑定。`);
+    }
+  });
+  return {
+    ...transition,
+    keyframes: mergedKeyframes,
+    constraints,
+    actionPlan: {
+      ...transition.actionPlan,
+      notes: [...transition.actionPlan.notes, ...draftNotes],
+      semanticPlan
+    }
+  };
+}
+
+function explicitMiddleKeyframeTimes(transition: PoseTransition, durationSec: number) {
+  return normalizeTransitionKeyframes(transition.keyframes, durationSec)
+    .filter((frame) => isManualMiddleKeyframe(frame, durationSec))
     .map((frame) => Number(frame.timeSec.toFixed(4)));
 }
 
@@ -4662,9 +6457,66 @@ function motionFixedPoseConstraints(transition: PoseTransition) {
   });
 }
 
+function motionFixedPoseSegments(transition: PoseTransition) {
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const hardTrack = motionDraftHardKeyframeTrack(transition, durationSec);
+  const frameRole = (frame: TransitionKeyframe) => frame.timeSec <= 0.0006
+    ? 'start'
+    : frame.timeSec >= durationSec - 0.0006
+      ? 'end'
+      : 'middle';
+  return hardTrack.slice(0, -1).map((from, index) => {
+    const to = hardTrack[index + 1];
+    const poseDeltas = POSE_KEYS
+      .map((joint) => ({ joint, delta: poseJointDelta(from.pose[joint], to.pose[joint]) }))
+      .sort((a, b) => b.delta - a.delta)
+      .slice(0, 6);
+    return {
+      id: `fixed_segment_${index + 1}`,
+      index,
+      from: {
+        id: from.id,
+        role: frameRole(from),
+        label: from.label,
+        timeSec: roundMotionConstraintNumber(from.timeSec, 4),
+        timeRatio: roundMotionConstraintNumber(from.timeSec / durationSec, 4)
+      },
+      to: {
+        id: to.id,
+        role: frameRole(to),
+        label: to.label,
+        timeSec: roundMotionConstraintNumber(to.timeSec, 4),
+        timeRatio: roundMotionConstraintNumber(to.timeSec / durationSec, 4)
+      },
+      durationSec: roundMotionConstraintNumber(Math.max(0, to.timeSec - from.timeSec), 4),
+      durationRatio: roundMotionConstraintNumber(Math.max(0, to.timeSec - from.timeSec) / durationSec, 4),
+      transformDelta: {
+        position: compactMotionVec3({
+          x: to.transform.position.x - from.transform.position.x,
+          y: to.transform.position.y - from.transform.position.y,
+          z: to.transform.position.z - from.transform.position.z
+        }),
+        rotation: compactMotionVec3({
+          x: to.transform.rotation.x - from.transform.rotation.x,
+          y: to.transform.rotation.y - from.transform.rotation.y,
+          z: to.transform.rotation.z - from.transform.rotation.z
+        }, 1),
+        travelDistance: roundMotionConstraintNumber(vecDistance(from.transform.position, to.transform.position), 3)
+      },
+      poseDelta: roundMotionConstraintNumber(poseDeltaMagnitude(from.pose, to.pose), 1),
+      dominantJoints: poseDeltas.map((item) => ({
+        joint: item.joint,
+        delta: roundMotionConstraintNumber(item.delta, 1)
+      })),
+      instruction: `Plan only the motion inside ${from.label} -> ${to.label}; preserve both fixed poses exactly.`
+    };
+  });
+}
+
 function middleKeyframeConstraintNote(transition: PoseTransition) {
   const count = motionFixedPoseConstraints(transition).filter((frame) => frame.role === 'middle').length;
-  return count > 0 ? `已把 ${count} 个中间帧作为硬关键姿势约束，动作理解和生成必须按时间经过这些姿势。` : '';
+  const segmentCount = motionFixedPoseSegments(transition).length;
+  return count > 0 ? `已把 ${count} 个中间帧作为硬关键姿势约束，动作理解和生成必须按 ${segmentCount} 段相邻关键帧关系依次经过这些姿势。` : '';
 }
 
 function intervalTouchesExplicitKeyframe(a: number, b: number, keyframeTimes: number[]) {
@@ -6232,6 +8084,7 @@ function motionIntentLocalCompilerContract(transition: PoseTransition, localPlan
   const skill = motionActionSkill(actionType);
   const promptLocked = promptLocksActionType(transition.actionPrompt, actionType);
   const fixedPoseConstraints = motionFixedPoseConstraints(transition);
+  const fixedPoseSegments = motionFixedPoseSegments(transition);
   const middlePoseConstraintCount = fixedPoseConstraints.filter((frame) => frame.role === 'middle').length;
   return {
     actionFamily: semanticPlan?.actionFamily,
@@ -6266,6 +8119,7 @@ function motionIntentLocalCompilerContract(transition: PoseTransition, localPlan
     targetObjectId: semanticPlan?.targetObjectId,
     targetObjectName: semanticPlan?.targetObjectName,
     fixedPoseConstraints,
+    fixedPoseSegments,
     middlePoseConstraintCount,
     fixedPoseConstraintRule: middlePoseConstraintCount > 0
       ? '起点、终点和所有中间帧都是硬关键姿势约束。AI 必须把动作理解为按时间经过这些姿势，只能解释和补全相邻关键姿势之间的动作阶段。'
@@ -6513,13 +8367,15 @@ function applyUniversalMotionOverlay(
   transform: PoseTransform,
   plan: UniversalMotionPlan | undefined,
   t: number,
-  profile?: Scene3DJointAxisProfile
+  jointProfile?: Scene3DJointAxisProfile,
+  motionStyleProfile?: MotionStyleProfile
 ) {
   if (!plan) return pose;
   const families = plan.families?.length ? plan.families : deriveMotionFamiliesFromText('', plan);
+  const styleProfile = motionStyleProfileAtRatio(motionStyleProfile, t);
   const hasFamily = (family: UniversalMotionFamily) => families.includes(family);
   const bell = Math.sin(t * Math.PI);
-  const cycleSpeed = plan.rhythm === 'run' || plan.rhythm === 'impact' ? 4 : hasFamily('crawl') ? 3 : 2;
+  const cycleSpeed = (plan.rhythm === 'run' || plan.rhythm === 'impact' ? 4 : hasFamily('crawl') ? 3 : 2) * clampNumber(styleProfile?.timingScale ?? 1, 0.55, 1.45);
   const cycle = Math.sin(t * Math.PI * cycleSpeed);
   const counter = Math.cos(t * Math.PI * cycleSpeed);
   const side = plan.direction.x >= 0 ? 1 : -1;
@@ -6527,11 +8383,11 @@ function applyUniversalMotionOverlay(
   const sideways = plan.direction.x;
 
   if (plan.stride > 0) {
-    const strideScale = hasFamily('crawl') ? 0.55 : hasFamily('kneel') ? 0.25 : hasFamily('dodge') ? 1.15 : 1;
+    const strideScale = (hasFamily('crawl') ? 0.55 : hasFamily('kneel') ? 0.25 : hasFamily('dodge') ? 1.15 : 1) * clampNumber(styleProfile?.legStrideScale ?? 1, 0.45, 1.45) * clampNumber(styleProfile?.rootMotionScale ?? 1, 0.55, 1.35);
     transform.position.x += plan.direction.x * plan.stride * bell * strideScale;
     transform.position.z += plan.direction.z * plan.stride * bell * strideScale;
   }
-  if (plan.verticalLift > 0) transform.position.y += plan.verticalLift * bell;
+  if (plan.verticalLift > 0) transform.position.y += plan.verticalLift * bell * clampNumber(styleProfile?.verticalLiftScale ?? 1, 0.35, 1.35);
   if (plan.turn) transform.rotation.y += plan.turn * bell;
   if (plan.rhythm === 'impact') {
     transform.position.x += plan.direction.x * plan.stride * 0.35 * Math.sin(t * Math.PI * 2);
@@ -6560,10 +8416,10 @@ function applyUniversalMotionOverlay(
     transform.position.y -= 0.12 * rollAmount * pulse(t, 0.15, 0.72);
   }
 
-  const strideDeg = plan.stride * 62;
-  const armDeg = plan.armSwing * 34;
+  const strideDeg = plan.stride * 62 * clampNumber(styleProfile?.legStrideScale ?? 1, 0.35, 1.55);
+  const armDeg = plan.armSwing * 34 * clampNumber(styleProfile?.armSwingScale ?? 1, 0.35, 1.55);
   const leanDeg = plan.bodyLean * 10;
-  const crouch = plan.crouch * bell;
+  const crouch = plan.crouch * bell * clampNumber(styleProfile?.crouchScale ?? 1, 0.45, 1.55);
   const roll = plan.roll * bell;
   let nextPose = offsetPose(pose, {
     pelvis: { x: -6 * plan.bodyLean * bell - 10 * crouch - 28 * roll, y: plan.turn * 0.08 * bell, z: plan.direction.x * -5 * bell + 34 * roll },
@@ -6706,7 +8562,7 @@ function applyUniversalMotionOverlay(
     });
   }
 
-  return profile ? clampPoseWithJointProfile(nextPose, profile) : nextPose;
+  return jointProfile ? clampPoseWithJointProfile(nextPose, jointProfile) : nextPose;
 }
 
 function clampMotionNumber(value: number, min: number, max: number) {
@@ -6743,30 +8599,30 @@ const MOTION_ACTION_SKILLS: Partial<Record<MotionSemanticActionType, MotionActio
   run: {
     actionType: 'run',
     compileMode: 'semantic_only',
-    grounded: true,
-    allowAirborne: false,
-    gait: { cadenceHz: 1.55, rootBob: 0.018, weightShift: 3.1, footPlant: 0.72, strideDeg: 26, armDeg: 16, leanDeg: 5.5, stanceRatio: 0.48, swingLiftDeg: 17, lateralSway: 0.016 },
-    rootLimits: { minDrop: -0.08, maxLift: 0.035 },
-    smoothing: { root: 0.18, rotation: 0.22, pose: 0.08 },
+    grounded: false,
+    allowAirborne: true,
+    gait: { cadenceHz: 1.78, rootBob: 0.072, weightShift: 3.4, footPlant: 0.58, strideDeg: 34, armDeg: 30, leanDeg: 10.5, stanceRatio: 0.34, swingLiftDeg: 25, lateralSway: 0.018 },
+    rootLimits: { minDrop: -0.08, maxLift: 0.14 },
+    smoothing: { root: 0.14, rotation: 0.18, pose: 0.06 },
     maxHorizontalOverlay: 0.24,
     maxYawOverlay: 18,
-    defaultTravelPerSec: 0.5,
-    maxTravel: 4.2,
-    quality: { maxRootStepDistance: 0.17, maxRootRotationDelta: 28, maxPoseStepDelta: 44, maxRootLift: 0.055, minLegSeparation: 16, minArmSwingSeparation: 19, minSupportSwitchesPerSec: 0.85, minFootContactsPerSec: 1.9, maxFootPlantDrift: 9, maxRootStepJitter: 0.58 }
+    defaultTravelPerSec: 0.95,
+    maxTravel: 8.4,
+    quality: { maxRootStepDistance: 0.17, maxRootRotationDelta: 28, maxPoseStepDelta: 48, maxRootLift: 0.16, minLegSeparation: 26, minArmSwingSeparation: 28, minSupportSwitchesPerSec: 1.05, minFootContactsPerSec: 1.9, maxFootPlantDrift: 9, maxRootStepJitter: 0.58 }
   },
   dash: {
     actionType: 'dash',
     compileMode: 'semantic_only',
-    grounded: true,
-    allowAirborne: false,
-    gait: { cadenceHz: 1.9, rootBob: 0.021, weightShift: 3.6, footPlant: 0.66, strideDeg: 31, armDeg: 20, leanDeg: 8.5, stanceRatio: 0.42, swingLiftDeg: 22, lateralSway: 0.018 },
-    rootLimits: { minDrop: -0.08, maxLift: 0.035 },
-    smoothing: { root: 0.18, rotation: 0.22, pose: 0.08 },
+    grounded: false,
+    allowAirborne: true,
+    gait: { cadenceHz: 2.08, rootBob: 0.09, weightShift: 3.9, footPlant: 0.52, strideDeg: 40, armDeg: 36, leanDeg: 14, stanceRatio: 0.28, swingLiftDeg: 31, lateralSway: 0.02 },
+    rootLimits: { minDrop: -0.08, maxLift: 0.18 },
+    smoothing: { root: 0.12, rotation: 0.18, pose: 0.055 },
     maxHorizontalOverlay: 0.24,
     maxYawOverlay: 18,
-    defaultTravelPerSec: 0.68,
-    maxTravel: 5.2,
-    quality: { maxRootStepDistance: 0.19, maxRootRotationDelta: 30, maxPoseStepDelta: 48, maxRootLift: 0.06, minLegSeparation: 19, minArmSwingSeparation: 22, minSupportSwitchesPerSec: 1.05, minFootContactsPerSec: 2.2, maxFootPlantDrift: 10, maxRootStepJitter: 0.56 }
+    defaultTravelPerSec: 1.25,
+    maxTravel: 10.5,
+    quality: { maxRootStepDistance: 0.19, maxRootRotationDelta: 30, maxPoseStepDelta: 52, maxRootLift: 0.2, minLegSeparation: 32, minArmSwingSeparation: 32, minSupportSwitchesPerSec: 1.25, minFootContactsPerSec: 2.2, maxFootPlantDrift: 10, maxRootStepJitter: 0.56 }
   },
   turn: {
     actionType: 'turn',
@@ -6915,6 +8771,470 @@ const MOTION_ACTION_SKILLS: Partial<Record<MotionSemanticActionType, MotionActio
   }
 };
 
+function motionSkillPhases(items: MotionSkillTemplatePhase[]): MotionSkillTemplatePhase[] {
+  return items.map((item) => ({
+    ...item,
+    startRatio: clamp01(item.startRatio),
+    endRatio: clampNumber(item.endRatio, item.startRatio, 1)
+  }));
+}
+
+const DEFAULT_GROUNDED_PHASES = motionSkillPhases([
+  { id: 'anticipation', label: '预备', startRatio: 0, endRatio: 0.18, purpose: '建立重心和动作方向' },
+  { id: 'launch', label: '启动', startRatio: 0.14, endRatio: 0.34, purpose: '从预备姿势进入主要动作' },
+  { id: 'contact', label: '接触', startRatio: 0.34, endRatio: 0.68, purpose: '完成主要动作或接触目标' },
+  { id: 'recover', label: '回收', startRatio: 0.66, endRatio: 0.9, purpose: '回收肢体并恢复稳定' },
+  { id: 'settle', label: '稳定', startRatio: 0.88, endRatio: 1, purpose: '稳定到尾帧约束' }
+]);
+
+function locomotionSkillTemplate(
+  actionType: 'walk' | 'run' | 'dash',
+  label: string,
+  scale: { stride: number; arm: number; lean: number; bob: number; travel: number; cadence: number }
+): MotionSkillTemplate {
+  const stride = scale.stride;
+  const arm = scale.arm;
+  const lean = scale.lean;
+  const lift = Math.max(4, stride * 0.45);
+  const runLike = actionType === 'run' || actionType === 'dash';
+  return {
+    id: `skill_${actionType}`,
+    label,
+    actionType,
+    actionFamily: 'locomotion',
+    supportedPromptTags: [label, actionType, '移动', '步态', '摆臂'],
+    grounded: !runLike,
+    allowAirborne: runLike,
+    durationProfile: { minSec: 0.8, idealSec: actionType === 'walk' ? 1.8 : 1.25, maxSec: 4.5 },
+    phaseTemplates: motionSkillPhases([
+      { id: 'anticipation', label: '预备重心', startRatio: 0, endRatio: 0.16, purpose: '身体轻微前倾，准备迈步', keyJoints: ['pelvis', 'chest'] },
+      { id: 'travel', label: '交替步态', startRatio: 0.12, endRatio: 0.86, purpose: '左右腿交替，双臂反向摆动', keyJoints: ['leftUpperLeg', 'rightUpperLeg', 'leftUpperArm', 'rightUpperArm'] },
+      { id: 'settle', label: '收步稳定', startRatio: 0.82, endRatio: 1, purpose: '减小摆动并落到尾帧' }
+    ]),
+    rootMotionCurve: [
+      { timeRatio: 0, position: vec(), rotation: vec(), height: 0, weightShift: 0 },
+      { timeRatio: 0.25, position: vec(0, 0, -scale.travel * 0.25), height: scale.bob, weightShift: -0.012 * scale.cadence },
+      { timeRatio: 0.5, position: vec(0, 0, -scale.travel * 0.5), height: 0, weightShift: 0.012 * scale.cadence },
+      { timeRatio: 0.75, position: vec(0, 0, -scale.travel * 0.75), height: scale.bob * 0.65, weightShift: -0.01 * scale.cadence },
+      { timeRatio: 1, position: vec(0, 0, -scale.travel), rotation: vec(), height: 0, weightShift: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0, joint: 'chest', rotation: { x: -lean * 0.35 } },
+      { timeRatio: 0.25, joint: 'chest', rotation: { x: -lean, z: -1.5 } },
+      { timeRatio: 0.5, joint: 'chest', rotation: { x: -lean * 0.7, z: 1.5 } },
+      { timeRatio: 0.75, joint: 'chest', rotation: { x: -lean, z: -1.2 } },
+      { timeRatio: 1, joint: 'chest', rotation: { x: -lean * 0.25 } },
+      { timeRatio: 0, joint: 'leftUpperLeg', rotation: { x: -stride * 0.25 } },
+      { timeRatio: 0.25, joint: 'leftUpperLeg', rotation: { x: stride } },
+      { timeRatio: 0.5, joint: 'leftUpperLeg', rotation: { x: -stride * 0.75 } },
+      { timeRatio: 0.75, joint: 'leftUpperLeg', rotation: { x: -stride } },
+      { timeRatio: 1, joint: 'leftUpperLeg', rotation: { x: stride * 0.15 } },
+      { timeRatio: 0, joint: 'rightUpperLeg', rotation: { x: stride * 0.25 } },
+      { timeRatio: 0.25, joint: 'rightUpperLeg', rotation: { x: -stride } },
+      { timeRatio: 0.5, joint: 'rightUpperLeg', rotation: { x: stride * 0.75 } },
+      { timeRatio: 0.75, joint: 'rightUpperLeg', rotation: { x: stride } },
+      { timeRatio: 1, joint: 'rightUpperLeg', rotation: { x: -stride * 0.15 } },
+      { timeRatio: 0.25, joint: 'leftLowerLeg', rotation: { x: lift } },
+      { timeRatio: 0.5, joint: 'leftLowerLeg', rotation: { x: Math.max(8, lift * 1.8) } },
+      { timeRatio: 0.75, joint: 'rightLowerLeg', rotation: { x: lift } },
+      { timeRatio: 1, joint: 'rightLowerLeg', rotation: { x: Math.max(8, lift * 1.8) } },
+      { timeRatio: 0.25, joint: 'leftUpperArm', rotation: { x: -arm, z: -8 } },
+      { timeRatio: 0.5, joint: 'leftUpperArm', rotation: { x: arm * 0.65, z: -5 } },
+      { timeRatio: 0.75, joint: 'leftUpperArm', rotation: { x: arm, z: -8 } },
+      { timeRatio: 0.25, joint: 'rightUpperArm', rotation: { x: arm, z: 8 } },
+      { timeRatio: 0.5, joint: 'rightUpperArm', rotation: { x: -arm * 0.65, z: 5 } },
+      { timeRatio: 0.75, joint: 'rightUpperArm', rotation: { x: -arm, z: 8 } },
+      { timeRatio: 0.25, joint: 'leftLowerArm', rotation: { x: 18 } },
+      { timeRatio: 0.75, joint: 'rightLowerArm', rotation: { x: 18 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.12, contact: 'leftFoot', kind: 'foot_lock', targetRole: 'ground', note: `${label}左脚落地` },
+      { timeRatio: 0.38, contact: 'rightFoot', kind: 'foot_lock', targetRole: 'ground', note: `${label}右脚落地` },
+      { timeRatio: 0.64, contact: 'leftFoot', kind: 'foot_lock', targetRole: 'ground', note: `${label}左脚再次落地` },
+      { timeRatio: 0.9, contact: 'rightFoot', kind: 'foot_lock', targetRole: 'ground', note: `${label}右脚收步落地` }
+    ],
+    requiredJoints: ['pelvis', 'chest', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg', 'leftUpperArm', 'rightUpperArm'],
+    qualityTargets: {
+      minLegSeparation: actionType === 'walk' ? 9 : actionType === 'run' ? 26 : 32,
+      minArmSwingSeparation: actionType === 'walk' ? 8 : actionType === 'run' ? 28 : 32,
+      minFootContactsPerSec: actionType === 'walk' ? 1.1 : actionType === 'run' ? 1.9 : 2.2,
+      maxRootStepJitter: actionType === 'dash' ? 0.56 : 0.58
+    }
+  };
+}
+
+const MOTION_SKILL_TEMPLATES: Partial<Record<MotionSemanticActionType, MotionSkillTemplate>> = {
+  walk: locomotionSkillTemplate('walk', '走路', { stride: 16, arm: 9, lean: 2.5, bob: 0.008, travel: 0.12, cadence: 0.85 }),
+  run: locomotionSkillTemplate('run', '跑步', { stride: 34, arm: 30, lean: 10.5, bob: 0.072, travel: 0.28, cadence: 1.42 }),
+  dash: locomotionSkillTemplate('dash', '冲刺', { stride: 40, arm: 36, lean: 14, bob: 0.09, travel: 0.34, cadence: 1.58 }),
+  push: {
+    id: 'skill_push',
+    label: '双手推',
+    actionType: 'push',
+    actionFamily: 'push_pull',
+    supportedPromptTags: ['推', '推动', '双手', '前压', 'push'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.8, idealSec: 1.6, maxSec: 4 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0, position: vec(), height: 0 },
+      { timeRatio: 0.25, position: vec(0, -0.015, -0.02), rotation: vec(2, 0, 0), height: -0.015 },
+      { timeRatio: 0.55, position: vec(0, -0.025, -0.08), rotation: vec(4, 0, 0), height: -0.025 },
+      { timeRatio: 0.82, position: vec(0, -0.015, -0.05), rotation: vec(2, 0, 0), height: -0.015 },
+      { timeRatio: 1, position: vec(), rotation: vec(), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.18, joint: 'chest', rotation: { x: 8 } },
+      { timeRatio: 0.5, joint: 'chest', rotation: { x: 14 } },
+      { timeRatio: 0.5, joint: 'pelvis', rotation: { x: 4 } },
+      { timeRatio: 0.32, joint: 'leftUpperArm', rotation: { x: 54, y: -6, z: 15 } },
+      { timeRatio: 0.32, joint: 'rightUpperArm', rotation: { x: 54, y: 6, z: -15 } },
+      { timeRatio: 0.56, joint: 'leftUpperArm', rotation: { x: 76, y: -4, z: 12 } },
+      { timeRatio: 0.56, joint: 'rightUpperArm', rotation: { x: 76, y: 4, z: -12 } },
+      { timeRatio: 0.56, joint: 'leftLowerArm', rotation: { x: 18 } },
+      { timeRatio: 0.56, joint: 'rightLowerArm', rotation: { x: 18 } },
+      { timeRatio: 0.5, joint: 'leftUpperLeg', rotation: { x: -12 } },
+      { timeRatio: 0.5, joint: 'rightUpperLeg', rotation: { x: 10 } },
+      { timeRatio: 0.78, joint: 'leftUpperArm', rotation: { x: 50, z: 10 } },
+      { timeRatio: 0.78, joint: 'rightUpperArm', rotation: { x: 50, z: -10 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.16, contact: 'leftFoot', kind: 'foot_lock', targetRole: 'ground', note: '推东西左脚稳定' },
+      { timeRatio: 0.16, contact: 'rightFoot', kind: 'foot_lock', targetRole: 'ground', note: '推东西右脚稳定' },
+      { timeRatio: 0.34, contact: 'leftHand', kind: 'reach', targetRole: 'prompt_target', note: '左手接近推动目标' },
+      { timeRatio: 0.34, contact: 'rightHand', kind: 'reach', targetRole: 'prompt_target', note: '右手接近推动目标' },
+      { timeRatio: 0.52, contact: 'leftHand', kind: 'grasp', targetRole: 'prompt_target', note: '左手接触并推动目标' },
+      { timeRatio: 0.52, contact: 'rightHand', kind: 'grasp', targetRole: 'prompt_target', note: '右手接触并推动目标' },
+      { timeRatio: 0.82, contact: 'leftFoot', kind: 'foot_lock', targetRole: 'ground', note: '推东西结束左脚稳定' },
+      { timeRatio: 0.82, contact: 'rightFoot', kind: 'foot_lock', targetRole: 'ground', note: '推东西结束右脚稳定' }
+    ],
+    requiredJoints: ['chest', 'pelvis', 'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm', 'leftUpperLeg', 'rightUpperLeg'],
+    qualityTargets: { minPrimaryJointDelta: 14, maxRootLift: 0.03 }
+  },
+  pull: {
+    id: 'skill_pull',
+    label: '双手拉',
+    actionType: 'pull',
+    actionFamily: 'push_pull',
+    supportedPromptTags: ['拉', '回拉', '双手', 'pull'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.8, idealSec: 1.6, maxSec: 4 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0, position: vec(), height: 0 },
+      { timeRatio: 0.28, position: vec(0, -0.015, -0.02), rotation: vec(-1, 0, 0), height: -0.012 },
+      { timeRatio: 0.58, position: vec(0, -0.02, 0.08), rotation: vec(-4, 0, 0), height: -0.02 },
+      { timeRatio: 0.86, position: vec(0, -0.01, 0.03), rotation: vec(-1, 0, 0), height: -0.01 },
+      { timeRatio: 1, position: vec(), rotation: vec(), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.24, joint: 'leftUpperArm', rotation: { x: 60, y: -8, z: 12 } },
+      { timeRatio: 0.24, joint: 'rightUpperArm', rotation: { x: 60, y: 8, z: -12 } },
+      { timeRatio: 0.52, joint: 'chest', rotation: { x: -10 } },
+      { timeRatio: 0.52, joint: 'leftUpperArm', rotation: { x: 36, y: -12, z: 18 } },
+      { timeRatio: 0.52, joint: 'rightUpperArm', rotation: { x: 36, y: 12, z: -18 } },
+      { timeRatio: 0.52, joint: 'leftLowerArm', rotation: { x: 58 } },
+      { timeRatio: 0.52, joint: 'rightLowerArm', rotation: { x: 58 } },
+      { timeRatio: 0.75, joint: 'chest', rotation: { x: -5 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.18, contact: 'leftHand', kind: 'reach', targetRole: 'prompt_target', note: '左手伸向拉动目标' },
+      { timeRatio: 0.18, contact: 'rightHand', kind: 'reach', targetRole: 'prompt_target', note: '右手伸向拉动目标' },
+      { timeRatio: 0.36, contact: 'leftHand', kind: 'grasp', targetRole: 'prompt_target', note: '左手抓住拉动目标' },
+      { timeRatio: 0.36, contact: 'rightHand', kind: 'grasp', targetRole: 'prompt_target', note: '右手抓住拉动目标' },
+      { timeRatio: 0.72, contact: 'leftHand', kind: 'release', targetRole: 'prompt_target', note: '左手拉回后释放' },
+      { timeRatio: 0.72, contact: 'rightHand', kind: 'release', targetRole: 'prompt_target', note: '右手拉回后释放' },
+      { timeRatio: 0.18, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '拉动时双脚稳定' }
+    ],
+    requiredJoints: ['chest', 'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm'],
+    qualityTargets: { minPrimaryJointDelta: 14, maxRootLift: 0.03 }
+  },
+  throw: {
+    id: 'skill_throw',
+    label: '投掷',
+    actionType: 'throw',
+    actionFamily: 'throw',
+    supportedPromptTags: ['投掷', '扔', '甩出', '释放', 'throw'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.7, idealSec: 1.25, maxSec: 3 },
+    phaseTemplates: motionSkillPhases([
+      { id: 'anticipation', label: '蓄力', startRatio: 0, endRatio: 0.34, purpose: '肩臂后引，躯干轻微扭转' },
+      { id: 'launch', label: '加速', startRatio: 0.3, endRatio: 0.54, purpose: '躯干带动手臂向前加速' },
+      { id: 'release', label: '释放', startRatio: 0.52, endRatio: 0.68, purpose: '手部释放目标' },
+      { id: 'recover', label: '回收', startRatio: 0.68, endRatio: 1, purpose: '手臂和躯干回收稳定' }
+    ]),
+    rootMotionCurve: [
+      { timeRatio: 0.22, rotation: vec(0, -7, 0), position: vec(0.02, -0.01, 0.02), height: -0.01 },
+      { timeRatio: 0.52, rotation: vec(0, 10, 0), position: vec(-0.02, 0, -0.05), height: 0 },
+      { timeRatio: 0.82, rotation: vec(0, 3, 0), position: vec(0, 0, -0.02), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.22, joint: 'chest', rotation: { x: -3, y: -18 } },
+      { timeRatio: 0.22, joint: 'rightUpperArm', rotation: { x: -42, y: -22, z: -18 } },
+      { timeRatio: 0.22, joint: 'rightLowerArm', rotation: { x: 78 } },
+      { timeRatio: 0.5, joint: 'chest', rotation: { x: 8, y: 12 } },
+      { timeRatio: 0.5, joint: 'rightUpperArm', rotation: { x: 72, y: -8, z: -16 } },
+      { timeRatio: 0.5, joint: 'rightLowerArm', rotation: { x: 36 } },
+      { timeRatio: 0.64, joint: 'rightUpperArm', rotation: { x: 88, y: 4, z: -8 } },
+      { timeRatio: 0.78, joint: 'rightUpperArm', rotation: { x: 32, z: -12 } },
+      { timeRatio: 0.78, joint: 'rightLowerArm', rotation: { x: 42 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.08, contact: 'rightHand', kind: 'grasp', targetRole: 'prompt_target', note: '右手握住投掷目标' },
+      { timeRatio: 0.62, contact: 'rightHand', kind: 'release', targetRole: 'forward_space', note: '右手释放投掷目标' },
+      { timeRatio: 0.2, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '投掷蓄力时双脚稳定' }
+    ],
+    requiredJoints: ['chest', 'rightUpperArm', 'rightLowerArm', 'rightHand'],
+    qualityTargets: { minPrimaryJointDelta: 20, maxRootLift: 0.045 }
+  },
+  punch: {
+    id: 'skill_punch',
+    label: '出拳',
+    actionType: 'punch',
+    actionFamily: 'combat',
+    supportedPromptTags: ['出拳', '打', '攻击', 'punch', 'strike'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.45, idealSec: 0.9, maxSec: 2 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0.24, position: vec(0, -0.01, 0.02), rotation: vec(0, -4, 0), height: -0.01 },
+      { timeRatio: 0.48, position: vec(0, -0.005, -0.05), rotation: vec(0, 5, 0), height: -0.005 },
+      { timeRatio: 0.78, position: vec(0, 0, -0.01), rotation: vec(0, 1, 0), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.18, joint: 'rightUpperArm', rotation: { x: 26, y: -12, z: -24 } },
+      { timeRatio: 0.18, joint: 'rightLowerArm', rotation: { x: 70 } },
+      { timeRatio: 0.45, joint: 'chest', rotation: { x: 5, y: 8 } },
+      { timeRatio: 0.45, joint: 'rightUpperArm', rotation: { x: 72, y: -5, z: -12 } },
+      { timeRatio: 0.45, joint: 'rightLowerArm', rotation: { x: 12 } },
+      { timeRatio: 0.7, joint: 'rightUpperArm', rotation: { x: 24, z: -20 } },
+      { timeRatio: 0.7, joint: 'rightLowerArm', rotation: { x: 62 } },
+      { timeRatio: 0.35, joint: 'leftUpperArm', rotation: { x: 28, z: 24 } },
+      { timeRatio: 0.35, joint: 'leftLowerArm', rotation: { x: 58 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.46, contact: 'rightHand', kind: 'reach', targetRole: 'prompt_target', note: '右拳到达攻击点' },
+      { timeRatio: 0.52, contact: 'rightHand', kind: 'release', targetRole: 'prompt_target', note: '出拳接触后回收' },
+      { timeRatio: 0.2, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '出拳支撑脚稳定' }
+    ],
+    requiredJoints: ['chest', 'rightUpperArm', 'rightLowerArm', 'leftUpperArm'],
+    qualityTargets: { minPrimaryJointDelta: 18, maxRootLift: 0.04 }
+  },
+  kick: {
+    id: 'skill_kick',
+    label: '踢腿',
+    actionType: 'kick',
+    actionFamily: 'combat',
+    supportedPromptTags: ['踢', '侧踢', 'kick'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.55, idealSec: 1, maxSec: 2.4 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0.22, position: vec(-0.015, -0.012, 0), rotation: vec(0, -3, -2), height: -0.012 },
+      { timeRatio: 0.5, position: vec(0.02, 0.005, -0.04), rotation: vec(0, 5, 3), height: 0.005 },
+      { timeRatio: 0.78, position: vec(0, -0.006, -0.01), rotation: vec(0, 1, 0), height: -0.006 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.22, joint: 'chest', rotation: { x: 4, z: -5 } },
+      { timeRatio: 0.45, joint: 'rightUpperLeg', rotation: { x: 58, z: 12 } },
+      { timeRatio: 0.45, joint: 'rightLowerLeg', rotation: { x: -8 } },
+      { timeRatio: 0.45, joint: 'rightFoot', rotation: { x: 10 } },
+      { timeRatio: 0.45, joint: 'leftUpperLeg', rotation: { x: -14, z: -6 } },
+      { timeRatio: 0.68, joint: 'rightUpperLeg', rotation: { x: 16, z: 6 } },
+      { timeRatio: 0.68, joint: 'rightLowerLeg', rotation: { x: 34 } },
+      { timeRatio: 0.4, joint: 'leftUpperArm', rotation: { x: 22, z: 22 } },
+      { timeRatio: 0.4, joint: 'rightUpperArm', rotation: { x: 18, z: -18 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.22, contact: 'leftFoot', kind: 'foot_lock', targetRole: 'ground', note: '踢腿支撑脚锁定' },
+      { timeRatio: 0.46, contact: 'rightFoot', kind: 'reach', targetRole: 'prompt_target', note: '踢腿到达攻击点' },
+      { timeRatio: 0.82, contact: 'rightFoot', kind: 'foot_lock', targetRole: 'ground', note: '踢腿回落站稳' }
+    ],
+    requiredJoints: ['rightUpperLeg', 'rightLowerLeg', 'leftUpperLeg', 'chest'],
+    qualityTargets: { minPrimaryJointDelta: 16, maxRootLift: 0.05 }
+  },
+  jump: {
+    id: 'skill_jump',
+    label: '跳跃',
+    actionType: 'jump',
+    actionFamily: 'jump',
+    supportedPromptTags: ['跳', '跃起', '离地', 'jump'],
+    grounded: false,
+    allowAirborne: true,
+    durationProfile: { minSec: 0.7, idealSec: 1.15, maxSec: 2.4 },
+    phaseTemplates: motionSkillPhases([
+      { id: 'anticipation', label: '下沉蓄力', startRatio: 0, endRatio: 0.25, purpose: '重心下沉，腿部压缩' },
+      { id: 'launch', label: '起跳', startRatio: 0.22, endRatio: 0.42, purpose: '腿部伸展带动根节点抬升' },
+      { id: 'travel', label: '空中', startRatio: 0.38, endRatio: 0.7, purpose: '短暂离地' },
+      { id: 'contact', label: '落地', startRatio: 0.68, endRatio: 0.88, purpose: '脚部接触地面并缓冲' },
+      { id: 'settle', label: '稳定', startRatio: 0.86, endRatio: 1, purpose: '恢复站稳' }
+    ]),
+    rootMotionCurve: [
+      { timeRatio: 0.18, position: vec(0, -0.05, 0), height: -0.05 },
+      { timeRatio: 0.48, position: vec(0, 0.18, -0.05), height: 0.18 },
+      { timeRatio: 0.72, position: vec(0, 0.04, -0.08), height: 0.04 },
+      { timeRatio: 0.86, position: vec(0, -0.035, -0.04), height: -0.035 },
+      { timeRatio: 1, position: vec(), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.18, joint: 'leftUpperLeg', rotation: { x: -34 } },
+      { timeRatio: 0.18, joint: 'rightUpperLeg', rotation: { x: -34 } },
+      { timeRatio: 0.18, joint: 'leftLowerLeg', rotation: { x: 48 } },
+      { timeRatio: 0.18, joint: 'rightLowerLeg', rotation: { x: 48 } },
+      { timeRatio: 0.48, joint: 'leftUpperLeg', rotation: { x: 14 } },
+      { timeRatio: 0.48, joint: 'rightUpperLeg', rotation: { x: 14 } },
+      { timeRatio: 0.48, joint: 'leftUpperArm', rotation: { x: -18, z: -20 } },
+      { timeRatio: 0.48, joint: 'rightUpperArm', rotation: { x: -18, z: 20 } },
+      { timeRatio: 0.84, joint: 'leftUpperLeg', rotation: { x: -24 } },
+      { timeRatio: 0.84, joint: 'rightUpperLeg', rotation: { x: -24 } },
+      { timeRatio: 0.84, joint: 'leftLowerLeg', rotation: { x: 36 } },
+      { timeRatio: 0.84, joint: 'rightLowerLeg', rotation: { x: 36 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.08, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '起跳前双脚压地' },
+      { timeRatio: 0.84, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '跳跃落地双脚接触' }
+    ],
+    requiredJoints: ['pelvis', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg'],
+    qualityTargets: { maxRootLift: 0.36 }
+  },
+  crouch: {
+    id: 'skill_crouch',
+    label: '下蹲',
+    actionType: 'crouch',
+    actionFamily: 'posture',
+    supportedPromptTags: ['蹲', '下蹲', '低重心', 'crouch'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.5, idealSec: 1.1, maxSec: 2.6 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0.18, position: vec(0, -0.035, 0), height: -0.035 },
+      { timeRatio: 0.58, position: vec(0, -0.09, 0), height: -0.09 },
+      { timeRatio: 0.88, position: vec(0, -0.055, 0), height: -0.055 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.5, joint: 'pelvis', rotation: { x: -12 } },
+      { timeRatio: 0.5, joint: 'chest', rotation: { x: 10 } },
+      { timeRatio: 0.5, joint: 'leftUpperLeg', rotation: { x: -42 } },
+      { timeRatio: 0.5, joint: 'rightUpperLeg', rotation: { x: -42 } },
+      { timeRatio: 0.5, joint: 'leftLowerLeg', rotation: { x: 54 } },
+      { timeRatio: 0.5, joint: 'rightLowerLeg', rotation: { x: 54 } },
+      { timeRatio: 0.5, joint: 'leftFoot', rotation: { x: -8 } },
+      { timeRatio: 0.5, joint: 'rightFoot', rotation: { x: -8 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.2, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '下蹲双脚贴地' },
+      { timeRatio: 0.82, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '下蹲结束保持脚部稳定' }
+    ],
+    requiredJoints: ['pelvis', 'chest', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg'],
+    qualityTargets: { maxRootLift: 0.025 }
+  },
+  fall: {
+    id: 'skill_fall',
+    label: '摔倒',
+    actionType: 'fall',
+    actionFamily: 'fall',
+    supportedPromptTags: ['摔倒', '跌倒', '倒下', 'fall'],
+    grounded: false,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.8, idealSec: 1.4, maxSec: 3 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0.22, position: vec(0.02, -0.035, -0.02), rotation: vec(8, 0, -4), height: -0.035 },
+      { timeRatio: 0.58, position: vec(0.08, -0.18, -0.08), rotation: vec(34, 0, -16), height: -0.18 },
+      { timeRatio: 0.88, position: vec(0.06, -0.2, -0.04), rotation: vec(42, 0, -10), height: -0.2 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.32, joint: 'chest', rotation: { x: 18, z: -10 } },
+      { timeRatio: 0.58, joint: 'pelvis', rotation: { x: -18, z: -10 } },
+      { timeRatio: 0.58, joint: 'chest', rotation: { x: 38, z: -18 } },
+      { timeRatio: 0.58, joint: 'leftUpperArm', rotation: { x: 48, z: 24 } },
+      { timeRatio: 0.58, joint: 'rightUpperArm', rotation: { x: 44, z: -24 } },
+      { timeRatio: 0.72, joint: 'leftUpperLeg', rotation: { x: -24 } },
+      { timeRatio: 0.72, joint: 'rightUpperLeg', rotation: { x: -20 } },
+      { timeRatio: 0.72, joint: 'leftLowerLeg', rotation: { x: -36 } },
+      { timeRatio: 0.72, joint: 'rightLowerLeg', rotation: { x: -32 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.36, contact: 'leftHand', kind: 'foot_lock', targetRole: 'ground', note: '摔倒时左手撑地' },
+      { timeRatio: 0.48, contact: 'shoulder', kind: 'foot_lock', targetRole: 'ground', note: '摔倒肩部接近地面' },
+      { timeRatio: 0.74, contact: 'hip', kind: 'foot_lock', targetRole: 'ground', note: '摔倒后髋部落地' }
+    ],
+    requiredJoints: ['pelvis', 'chest', 'leftUpperArm', 'rightUpperArm', 'leftUpperLeg', 'rightUpperLeg'],
+    qualityTargets: { maxRootLift: 0.04 }
+  },
+  get_up: {
+    id: 'skill_get_up',
+    label: '起身',
+    actionType: 'get_up',
+    actionFamily: 'fall',
+    supportedPromptTags: ['起身', '站起', '恢复', 'get up'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.9, idealSec: 1.8, maxSec: 4 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0.12, position: vec(0, -0.12, 0), rotation: vec(22, 0, 0), height: -0.12 },
+      { timeRatio: 0.45, position: vec(0, -0.06, -0.02), rotation: vec(10, 0, 0), height: -0.06 },
+      { timeRatio: 0.78, position: vec(0, -0.015, -0.02), rotation: vec(2, 0, 0), height: -0.015 },
+      { timeRatio: 1, position: vec(), rotation: vec(), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.18, joint: 'chest', rotation: { x: 30 } },
+      { timeRatio: 0.18, joint: 'leftUpperArm', rotation: { x: 54, z: 20 } },
+      { timeRatio: 0.18, joint: 'rightUpperArm', rotation: { x: 54, z: -20 } },
+      { timeRatio: 0.42, joint: 'leftUpperLeg', rotation: { x: -36 } },
+      { timeRatio: 0.42, joint: 'rightUpperLeg', rotation: { x: -36 } },
+      { timeRatio: 0.42, joint: 'leftLowerLeg', rotation: { x: 48 } },
+      { timeRatio: 0.42, joint: 'rightLowerLeg', rotation: { x: 48 } },
+      { timeRatio: 0.78, joint: 'chest', rotation: { x: 8 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.18, contact: 'hands', kind: 'foot_lock', targetRole: 'ground', note: '起身时双手撑地' },
+      { timeRatio: 0.46, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '起身时双脚恢复支撑' },
+      { timeRatio: 0.86, contact: 'feet', kind: 'foot_lock', targetRole: 'ground', note: '起身结束站稳' }
+    ],
+    requiredJoints: ['pelvis', 'chest', 'leftUpperArm', 'rightUpperArm', 'leftUpperLeg', 'rightUpperLeg'],
+    qualityTargets: { maxRootLift: 0.08 }
+  },
+  reach: {
+    id: 'skill_reach',
+    label: '伸手',
+    actionType: 'reach',
+    actionFamily: 'reach',
+    supportedPromptTags: ['伸手', '够', '拿', '接近', 'reach'],
+    grounded: true,
+    allowAirborne: false,
+    durationProfile: { minSec: 0.45, idealSec: 1, maxSec: 2.4 },
+    phaseTemplates: DEFAULT_GROUNDED_PHASES,
+    rootMotionCurve: [
+      { timeRatio: 0.35, position: vec(0, -0.005, -0.02), rotation: vec(1, 0, 0), height: -0.005 },
+      { timeRatio: 0.62, position: vec(0, -0.005, -0.04), rotation: vec(2, 0, 0), height: -0.005 },
+      { timeRatio: 0.86, position: vec(), rotation: vec(), height: 0 }
+    ],
+    poseCurve: [
+      { timeRatio: 0.24, joint: 'rightUpperArm', rotation: { x: 38, y: -4, z: -22 } },
+      { timeRatio: 0.24, joint: 'rightLowerArm', rotation: { x: 34 } },
+      { timeRatio: 0.56, joint: 'rightUpperArm', rotation: { x: 72, y: -2, z: -12 } },
+      { timeRatio: 0.56, joint: 'rightLowerArm', rotation: { x: 18 } },
+      { timeRatio: 0.56, joint: 'chest', rotation: { x: 5 } },
+      { timeRatio: 0.78, joint: 'rightUpperArm', rotation: { x: 48, z: -18 } },
+      { timeRatio: 0.78, joint: 'rightLowerArm', rotation: { x: 38 } }
+    ],
+    contactPattern: [
+      { timeRatio: 0.34, contact: 'rightHand', kind: 'reach', targetRole: 'prompt_target', note: '右手伸向目标' },
+      { timeRatio: 0.58, contact: 'rightHand', kind: 'grasp', targetRole: 'prompt_target', note: '右手接近或触碰目标' }
+    ],
+    requiredJoints: ['rightUpperArm', 'rightLowerArm', 'chest'],
+    qualityTargets: { minPrimaryJointDelta: 12, maxRootLift: 0.04 }
+  }
+};
+
 function motionActionSkill(actionType?: MotionSemanticActionType) {
   return actionType ? MOTION_ACTION_SKILLS[actionType] : undefined;
 }
@@ -6945,15 +9265,30 @@ function mergeMotionQualityTargets(targets: MotionSkillQualityTarget[]) {
   }), fallback);
 }
 
+function completeMotionSkillQualityTarget(actionType: MotionSemanticActionType, partial?: Partial<MotionSkillQualityTarget>) {
+  const base = motionActionSkill(actionType)?.quality || {
+    maxRootStepDistance: 0.18,
+    maxRootRotationDelta: 32,
+    maxPoseStepDelta: 52,
+    maxRootLift: 0.08
+  };
+  return partial ? { ...base, ...partial } : base;
+}
+
 function motionQualityTargetForTransition(transition: PoseTransition) {
   const semanticPlan = transition.actionPlan.semanticPlan;
   const actionTypes = Array.from(new Set<MotionSemanticActionType>([
     semanticPlan?.actionType,
     ...(semanticPlan?.actionSequence || []).map((step) => step.actionType)
   ].filter((item): item is MotionSemanticActionType => Boolean(item && item !== 'unknown'))));
-  const targets = actionTypes
-    .map((actionType) => motionActionSkill(actionType)?.quality)
-    .filter((target): target is MotionSkillQualityTarget => Boolean(target));
+  const targets = actionTypes.flatMap((actionType) => {
+    const skillTarget = motionActionSkill(actionType)?.quality;
+    const templateTarget = motionSkillTemplateForAction(actionType)?.qualityTargets;
+    return [
+      skillTarget,
+      templateTarget ? completeMotionSkillQualityTarget(actionType, templateTarget) : undefined
+    ].filter((target): target is MotionSkillQualityTarget => Boolean(target));
+  });
   return mergeMotionQualityTargets(targets);
 }
 
@@ -6990,6 +9325,1652 @@ function serializableMotionActionSkills() {
       gait: skill.gait,
       quality: skill.quality
     }));
+}
+
+function promptRequirementLanguage(prompt: string): PromptRequirementGraph['language'] {
+  const hasZh = /[\u3400-\u9fff]/.test(prompt);
+  const hasEn = /[a-z]/i.test(prompt);
+  if (hasZh && hasEn) return 'mixed';
+  if (hasZh) return 'zh';
+  if (hasEn) return 'en';
+  return 'unknown';
+}
+
+function promptRequirementTextSpan(prompt: string, pattern: RegExp) {
+  const match = prompt.match(pattern);
+  return match?.index !== undefined ? { start: match.index, end: match.index + match[0].length } : undefined;
+}
+
+function promptRequirementDraftCategory(category: PromptRequirementCategory): MotionDraftRequirement['category'] {
+  if (category === 'actor_action' || category === 'object_motion') return 'action';
+  if (category === 'contact') return 'contact';
+  if (category === 'timing') return 'timing';
+  if (category === 'camera') return 'camera';
+  if (category === 'style') return 'style';
+  if (category === 'constraint' || category === 'avoidance') return 'constraint';
+  return 'other';
+}
+
+function promptRequirementToMotionDraftRequirement(requirement: PromptRequirement): MotionDraftRequirement {
+  return {
+    id: requirement.id,
+    text: requirement.text,
+    category: promptRequirementDraftCategory(requirement.category),
+    priority: requirement.priority === 'required' ? 'high' : 'low'
+  };
+}
+
+function promptRequirementGraphToMotionRequirements(graph?: PromptRequirementGraph): MotionDraftRequirement[] {
+  return graph?.requirements.map(promptRequirementToMotionDraftRequirement) || [];
+}
+
+function motionDraftWithPromptRequirementGraph(motionDraft: MotionDraft | undefined, graph: PromptRequirementGraph | undefined): MotionDraft | undefined {
+  if (!motionDraft || !graph?.requirements.length) return motionDraft;
+  const graphRequirements = promptRequirementGraphToMotionRequirements(graph);
+  const existingIds = new Set(motionDraft.promptRequirements.map((item) => item.id));
+  const promptRequirements = [
+    ...motionDraft.promptRequirements,
+    ...graphRequirements.filter((item) => !existingIds.has(item.id))
+  ].slice(0, 40);
+  const mapIds = new Set(motionDraft.promptRequirementMap.map((item) => item.requirementId));
+  const promptRequirementMap = [
+    ...motionDraft.promptRequirementMap,
+    ...graph.timeline
+      .flatMap((item) => item.requirementIds.map((requirementId) => ({ item, requirementId })))
+      .filter(({ requirementId }) => !mapIds.has(requirementId))
+      .map(({ item, requirementId }) => ({
+        requirementId,
+        appliedTo: [{
+          kind: 'phase' as const,
+          phaseId: item.id,
+          timeSec: Number((((item.startRatio + item.endRatio) * 0.5) * motionDraft.durationSec).toFixed(4))
+        }],
+        note: 'Merged from local PromptRequirementGraph'
+      }))
+  ].slice(0, 40);
+  return {
+    ...motionDraft,
+    promptRequirements,
+    promptRequirementMap,
+    warnings: Array.from(new Set([
+      ...motionDraft.warnings,
+      ...graph.requirements
+        .filter((item) => item.priority === 'required' && !existingIds.has(item.id))
+        .map((item) => `PromptRequirementGraph required requirement preserved locally: ${item.text}`)
+    ])).slice(0, 24)
+  };
+}
+
+function promptRequirementGraphMappedIds(graph?: PromptRequirementGraph) {
+  const ids = new Set<string>();
+  graph?.timeline.forEach((item) => item.requirementIds.forEach((id) => ids.add(id)));
+  graph?.constraints.forEach((constraint) => {
+    const requirement = graph.requirements.find((item) => item.actorId === constraint.actorId || item.targetId === constraint.targetId || item.verification.some((type) => (
+      (constraint.type === 'must_contact' && ['hand_target_distance', 'foot_contact'].includes(type))
+      || (constraint.type === 'must_move' && ['sample_root_motion', 'prop_motion'].includes(type))
+      || (constraint.type === 'must_frame_camera' && type === 'camera_motion_sample')
+      || (constraint.type === 'must_not_collide' && type === 'collision_absence')
+    )));
+    if (requirement) ids.add(requirement.id);
+  });
+  return ids;
+}
+
+function promptRequirementGraphRelatedData(requirementId: string, graph?: PromptRequirementGraph, durationSec = 1) {
+  const relatedFrames = new Set<number>();
+  const relatedJoints = new Set<PoseJointKey>();
+  const relatedContacts = new Set<MotionContactHint>();
+  const requirement = graph?.requirements.find((item) => item.id === requirementId);
+  graph?.timeline
+    .filter((item) => item.requirementIds.includes(requirementId))
+    .forEach((item) => relatedFrames.add(Number((((item.startRatio + item.endRatio) / 2) * durationSec).toFixed(3))));
+  requirement?.bodyParts.forEach((part) => {
+    if (part === 'leftHand') { relatedJoints.add('leftUpperArm'); relatedJoints.add('leftLowerArm'); relatedContacts.add('leftHand'); }
+    if (part === 'rightHand') { relatedJoints.add('rightUpperArm'); relatedJoints.add('rightLowerArm'); relatedContacts.add('rightHand'); }
+    if (part === 'leftFoot') { relatedJoints.add('leftUpperLeg'); relatedJoints.add('leftLowerLeg'); relatedContacts.add('leftFoot'); }
+    if (part === 'rightFoot') { relatedJoints.add('rightUpperLeg'); relatedJoints.add('rightLowerLeg'); relatedContacts.add('rightFoot'); }
+    if (part === 'head') { relatedJoints.add('head'); relatedContacts.add('head'); }
+  });
+  if (requirement?.verification.includes('foot_contact')) relatedContacts.add('feet');
+  if (requirement?.verification.includes('hand_target_distance')) relatedContacts.add('hands');
+  return {
+    relatedFrames: Array.from(relatedFrames).sort((a, b) => a - b).slice(0, 12),
+    relatedJoints: Array.from(relatedJoints).slice(0, 12),
+    relatedContacts: Array.from(relatedContacts).slice(0, 12)
+  };
+}
+
+function promptRequirementTargetCandidates(scene: Scene3DState, prompt: string) {
+  const lowered = prompt.toLowerCase();
+  const targets: PromptRequirementGraph['targets'] = [];
+  scene.objects.props.forEach((prop) => {
+    const name = prop.name.toLowerCase();
+    const genericMatch = (prop.shape === 'sphere' && /球|ball/.test(prompt))
+      || (/箱|盒|box|crate/.test(prompt) && prop.shape === 'box')
+      || (/桌|table/.test(prompt) && /桌|table/i.test(prop.name));
+    if (lowered.includes(name) || genericMatch) {
+      targets.push({ targetId: prop.id, targetType: 'prop', name: prop.name, role: /躲|避|绕|avoid|around/.test(prompt) ? 'obstacle' : 'push_target', worldPosition: prop.position });
+    }
+  });
+  scene.objects.characters.forEach((character) => {
+    if (lowered.includes(character.name.toLowerCase()) || (/男|男性|man|male/.test(prompt) && character.gender === 'male') || (/女|女性|woman|female/.test(prompt) && character.gender === 'female')) {
+      targets.push({ targetId: character.id, targetType: 'character', name: character.name, role: /躲|避|avoid|绕/.test(prompt) ? 'avoid_target' : 'receive_target', worldPosition: character.position });
+    }
+  });
+  scene.objects.cameras.forEach((camera) => {
+    if (lowered.includes(camera.name.toLowerCase())) targets.push({ targetId: camera.id, targetType: 'camera', name: camera.name, role: 'look_target', worldPosition: camera.position });
+  });
+  return targets.slice(0, 12);
+}
+
+function compilePromptRequirements(scene: Scene3DState, transition: PoseTransition): PromptRequirementGraph {
+  const prompt = transition.actionPrompt || '';
+  const normalized = prompt.trim().toLowerCase();
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const requirements: PromptRequirement[] = [];
+  const constraints: PromptConstraint[] = [];
+  const timeline: PromptTimelineItem[] = [];
+  const unresolved: string[] = [];
+  const warnings: string[] = [];
+  const targetCandidates = promptRequirementTargetCandidates(scene, prompt);
+  const selectedCharacter = scene.objects.characters.find((item) => item.id === transition.characterId);
+  const primaryTarget = targetCandidates.find((item) => item.targetId !== transition.characterId);
+  const addRequirement = (item: Omit<PromptRequirement, 'id' | 'normalizedText' | 'dependsOn' | 'conflictsWith' | 'confidence'> & Partial<Pick<PromptRequirement, 'id' | 'dependsOn' | 'conflictsWith' | 'confidence'>>) => {
+    const id = item.id || `prompt_req_${requirements.length + 1}`;
+    if (requirements.some((existing) => existing.id === id || (existing.category === item.category && existing.text === item.text))) return id;
+    requirements.push({
+      ...item,
+      id,
+      normalizedText: item.text.toLowerCase(),
+      bodyParts: item.bodyParts || [],
+      styleTags: item.styleTags || [],
+      verification: item.verification.length ? item.verification : ['phase_exists'],
+      dependsOn: item.dependsOn || [],
+      conflictsWith: item.conflictsWith || [],
+      confidence: item.confidence ?? 0.72
+    });
+    return id;
+  };
+  const addConstraint = (type: PromptConstraint['type'], requirementId: string, reason: string, patch: Partial<PromptConstraint> = {}) => {
+    constraints.push({
+      id: `prompt_constraint_${constraints.length + 1}`,
+      type,
+      actorId: transition.characterId,
+      targetId: primaryTarget?.targetId,
+      startRatio: 0,
+      endRatio: 1,
+      required: true,
+      reason,
+      ...patch
+    });
+    if (!timeline.some((item) => item.requirementIds.includes(requirementId))) {
+      timeline.push({
+        id: `prompt_timeline_${timeline.length + 1}`,
+        requirementIds: [requirementId],
+        label: reason,
+        startRatio: patch.startRatio ?? 0.15,
+        endRatio: patch.endRatio ?? 0.85,
+        order: timeline.length,
+        canOverlap: false
+      });
+    }
+  };
+
+  const actionPatterns: Array<{ type: MotionSemanticActionType; family: MotionSemanticActionFamily; pattern: RegExp; text: string; verification: PromptRequirementVerification[]; contactType?: InteractionContact['contactType']; bodyParts?: AnimationContactFrame['limb'][] }> = [
+    { type: 'dash', family: 'locomotion', pattern: /冲刺|疾跑|sprint|dash/i, text: '冲刺/爆发位移动作', verification: ['sample_root_motion', 'joint_delta', 'foot_contact'], bodyParts: ['leftFoot', 'rightFoot'] },
+    { type: 'run', family: 'locomotion', pattern: /跑步|奔跑|起跑|run|running/i, text: '跑步动作', verification: ['sample_root_motion', 'joint_delta', 'foot_contact'], bodyParts: ['leftFoot', 'rightFoot'] },
+    { type: 'walk', family: 'locomotion', pattern: /走路|步行|walk/i, text: '行走动作', verification: ['sample_root_motion', 'joint_delta', 'foot_contact'], bodyParts: ['leftFoot', 'rightFoot'] },
+    { type: 'push', family: 'push_pull', pattern: /推|推动|push/i, text: '推动目标', verification: ['hand_target_distance', 'prop_motion', 'foot_contact'], contactType: 'push', bodyParts: ['leftHand', 'rightHand'] },
+    { type: 'pull', family: 'push_pull', pattern: /拉|拽|pull/i, text: '拉动目标', verification: ['hand_target_distance', 'prop_motion', 'foot_contact'], contactType: 'pull', bodyParts: ['leftHand', 'rightHand'] },
+    { type: 'throw', family: 'throw', pattern: /投|扔|抛|throw|toss/i, text: '投掷释放动作', verification: ['joint_delta', 'hand_target_distance', 'phase_exists'], contactType: 'release', bodyParts: ['rightHand'] },
+    { type: 'punch', family: 'combat', pattern: /出拳|拳击|打|攻击|punch|strike|attack/i, text: '出击攻击动作', verification: ['joint_delta', 'hand_target_distance', 'phase_exists'], contactType: 'hit', bodyParts: ['rightHand'] },
+    { type: 'kick', family: 'combat', pattern: /踢|kick/i, text: '踢击动作', verification: ['joint_delta', 'prop_motion', 'phase_exists'], contactType: 'hit', bodyParts: ['rightFoot'] },
+    { type: 'jump', family: 'jump', pattern: /跳|跃起|jump|leap/i, text: '跳跃动作', verification: ['sample_root_motion', 'foot_contact', 'phase_exists'], bodyParts: ['leftFoot', 'rightFoot'] },
+    { type: 'crouch', family: 'posture', pattern: /下蹲|蹲|压低|crouch|squat/i, text: '下蹲/低重心动作', verification: ['joint_delta', 'sample_root_motion'], bodyParts: ['leftFoot', 'rightFoot'] },
+    { type: 'fall', family: 'fall', pattern: /摔倒|跌倒|倒下|fall/i, text: '摔倒动作', verification: ['joint_delta', 'sample_root_motion', 'phase_exists'] },
+    { type: 'get_up', family: 'fall', pattern: /起身|站起|get up|stand up/i, text: '起身恢复动作', verification: ['joint_delta', 'sample_root_motion', 'phase_exists'] },
+    { type: 'reach', family: 'reach', pattern: /伸手|拿|抓|接近|reach|grab|pick/i, text: '伸手接近目标', verification: ['hand_target_distance', 'phase_exists'], contactType: 'reach', bodyParts: ['rightHand'] },
+    { type: 'turn', family: 'turn', pattern: /转身|转向|turn/i, text: '转身/转向动作', verification: ['joint_delta', 'phase_exists'] }
+  ];
+  actionPatterns.forEach((entry) => {
+    if (!entry.pattern.test(prompt)) return;
+    const id = addRequirement({
+      text: entry.text,
+      priority: 'required',
+      category: 'actor_action',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      targetId: primaryTarget?.targetId,
+      targetType: primaryTarget?.targetType,
+      actionType: entry.type,
+      skillHint: entry.type,
+      bodyParts: entry.bodyParts || [],
+      contactType: entry.contactType,
+      styleTags: [],
+      verification: entry.verification,
+      negative: false,
+      sourceSpan: promptRequirementTextSpan(prompt, entry.pattern),
+      confidence: 0.86
+    });
+    addConstraint(entry.contactType ? 'must_contact' : 'must_move', id, entry.text, { threshold: entry.type === 'walk' ? 0.08 : 0.16 });
+  });
+  if (!requirements.some((item) => item.category === 'actor_action') && semanticPlan?.actionType && semanticPlan.actionType !== 'unknown') {
+    const id = addRequirement({
+      text: `${MOTION_SEMANTIC_TYPE_LABELS[semanticPlan.actionType] || semanticPlan.actionType} 动作`,
+      priority: 'required',
+      category: 'actor_action',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      targetId: semanticPlan.targetObjectId || primaryTarget?.targetId,
+      targetType: semanticPlan.targetObjectId ? 'prop' : primaryTarget?.targetType,
+      actionType: semanticPlan.actionType,
+      skillHint: semanticPlan.actionType,
+      bodyParts: [],
+      styleTags: [],
+      verification: ['phase_exists', isLocomotionActionType(semanticPlan.actionType) ? 'sample_root_motion' : 'joint_delta'],
+      negative: false,
+      confidence: 0.74
+    });
+    addConstraint('must_move', id, '本地语义动作', { required: true });
+  }
+
+  targetCandidates.forEach((target) => {
+    addRequirement({
+      id: `prompt_target_${target.targetId}`,
+      text: `涉及目标对象：${target.name || target.targetId}`,
+      priority: target.targetType === 'camera' ? 'preferred' : 'required',
+      category: target.targetType === 'camera' ? 'camera' : 'spatial',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      targetId: target.targetId,
+      targetType: target.targetType,
+      actionType: semanticPlan?.actionType,
+      skillHint: semanticPlan?.actionType,
+      bodyParts: [],
+      spatialGoal: target.role === 'obstacle' ? 'avoid or move around target' : 'interact with named target',
+      styleTags: [],
+      verification: target.role === 'obstacle' ? ['collision_absence'] : target.targetType === 'prop' ? ['prop_motion', 'hand_target_distance'] : ['actor_distance_change'],
+      negative: false,
+      confidence: 0.82
+    });
+  });
+
+  const bodyPatterns: Array<{ pattern: RegExp; limbs: AnimationContactFrame['limb'][]; text: string }> = [
+    { pattern: /左手|left hand/i, limbs: ['leftHand'], text: '左手参与动作' },
+    { pattern: /右手|right hand/i, limbs: ['rightHand'], text: '右手参与动作' },
+    { pattern: /双手|两只手|both hands/i, limbs: ['leftHand', 'rightHand'], text: '双手参与动作' },
+    { pattern: /左脚|left foot/i, limbs: ['leftFoot'], text: '左脚参与动作' },
+    { pattern: /右脚|right foot/i, limbs: ['rightFoot'], text: '右脚参与动作' },
+    { pattern: /双脚|两只脚|both feet/i, limbs: ['leftFoot', 'rightFoot'], text: '双脚稳定/参与动作' },
+    { pattern: /头|看向|head|look/i, limbs: ['head'], text: '头部/视线参与动作' }
+  ];
+  bodyPatterns.forEach((entry) => {
+    if (!entry.pattern.test(prompt)) return;
+    const id = addRequirement({
+      text: entry.text,
+      priority: 'required',
+      category: 'contact',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      targetId: primaryTarget?.targetId,
+      targetType: primaryTarget?.targetType,
+      actionType: semanticPlan?.actionType,
+      skillHint: semanticPlan?.actionType,
+      bodyParts: entry.limbs,
+      contactType: entry.limbs.some((limb) => limb.endsWith('Hand')) ? 'reach' : undefined,
+      styleTags: [],
+      verification: entry.limbs.some((limb) => limb.endsWith('Foot')) ? ['foot_contact'] : entry.limbs.includes('head') ? ['phase_exists'] : ['hand_target_distance'],
+      negative: false,
+      sourceSpan: promptRequirementTextSpan(prompt, entry.pattern),
+      confidence: 0.8
+    });
+    addConstraint(entry.limbs.some((limb) => limb.endsWith('Hand')) ? 'must_contact' : 'must_move', id, entry.text, { bodyPart: entry.limbs[0] });
+  });
+
+  const timingPatterns: Array<{ pattern: RegExp; label: string; window: [number, number]; canOverlap?: boolean }> = [
+    { pattern: /先|首先|起手|预备|before|first/i, label: '先执行/起手阶段', window: [0.02, 0.28] },
+    { pattern: /然后|接着|之后|then|after/i, label: '随后阶段', window: [0.28, 0.72] },
+    { pattern: /最后|收势|回收|稳定|finally|recover|settle/i, label: '最后回收/稳定阶段', window: [0.72, 0.98] },
+    { pattern: /同时|同步|期间|while|simultaneously/i, label: '同时执行', window: [0.2, 0.82], canOverlap: true }
+  ];
+  timingPatterns.forEach((entry) => {
+    if (!entry.pattern.test(prompt)) return;
+    const id = addRequirement({
+      text: entry.label,
+      priority: 'required',
+      category: 'timing',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      actionType: semanticPlan?.actionType,
+      skillHint: semanticPlan?.actionType,
+      bodyParts: [],
+      timingGoal: entry.label,
+      styleTags: [],
+      verification: ['phase_exists'],
+      negative: false,
+      sourceSpan: promptRequirementTextSpan(prompt, entry.pattern),
+      confidence: 0.76
+    });
+    timeline.push({ id: `prompt_timing_${timeline.length + 1}`, requirementIds: [id], label: entry.label, startRatio: entry.window[0], endRatio: entry.window[1], order: timeline.length, canOverlap: Boolean(entry.canOverlap) });
+  });
+
+  const styleTags = [
+    [/快速|迅速|fast|quick/i, 'fast'],
+    [/缓慢|慢慢|slow/i, 'slow'],
+    [/用力|大力|forceful|strong/i, 'forceful'],
+    [/轻微|轻轻|subtle|soft/i, 'subtle'],
+    [/真实|写实|realistic/i, 'realistic'],
+    [/夸张|exaggerated|cartoon/i, 'exaggerated'],
+    [/低重心|low center/i, 'low_center'],
+    [/稳定|stable/i, 'stable'],
+    [/爆发|burst|impact/i, 'burst']
+  ] as const;
+  const matchedStyles = styleTags.filter(([pattern]) => pattern.test(prompt)).map(([, tag]) => tag);
+  if (matchedStyles.length) {
+    addRequirement({
+      text: `动作风格：${matchedStyles.join(', ')}`,
+      priority: /必须|一定|不要|不能/.test(prompt) ? 'required' : 'preferred',
+      category: 'style',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      actionType: semanticPlan?.actionType,
+      skillHint: semanticPlan?.actionType,
+      bodyParts: [],
+      styleTags: matchedStyles,
+      verification: ['phase_exists', 'joint_delta'],
+      negative: false,
+      confidence: 0.7
+    });
+  }
+
+  const cameraPatterns = [
+    [/推近|推进|dolly in|zoom in/i, 'dolly_in'],
+    [/跟随|跟拍|follow/i, 'follow_character'],
+    [/环绕|围绕|orbit|around/i, 'orbit'],
+    [/低机位|仰拍|low angle|low/i, 'low_tilt_up'],
+    [/特写|近景|close/i, 'close_follow'],
+    [/摇移|手持|handheld|shake/i, 'handheld']
+  ] as const;
+  const matchedCamera = cameraPatterns.find(([pattern]) => pattern.test(prompt));
+  if (matchedCamera) {
+    const id = addRequirement({
+      text: `镜头运动：${matchedCamera[1]}`,
+      priority: /必须|一定/.test(prompt) ? 'required' : 'preferred',
+      category: 'camera',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      targetId: transition.characterId,
+      targetType: 'character',
+      actionType: semanticPlan?.actionType,
+      skillHint: matchedCamera[1],
+      bodyParts: [],
+      styleTags: [matchedCamera[1]],
+      verification: ['camera_motion_sample'],
+      negative: false,
+      sourceSpan: promptRequirementTextSpan(prompt, matchedCamera[0]),
+      confidence: 0.78
+    });
+    addConstraint('must_frame_camera', id, `镜头需要体现 ${matchedCamera[1]}`, { required: false });
+  }
+
+  const negativePatterns: Array<{ pattern: RegExp; text: string; type: PromptConstraint['type']; verification: PromptRequirementVerification[] }> = [
+    { pattern: /不要飞|不能飞|不要离地|不能离地|not airborne|no flying/i, text: '不要离地/飞起', type: 'must_not_airborne', verification: ['foot_contact'] },
+    { pattern: /不要穿过|不能穿过|避免穿过|not collide|no collision/i, text: '不要穿过物体/避免碰撞', type: 'must_not_collide', verification: ['collision_absence'] },
+    { pattern: /脚不要滑|不要脚滑|foot sliding/i, text: '脚步不要滑动', type: 'must_keep_grounded', verification: ['foot_contact'] },
+    { pattern: /避开|躲避|绕过|avoid|around/i, text: '避让/绕过目标', type: 'must_avoid', verification: ['collision_absence', 'actor_distance_change'] }
+  ];
+  negativePatterns.forEach((entry) => {
+    if (!entry.pattern.test(prompt)) return;
+    const id = addRequirement({
+      text: entry.text,
+      priority: 'required',
+      category: 'avoidance',
+      actorId: transition.characterId,
+      actorRole: 'primary',
+      targetId: primaryTarget?.targetId,
+      targetType: primaryTarget?.targetType,
+      actionType: semanticPlan?.actionType,
+      skillHint: semanticPlan?.actionType,
+      bodyParts: entry.type === 'must_keep_grounded' ? ['leftFoot', 'rightFoot'] : [],
+      spatialGoal: entry.text,
+      styleTags: [],
+      verification: entry.verification,
+      negative: true,
+      sourceSpan: promptRequirementTextSpan(prompt, entry.pattern),
+      confidence: 0.86
+    });
+    addConstraint(entry.type, id, entry.text);
+  });
+
+  if (!prompt.trim()) unresolved.push('actionPrompt is empty');
+  if (requirements.length && !timeline.length) {
+    requirements.forEach((requirement, index) => {
+      const startRatio = Math.min(0.88, index / Math.max(1, requirements.length));
+      timeline.push({
+        id: `prompt_timeline_auto_${index + 1}`,
+        requirementIds: [requirement.id],
+        label: requirement.text,
+        startRatio,
+        endRatio: Math.min(1, startRatio + Math.max(0.18, 1 / Math.max(2, requirements.length))),
+        order: index,
+        canOverlap: requirement.category === 'style' || requirement.category === 'camera'
+      });
+    });
+  }
+  if (transition.keyframes.length) {
+    transition.keyframes.forEach((frame, index) => {
+      const id = addRequirement({
+        id: `manual_keyframe_${frame.id}`,
+        text: `用户手动中间帧：${frame.label}`,
+        priority: 'required',
+        category: 'constraint',
+        actorId: transition.characterId,
+        actorRole: 'primary',
+        bodyParts: [],
+        timingGoal: `${frame.timeSec.toFixed(2)}s`,
+        styleTags: [],
+        verification: ['phase_exists'],
+        negative: false,
+        confidence: 1
+      });
+      timeline.push({
+        id: `manual_keyframe_timeline_${index + 1}`,
+        requirementIds: [id],
+        label: frame.label,
+        startRatio: clamp01(frame.timeSec / Math.max(0.0001, transition.durationSec)),
+        endRatio: clamp01(frame.timeSec / Math.max(0.0001, transition.durationSec)),
+        order: timeline.length,
+        canOverlap: false
+      });
+    });
+  }
+  if (!targetCandidates.length && /箱|桌|球|目标|对象|prop|box|table|ball/.test(prompt)) {
+    unresolved.push('prompt mentions a target object but no matching scene object id was found');
+    warnings.push('提示词提到目标对象，但场景内没有匹配到明确角色/道具 id。');
+  }
+  const actors = [{
+    actorId: transition.characterId,
+    role: 'primary' as const,
+    name: selectedCharacter?.name,
+    actionType: requirements.find((item) => item.actionType)?.actionType || semanticPlan?.actionType
+  }];
+  return {
+    version: 1,
+    sourcePrompt: prompt,
+    language: promptRequirementLanguage(prompt),
+    requirements: requirements.slice(0, 40),
+    constraints: constraints.slice(0, 40),
+    actors,
+    targets: targetCandidates,
+    timeline: timeline.sort((a, b) => a.order - b.order).slice(0, 24),
+    unresolved,
+    warnings,
+    confidence: requirements.length ? Number((requirements.reduce((sum, item) => sum + item.confidence, 0) / requirements.length).toFixed(3)) : 0
+  };
+}
+
+function defaultMotionStyleProfile(): MotionStyleProfile {
+  return {
+    id: 'motion_style_default',
+    label: 'Default realistic motion',
+    source: 'default',
+    realism: 0.72,
+    exaggeration: 0.18,
+    energy: 0.5,
+    weight: 0.5,
+    speed: 0.5,
+    fluidity: 0.55,
+    tension: 0.22,
+    precision: 0.62,
+    impact: 0.24,
+    softness: 0.45,
+    cameraIntensity: 0.45,
+    timingScale: 1,
+    poseAmplitudeScale: 1,
+    rootMotionScale: 1,
+    armSwingScale: 1,
+    legStrideScale: 1,
+    crouchScale: 1,
+    verticalLiftScale: 1,
+    recoveryScale: 1,
+    contactHoldScale: 1,
+    tags: [],
+    warnings: [],
+    confidence: 0.35
+  };
+}
+
+const MOTION_STYLE_PATTERNS: Array<{
+  id: string;
+  pattern: RegExp;
+  category: MotionStyleTagCategory;
+  appliesTo: MotionStyleApplyScope;
+  strength: number;
+}> = [
+  { id: 'realistic', pattern: /真实|写实|自然|realistic|natural/i, category: 'realism', appliesTo: 'whole_body', strength: 0.76 },
+  { id: 'exaggerated', pattern: /夸张|卡通|漫画|exaggerated|cartoon/i, category: 'energy', appliesTo: 'whole_body', strength: 0.78 },
+  { id: 'fast', pattern: /快速|迅速|快步|fast|quick/i, category: 'speed', appliesTo: 'root', strength: 0.68 },
+  { id: 'sprint', pattern: /冲刺|疾跑|奔跑|sprint|dash/i, category: 'speed', appliesTo: 'root', strength: 0.82 },
+  { id: 'slow_motion', pattern: /慢动作|子弹时间|slow motion|bullet time/i, category: 'cinematic', appliesTo: 'whole_body', strength: 0.82 },
+  { id: 'slow', pattern: /缓慢|慢慢|慢速|slow/i, category: 'speed', appliesTo: 'whole_body', strength: 0.64 },
+  { id: 'burst', pattern: /爆发|爆发式|突然发力|burst/i, category: 'impact', appliesTo: 'whole_body', strength: 0.82 },
+  { id: 'impact', pattern: /冲击|撞击|impact|hit hard/i, category: 'impact', appliesTo: 'whole_body', strength: 0.74 },
+  { id: 'tired', pattern: /疲惫|疲劳|累|无力|tired|exhausted/i, category: 'emotion', appliesTo: 'whole_body', strength: 0.72 },
+  { id: 'light', pattern: /轻盈|轻快|轻轻|light|nimble/i, category: 'weight', appliesTo: 'whole_body', strength: 0.68 },
+  { id: 'heavy', pattern: /沉重|厚重|重重|heavy|weighted/i, category: 'weight', appliesTo: 'whole_body', strength: 0.76 },
+  { id: 'cautious', pattern: /小心|谨慎|翼翼|cautious|careful/i, category: 'caution', appliesTo: 'whole_body', strength: 0.74 },
+  { id: 'nervous', pattern: /紧张|慌张|nervous|anxious/i, category: 'emotion', appliesTo: 'whole_body', strength: 0.7 },
+  { id: 'cinematic', pattern: /电影感|电影式|cinematic|dramatic/i, category: 'cinematic', appliesTo: 'camera', strength: 0.72 },
+  { id: 'precise', pattern: /精准|精确|precise|accurate/i, category: 'precision', appliesTo: 'hands', strength: 0.66 }
+];
+
+function motionStyleTagFromId(id: string, strength = 0.62, startRatio = 0, endRatio = 1): MotionStyleTag | undefined {
+  const normalized = id.trim().toLowerCase().replace(/\s+/g, '_');
+  const pattern = MOTION_STYLE_PATTERNS.find((item) => item.id === normalized)
+    || (normalized === 'forceful' ? MOTION_STYLE_PATTERNS.find((item) => item.id === 'impact') : undefined)
+    || (normalized === 'subtle' || normalized === 'soft' ? MOTION_STYLE_PATTERNS.find((item) => item.id === 'light') : undefined)
+    || (normalized === 'low_center' || normalized === 'stable' ? MOTION_STYLE_PATTERNS.find((item) => item.id === 'heavy') : undefined);
+  if (!pattern) return undefined;
+  return {
+    id: `style_${pattern.id}_${Math.round(startRatio * 100)}_${Math.round(endRatio * 100)}`,
+    text: pattern.id,
+    category: pattern.category,
+    strength: clampNumber(Math.max(strength, pattern.strength * 0.75), 0, 1),
+    appliesTo: pattern.appliesTo,
+    startRatio: clamp01(startRatio),
+    endRatio: clampNumber(endRatio, startRatio, 1)
+  };
+}
+
+function matchMotionStyleTags(text: string, source: string, startRatio = 0, endRatio = 1): MotionStyleTag[] {
+  if (!text.trim()) return [];
+  return MOTION_STYLE_PATTERNS
+    .filter((item) => item.pattern.test(text))
+    .map((item) => ({
+      id: `style_${source}_${item.id}_${Math.round(startRatio * 100)}_${Math.round(endRatio * 100)}`,
+      text: item.id,
+      category: item.category,
+      strength: item.strength,
+      appliesTo: item.appliesTo,
+      startRatio: clamp01(startRatio),
+      endRatio: clampNumber(endRatio, startRatio, 1)
+    }));
+}
+
+function dedupeMotionStyleTags(tags: MotionStyleTag[]) {
+  const byKey = new Map<string, MotionStyleTag>();
+  tags.forEach((tag, index) => {
+    const normalized = normalizeMotionStyleTag(tag, index);
+    if (!normalized) return;
+    const key = `${normalized.text}:${normalized.startRatio.toFixed(2)}:${normalized.endRatio.toFixed(2)}:${normalized.appliesTo}`;
+    const existing = byKey.get(key);
+    if (!existing || normalized.strength > existing.strength) byKey.set(key, normalized);
+  });
+  return Array.from(byKey.values()).slice(0, 32);
+}
+
+function applyMotionStyleTag(profile: MotionStyleProfile, tag: MotionStyleTag) {
+  const strength = clampNumber(tag.strength, 0, 1);
+  const boost = (value: number, amount: number, min = 0, max = 1) => clampNumber(value + amount * strength, min, max);
+  const scale = (key: keyof MotionStyleProfile, amount: number, min: number, max: number) => {
+    const value = Number((profile as any)[key]);
+    (profile as any)[key] = Number(clampNumber(value + amount * strength, min, max).toFixed(3));
+  };
+  if (tag.text === 'realistic') {
+    profile.realism = boost(profile.realism, 0.22);
+    profile.exaggeration = boost(profile.exaggeration, -0.18);
+    profile.precision = boost(profile.precision, 0.16);
+    scale('poseAmplitudeScale', -0.1, 0.45, 1.45);
+    scale('rootMotionScale', -0.06, 0.45, 1.45);
+    scale('verticalLiftScale', -0.1, 0.35, 1.45);
+  } else if (tag.text === 'exaggerated') {
+    profile.exaggeration = boost(profile.exaggeration, 0.34);
+    profile.impact = boost(profile.impact, 0.2);
+    scale('poseAmplitudeScale', 0.24, 0.45, 1.45);
+    scale('armSwingScale', 0.22, 0.35, 1.6);
+    scale('legStrideScale', 0.16, 0.35, 1.6);
+  } else if (tag.text === 'fast' || tag.text === 'sprint') {
+    profile.speed = boost(profile.speed, tag.text === 'sprint' ? 0.36 : 0.24);
+    profile.energy = boost(profile.energy, 0.18);
+    scale('timingScale', tag.text === 'sprint' ? 0.26 : 0.18, 0.45, 1.65);
+    scale('rootMotionScale', tag.text === 'sprint' ? 0.18 : 0.1, 0.45, 1.45);
+    scale('armSwingScale', 0.2, 0.35, 1.6);
+    scale('legStrideScale', 0.24, 0.35, 1.6);
+    scale('recoveryScale', -0.08, 0.45, 1.55);
+  } else if (tag.text === 'slow' || tag.text === 'slow_motion') {
+    profile.speed = boost(profile.speed, -0.22);
+    profile.fluidity = boost(profile.fluidity, 0.12);
+    if (tag.text === 'slow_motion') profile.cameraIntensity = boost(profile.cameraIntensity, 0.2);
+    scale('timingScale', tag.text === 'slow_motion' ? -0.28 : -0.18, 0.45, 1.65);
+    scale('rootMotionScale', -0.12, 0.45, 1.45);
+    scale('contactHoldScale', 0.22, 0.45, 1.8);
+    scale('recoveryScale', 0.14, 0.45, 1.55);
+  } else if (tag.text === 'burst' || tag.text === 'impact') {
+    profile.energy = boost(profile.energy, 0.26);
+    profile.impact = boost(profile.impact, 0.34);
+    scale('timingScale', 0.14, 0.45, 1.65);
+    scale('poseAmplitudeScale', 0.18, 0.45, 1.45);
+    scale('rootMotionScale', 0.18, 0.45, 1.45);
+    scale('cameraIntensity', 0.2, 0, 1);
+  } else if (tag.text === 'tired') {
+    profile.energy = boost(profile.energy, -0.28);
+    profile.speed = boost(profile.speed, -0.16);
+    profile.weight = boost(profile.weight, 0.14);
+    scale('armSwingScale', -0.24, 0.35, 1.6);
+    scale('legStrideScale', -0.18, 0.35, 1.6);
+    scale('crouchScale', 0.16, 0.45, 1.6);
+    scale('poseAmplitudeScale', -0.1, 0.45, 1.45);
+  } else if (tag.text === 'light') {
+    profile.weight = boost(profile.weight, -0.22);
+    profile.fluidity = boost(profile.fluidity, 0.2);
+    profile.softness = boost(profile.softness, 0.14);
+    scale('verticalLiftScale', 0.12, 0.35, 1.45);
+    scale('legStrideScale', 0.08, 0.35, 1.6);
+  } else if (tag.text === 'heavy') {
+    profile.weight = boost(profile.weight, 0.3);
+    profile.speed = boost(profile.speed, -0.12);
+    scale('timingScale', -0.08, 0.45, 1.65);
+    scale('rootMotionScale', -0.1, 0.45, 1.45);
+    scale('crouchScale', 0.22, 0.45, 1.6);
+    scale('contactHoldScale', 0.28, 0.45, 1.8);
+  } else if (tag.text === 'cautious') {
+    profile.precision = boost(profile.precision, 0.24);
+    profile.speed = boost(profile.speed, -0.18);
+    scale('timingScale', -0.1, 0.45, 1.65);
+    scale('legStrideScale', -0.2, 0.35, 1.6);
+    scale('rootMotionScale', -0.12, 0.45, 1.45);
+    scale('cameraIntensity', -0.12, 0, 1);
+  } else if (tag.text === 'nervous') {
+    profile.tension = boost(profile.tension, 0.34);
+    profile.precision = boost(profile.precision, -0.08);
+    scale('poseAmplitudeScale', -0.08, 0.45, 1.45);
+    scale('recoveryScale', -0.08, 0.45, 1.55);
+  } else if (tag.text === 'cinematic') {
+    profile.cameraIntensity = boost(profile.cameraIntensity, 0.34);
+    profile.fluidity = boost(profile.fluidity, 0.12);
+    scale('poseAmplitudeScale', 0.08, 0.45, 1.45);
+    scale('recoveryScale', 0.12, 0.45, 1.55);
+  } else if (tag.text === 'precise') {
+    profile.precision = boost(profile.precision, 0.24);
+    scale('poseAmplitudeScale', -0.04, 0.45, 1.45);
+  }
+}
+
+function motionStyleProfileFromTags(tags: MotionStyleTag[], source: MotionStyleProfile['source']): MotionStyleProfile {
+  const profile = defaultMotionStyleProfile();
+  const normalizedTags = dedupeMotionStyleTags(tags);
+  normalizedTags.forEach((tag) => applyMotionStyleTag(profile, tag));
+  profile.id = normalizedTags.length ? `motion_style_${source}_${normalizedTags.map((tag) => tag.text).join('_').slice(0, 80)}` : 'motion_style_default';
+  profile.source = normalizedTags.length ? source : 'default';
+  profile.label = normalizedTags.length ? normalizedTags.map((tag) => tag.text).slice(0, 4).join(' / ') : profile.label;
+  profile.tags = normalizedTags;
+  profile.confidence = normalizedTags.length ? clampNumber(0.52 + normalizedTags.length * 0.08, 0.52, 0.92) : 0.35;
+  return normalizeMotionStyleProfile(profile) || profile;
+}
+
+function resolveMotionStyleProfile(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  promptRequirementGraph?: PromptRequirementGraph,
+  motionDraft?: MotionDraft,
+  negativeConstraints: NegativeMotionConstraint[] = []
+): MotionStyleProfile {
+  void scene;
+  const durationSec = Math.max(0.1, transition.durationSec || motionDraft?.durationSec || 1);
+  const tags: MotionStyleTag[] = [];
+  tags.push(...matchMotionStyleTags(transition.actionPrompt || '', 'prompt'));
+  promptRequirementGraph?.requirements
+    .filter((requirement) => requirement.category === 'style' || requirement.styleTags.length)
+    .forEach((requirement, index) => {
+      const timeline = promptRequirementGraph.timeline.find((item) => item.requirementIds.includes(requirement.id));
+      const startRatio = timeline?.startRatio ?? 0;
+      const endRatio = timeline?.endRatio ?? 1;
+      requirement.styleTags.forEach((tag) => {
+        const parsed = motionStyleTagFromId(tag, requirement.priority === 'required' ? 0.78 : 0.58, startRatio, endRatio);
+        if (parsed) tags.push({ ...parsed, id: `style_graph_${requirement.id}_${parsed.text}` });
+      });
+      tags.push(...matchMotionStyleTags(requirement.text, `graph_${index}`, startRatio, endRatio));
+    });
+  motionDraft?.phasePlan.forEach((phase, index) => {
+    const startRatio = clamp01(phase.startSec / durationSec);
+    const endRatio = clampNumber(phase.endSec / durationSec, startRatio, 1);
+    tags.push(...matchMotionStyleTags(`${phase.label} ${phase.purpose || ''}`, `draft_phase_${index}`, startRatio, endRatio));
+  });
+  tags.push(...matchMotionStyleTags(motionDraft?.generatedMotionPrompt || '', 'draft_prompt'));
+  const intentText = [
+    transition.motionIntent?.generatedMotionPrompt,
+    transition.motionIntent?.intent,
+    transition.generatedMotionPrompt
+  ].filter(Boolean).join(' ');
+  tags.push(...matchMotionStyleTags(intentText, 'ai_intent'));
+  if (transition.motionIntent?.rhythm === 'fast') {
+    const tag = motionStyleTagFromId('fast', 0.58);
+    if (tag) tags.push({ ...tag, id: 'style_ai_rhythm_fast' });
+  } else if (transition.motionIntent?.rhythm === 'slow') {
+    const tag = motionStyleTagFromId('slow', 0.58);
+    if (tag) tags.push({ ...tag, id: 'style_ai_rhythm_slow' });
+  } else if (transition.motionIntent?.rhythm === 'impact') {
+    const tag = motionStyleTagFromId('impact', 0.62);
+    if (tag) tags.push({ ...tag, id: 'style_ai_rhythm_impact' });
+  } else if (transition.motionIntent?.rhythm === 'perform') {
+    const tag = motionStyleTagFromId('cinematic', 0.52);
+    if (tag) tags.push({ ...tag, id: 'style_ai_rhythm_perform' });
+  }
+
+  const source: MotionStyleProfile['source'] = promptRequirementGraph?.requirements.some((item) => item.category === 'style' || item.styleTags.length)
+    ? 'local'
+    : tags.some((tag) => tag.id.includes('prompt'))
+      ? 'prompt'
+      : tags.some((tag) => tag.id.includes('ai') || tag.id.includes('draft'))
+        ? 'ai'
+        : 'default';
+  const profile = motionStyleProfileFromTags(tags, source);
+  const warnings = [...profile.warnings];
+  const noAirborne = negativeConstraints.some((constraint) => constraint.type === 'no_airborne') || !transitionAllowsAirborneMotion(transition);
+  if (noAirborne && profile.verticalLiftScale > 1) {
+    profile.verticalLiftScale = 1;
+    warnings.push('MotionStyle vertical lift was clamped by grounded/no_airborne constraints.');
+  }
+  if (negativeConstraints.some((constraint) => constraint.type === 'no_extreme_joint_rotation') && profile.poseAmplitudeScale > 1.25) {
+    profile.poseAmplitudeScale = 1.25;
+    profile.armSwingScale = Math.min(profile.armSwingScale, 1.32);
+    profile.legStrideScale = Math.min(profile.legStrideScale, 1.32);
+    warnings.push('MotionStyle exaggerated amplitude was capped by joint rotation constraints.');
+  }
+  profile.warnings = Array.from(new Set(warnings)).slice(0, 32);
+  return normalizeMotionStyleProfile(profile) || profile;
+}
+
+function motionStyleProfileAtRatio(profile: MotionStyleProfile | undefined, ratio: number): MotionStyleProfile | undefined {
+  if (!profile?.tags.length) return profile;
+  const activeTags = profile.tags.filter((tag) => ratio >= tag.startRatio && ratio <= tag.endRatio);
+  if (!activeTags.length) return profile;
+  const local = motionStyleProfileFromTags(activeTags, profile.source);
+  return {
+    ...profile,
+    label: local.label || profile.label,
+    realism: lerp(profile.realism, local.realism, 0.65),
+    exaggeration: lerp(profile.exaggeration, local.exaggeration, 0.65),
+    energy: lerp(profile.energy, local.energy, 0.65),
+    weight: lerp(profile.weight, local.weight, 0.65),
+    speed: lerp(profile.speed, local.speed, 0.65),
+    fluidity: lerp(profile.fluidity, local.fluidity, 0.65),
+    tension: lerp(profile.tension, local.tension, 0.65),
+    precision: lerp(profile.precision, local.precision, 0.65),
+    impact: lerp(profile.impact, local.impact, 0.65),
+    softness: lerp(profile.softness, local.softness, 0.65),
+    cameraIntensity: lerp(profile.cameraIntensity, local.cameraIntensity, 0.65),
+    timingScale: lerp(profile.timingScale, local.timingScale, 0.65),
+    poseAmplitudeScale: lerp(profile.poseAmplitudeScale, local.poseAmplitudeScale, 0.65),
+    rootMotionScale: lerp(profile.rootMotionScale, local.rootMotionScale, 0.65),
+    armSwingScale: lerp(profile.armSwingScale, local.armSwingScale, 0.65),
+    legStrideScale: lerp(profile.legStrideScale, local.legStrideScale, 0.65),
+    crouchScale: lerp(profile.crouchScale, local.crouchScale, 0.65),
+    verticalLiftScale: lerp(profile.verticalLiftScale, local.verticalLiftScale, 0.65),
+    recoveryScale: lerp(profile.recoveryScale, local.recoveryScale, 0.65),
+    contactHoldScale: lerp(profile.contactHoldScale, local.contactHoldScale, 0.65)
+  };
+}
+
+function motionStyleHasExplicitTags(profile?: MotionStyleProfile) {
+  return Boolean(profile?.tags.length && profile.source !== 'default');
+}
+
+function motionStyleSummary(profile?: MotionStyleProfile) {
+  if (!motionStyleHasExplicitTags(profile)) return '';
+  const top = profile!.tags
+    .slice()
+    .sort((a, b) => b.strength - a.strength)
+    .slice(0, 4)
+    .map((tag) => `${tag.text} ${tag.strength.toFixed(2)}`);
+  return `Motion style: ${top.join(' / ')}; speed ${profile!.speed.toFixed(2)}, weight ${profile!.weight.toFixed(2)}, camera ${profile!.cameraIntensity.toFixed(2)}`;
+}
+
+function motionStyleRetimedRatio(ratio: number, profile?: MotionStyleProfile) {
+  if (!profile) return clamp01(ratio);
+  const t = clamp01(ratio);
+  const timing = clampNumber(profile.timingScale, 0.45, 1.65);
+  const centered = clamp01((t - 0.5) * timing + 0.5);
+  return lerp(t, easeCurve('ease_in_out', centered), 0.32);
+}
+
+function motionStyleJointScale(joint: PoseJointKey, profile?: MotionStyleProfile) {
+  if (!profile) return 1;
+  let scale = profile.poseAmplitudeScale;
+  if (joint.includes('Arm') || joint.includes('Hand')) scale *= profile.armSwingScale;
+  if (joint.includes('Leg') || joint.includes('Foot')) scale *= profile.legStrideScale;
+  if (joint === 'pelvis' || joint === 'chest') scale *= profile.crouchScale;
+  if (joint === 'head' || joint === 'neck') scale *= clampNumber(profile.precision + profile.tension * 0.18, 0.65, 1.18);
+  return clampNumber(scale, 0.32, 1.65);
+}
+
+function scaleMotionSkillPosePatch(
+  patch: Partial<Record<PoseJointKey, Partial<RigRotation>>>,
+  profile?: MotionStyleProfile
+): Partial<Record<PoseJointKey, Partial<RigRotation>>> {
+  if (!profile) return patch;
+  const scaled: Partial<Record<PoseJointKey, Partial<RigRotation>>> = {};
+  for (const key of Object.keys(patch) as PoseJointKey[]) {
+    const value = patch[key];
+    if (!value) continue;
+    const jointScale = motionStyleJointScale(key, profile);
+    scaled[key] = {
+      x: value.x === undefined ? undefined : Number(clampMotionNumber(value.x * jointScale, -130, 130).toFixed(3)),
+      y: value.y === undefined ? undefined : Number(clampMotionNumber(value.y * jointScale, -130, 130).toFixed(3)),
+      z: value.z === undefined ? undefined : Number(clampMotionNumber(value.z * jointScale, -130, 130).toFixed(3))
+    };
+  }
+  return scaled;
+}
+
+function motionStyleWantsCamera(profile?: MotionStyleProfile) {
+  return Boolean(profile && motionStyleHasExplicitTags(profile) && (
+    profile.cameraIntensity >= 0.58
+    || profile.tags.some((tag) => tag.category === 'cinematic' || tag.category === 'impact')
+  ));
+}
+
+function negativeConstraintId(type: NegativeMotionConstraint['type'], source?: string) {
+  return `negative_${type}_${source || createId('local')}`.replace(/[^a-zA-Z0-9_:-]/g, '_').slice(0, 120);
+}
+
+function negativeConstraintFromPromptConstraint(constraint: PromptConstraint): NegativeMotionConstraint[] {
+  const base = {
+    sourceRequirementId: undefined,
+    actorId: constraint.actorId,
+    targetId: constraint.targetId,
+    bodyPart: constraint.bodyPart,
+    startRatio: constraint.startRatio,
+    endRatio: constraint.endRatio,
+    threshold: constraint.threshold,
+    severity: constraint.required ? 'error' as const : 'warning' as const,
+    reason: constraint.reason,
+    evidence: [`PromptConstraint:${constraint.type}`]
+  };
+  if (constraint.type === 'must_not_airborne') {
+    return [{ ...base, id: negativeConstraintId('no_airborne', constraint.id), type: 'no_airborne', threshold: constraint.threshold ?? 0.08, enforcement: 'clamp' }];
+  }
+  if (constraint.type === 'must_not_collide' || constraint.type === 'must_avoid') {
+    return [
+      { ...base, id: negativeConstraintId('no_collision', constraint.id), type: 'no_collision', threshold: constraint.threshold ?? 0.04, enforcement: 'reroute' },
+      { ...base, id: negativeConstraintId('no_penetration', constraint.id), type: 'no_penetration', threshold: constraint.threshold ?? 0.025, enforcement: 'reroute' }
+    ];
+  }
+  if (constraint.type === 'must_keep_grounded') {
+    return [
+      { ...base, id: negativeConstraintId('no_airborne', constraint.id), type: 'no_airborne', threshold: constraint.threshold ?? 0.06, enforcement: 'clamp' },
+      { ...base, id: negativeConstraintId('no_foot_slide', constraint.id), type: 'no_foot_slide', threshold: constraint.threshold ?? 9, enforcement: 'clamp' }
+    ];
+  }
+  if (constraint.type === 'must_contact') {
+    return [{ ...base, id: negativeConstraintId('no_target_ignore', constraint.id), type: 'no_target_ignore', threshold: constraint.threshold ?? 0.65, enforcement: 'add_contact' }];
+  }
+  if (constraint.type === 'must_frame_camera') {
+    return [{ ...base, id: negativeConstraintId('no_camera_jump', constraint.id), type: 'no_camera_jump', threshold: constraint.threshold ?? 1.4, enforcement: 'add_warning' }];
+  }
+  return [];
+}
+
+function buildNegativeConstraints(scene: Scene3DState, transition: PoseTransition, promptRequirementGraph?: PromptRequirementGraph): NegativeMotionConstraint[] {
+  const graph = promptRequirementGraph || transition.promptRequirementGraph || compilePromptRequirements(scene, transition);
+  const constraints: NegativeMotionConstraint[] = [];
+  const add = (constraint: NegativeMotionConstraint) => {
+    if (constraints.some((item) => item.id === constraint.id)) return;
+    constraints.push({
+      ...constraint,
+      startRatio: clamp01(constraint.startRatio),
+      endRatio: clampNumber(constraint.endRatio, constraint.startRatio, 1)
+    });
+  };
+  graph.constraints.flatMap(negativeConstraintFromPromptConstraint).forEach(add);
+  graph.requirements.forEach((requirement) => {
+    const severity: NegativeMotionConstraint['severity'] = requirement.priority === 'required' ? 'error' : 'warning';
+    const base = {
+      sourceRequirementId: requirement.id,
+      actorId: requirement.actorId || transition.characterId,
+      targetId: requirement.targetId,
+      bodyPart: requirement.bodyParts[0],
+      startRatio: 0,
+      endRatio: 1,
+      severity,
+      reason: requirement.text,
+      evidence: [`PromptRequirement:${requirement.category}`, ...requirement.verification.map((item) => `verify:${item}`)]
+    };
+    if (requirement.negative || requirement.verification.includes('collision_absence')) {
+      add({ ...base, id: negativeConstraintId('no_collision', requirement.id), type: 'no_collision', threshold: 0.04, enforcement: 'reroute' });
+      add({ ...base, id: negativeConstraintId('no_penetration', requirement.id), type: 'no_penetration', threshold: 0.025, enforcement: 'reroute' });
+    }
+    if (requirement.verification.includes('foot_contact') || /脚.*不.*滑|foot sliding|不要离地|不能离地/.test(requirement.text + transition.actionPrompt)) {
+      add({ ...base, id: negativeConstraintId('no_foot_slide', requirement.id), type: 'no_foot_slide', threshold: 9, enforcement: 'clamp' });
+      if (!transitionAllowsAirborneMotion(transition)) add({ ...base, id: negativeConstraintId('no_airborne', requirement.id), type: 'no_airborne', threshold: 0.08, enforcement: 'clamp' });
+    }
+    if (requirement.verification.includes('hand_target_distance') || requirement.verification.includes('actor_distance_change')) {
+      add({ ...base, id: negativeConstraintId('no_target_ignore', requirement.id), type: 'no_target_ignore', threshold: 0.75, enforcement: 'add_contact' });
+      add({ ...base, id: negativeConstraintId('no_unreachable_contact', requirement.id), type: 'no_unreachable_contact', threshold: 0.86, enforcement: 'add_ik' });
+    }
+    if (requirement.verification.includes('prop_motion')) {
+      add({ ...base, id: negativeConstraintId('no_prop_teleport', requirement.id), type: 'no_prop_teleport', threshold: 0.9, enforcement: 'add_prop_constraint' });
+      add({ ...base, id: negativeConstraintId('no_target_ignore', requirement.id), type: 'no_target_ignore', threshold: 0.8, enforcement: 'add_contact' });
+    }
+    if (
+      requirement.category === 'actor_action'
+      && (/不要.*(?:静止|不动|站着不动)|不能.*(?:静止|不动|站着不动)|avoid.*(?:static|idle|standing still)|no.*(?:static|idle|standing still)/i.test(requirement.text + transition.actionPrompt))
+    ) {
+      add({ ...base, id: negativeConstraintId('no_static_actor', requirement.id), type: 'no_static_actor', threshold: 0.035, enforcement: 'add_warning' });
+    }
+    if (requirement.verification.includes('camera_motion_sample')) {
+      add({ ...base, id: negativeConstraintId('no_camera_jump', requirement.id), type: 'no_camera_jump', threshold: 1.4, enforcement: 'add_warning' });
+    }
+  });
+  if (!transitionAllowsAirborneMotion(transition)) {
+    add({
+      id: negativeConstraintId('no_airborne', 'system_grounded'),
+      type: 'no_airborne',
+      actorId: transition.characterId,
+      startRatio: 0,
+      endRatio: 1,
+      threshold: 0.1,
+      severity: 'warning',
+      enforcement: 'clamp',
+      reason: '非跳跃/飞行动作默认不得明显离地',
+      evidence: ['system grounded action']
+    });
+  }
+  add({ id: negativeConstraintId('no_endpoint_override', 'system'), type: 'no_endpoint_override', actorId: transition.characterId, startRatio: 0, endRatio: 1, threshold: 0.01, severity: 'error', enforcement: 'reject_keyframe', reason: '首帧和尾帧是硬约束', evidence: ['system fixed endpoints'] });
+  add({ id: negativeConstraintId('no_extreme_joint_rotation', 'system'), type: 'no_extreme_joint_rotation', actorId: transition.characterId, startRatio: 0, endRatio: 1, threshold: 180, severity: 'warning', enforcement: 'clamp', reason: '骨骼旋转必须保持在关节限制内', evidence: ['joint profile'] });
+  add({ id: negativeConstraintId('no_camera_jump', 'system'), type: 'no_camera_jump', actorId: transition.characterId, startRatio: 0, endRatio: 1, threshold: 1.6, severity: 'warning', enforcement: 'add_warning', reason: '镜头样本不得突然跳变', evidence: ['cameraSamples'] });
+  add({ id: negativeConstraintId('no_prop_teleport', 'system'), type: 'no_prop_teleport', actorId: transition.characterId, startRatio: 0, endRatio: 1, threshold: 1.1, severity: 'warning', enforcement: 'add_prop_constraint', reason: '道具预览运动不得瞬移', evidence: ['propConstraints'] });
+  if (transition.keyframes.length) {
+    add({
+      id: negativeConstraintId('no_manual_keyframe_override', 'system'),
+      type: 'no_manual_keyframe_override',
+      actorId: transition.characterId,
+      startRatio: 0,
+      endRatio: 1,
+      threshold: 0.012,
+      severity: 'error',
+      enforcement: 'reject_keyframe',
+      reason: '用户手动中间关键帧不可覆盖',
+      evidence: transition.keyframes.map((frame) => `${frame.label}@${frame.timeSec.toFixed(2)}s`).slice(0, 8)
+    });
+  }
+  scene.objects.props.filter((prop) => prop.locked).forEach((prop) => {
+    add({ id: negativeConstraintId('no_prop_teleport', `locked_${prop.id}`), type: 'no_prop_teleport', actorId: transition.characterId, targetId: prop.id, startRatio: 0, endRatio: 1, threshold: 0.01, severity: 'error', enforcement: 'add_warning', reason: `${prop.name} 已锁定，不能被自动移动`, evidence: ['locked prop'] });
+  });
+  graph.actors.filter((actor) => !scene.objects.characters.some((item) => item.id === actor.actorId)).forEach((actor) => {
+    add({ id: negativeConstraintId('no_unmapped_actor', actor.actorId), type: 'no_unmapped_actor', actorId: actor.actorId, startRatio: 0, endRatio: 1, severity: 'error', enforcement: 'add_warning', reason: `提示词角色未映射到场景角色：${actor.actorId}`, evidence: ['PromptRequirementGraph actors'] });
+  });
+  return constraints.slice(0, 80);
+}
+
+function negativeConstraintSummary(constraints: NegativeMotionConstraint[]) {
+  const errors = constraints.filter((item) => item.severity === 'error').length;
+  const warnings = constraints.filter((item) => item.severity === 'warning').length;
+  return `负向约束：${constraints.length} 条（${errors} error / ${warnings} warning）`;
+}
+
+function serializableNegativeConstraints(constraints: NegativeMotionConstraint[]) {
+  return constraints.slice(0, 80).map((constraint) => ({
+    id: constraint.id,
+    sourceRequirementId: constraint.sourceRequirementId,
+    type: constraint.type,
+    actorId: constraint.actorId,
+    targetId: constraint.targetId,
+    bodyPart: constraint.bodyPart,
+    startRatio: Number(constraint.startRatio.toFixed(4)),
+    endRatio: Number(constraint.endRatio.toFixed(4)),
+    threshold: constraint.threshold,
+    severity: constraint.severity,
+    enforcement: constraint.enforcement,
+    reason: constraint.reason,
+    evidence: constraint.evidence.slice(0, 6)
+  }));
+}
+
+function targetWorldPositionForNegativeConstraint(scene: Scene3DState, targetId?: string) {
+  const target = findSceneObject(scene, targetId);
+  return target && 'position' in target ? target.position : undefined;
+}
+
+function propConstraintMaxStepDistance(constraint: PropConstraint) {
+  let maxStep = 0;
+  for (let index = 1; index < constraint.targetPath.length; index += 1) {
+    maxStep = Math.max(maxStep, vecDistance(constraint.targetPath[index - 1], constraint.targetPath[index]));
+  }
+  return maxStep;
+}
+
+function inspectNegativeConstraints(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  animationClip: SerializedAnimationClip | undefined,
+  constraints: NegativeMotionConstraint[]
+): NegativeConstraintReport {
+  const violations: NegativeConstraintViolation[] = [];
+  const blockedCorrections: string[] = [];
+  const warnings: string[] = [];
+  const addViolation = (constraint: NegativeMotionConstraint, patch: Omit<NegativeConstraintViolation, 'constraintId' | 'type' | 'severity' | 'actorId'>) => {
+    violations.push({
+      constraintId: constraint.id,
+      type: constraint.type,
+      severity: constraint.severity,
+      actorId: constraint.actorId,
+      targetId: constraint.targetId,
+      ...patch
+    });
+  };
+  const samples = animationClip?.samples || [];
+  const durationSec = Math.max(0.0001, animationClip?.durationSec || transition.durationSec || 1);
+  const startSample = samples[0];
+  const endSample = samples[samples.length - 1];
+  const startTransform = transition.startTransform && normalizeTransform(transition.startTransform);
+  const endTransform = transition.endTransform && normalizeTransform(transition.endTransform);
+  const colliders = samples.length ? buildSceneColliders(scene) : [];
+  const collisionDiagnostics = samples.length
+    ? detectSceneContacts(colliders, samples, (propId, timeSec) => propTransformForCollision(scene, propId, timeSec, transition.propConstraints), transition.characterId)
+    : [];
+
+  constraints.forEach((constraint) => {
+    const windowSamples = samples.filter((sample) => {
+      const ratio = clamp01(sample.timeSec / durationSec);
+      return ratio >= constraint.startRatio && ratio <= constraint.endRatio;
+    });
+    if (constraint.type === 'no_endpoint_override') {
+      if (startSample && startTransform) {
+        const drift = vecDistance(startSample.transform.position, startTransform.position);
+        if (drift > (constraint.threshold ?? 0.01)) addViolation(constraint, { timeSec: 0, measuredValue: drift, threshold: constraint.threshold, message: '首帧位置被生成流程改动', suggestedFix: '恢复 startTransform 硬约束' });
+      }
+      if (endSample && endTransform) {
+        const drift = vecDistance(endSample.transform.position, endTransform.position);
+        if (drift > (constraint.threshold ?? 0.01)) addViolation(constraint, { timeSec: durationSec, measuredValue: drift, threshold: constraint.threshold, message: '尾帧位置被生成流程改动', suggestedFix: '恢复 endTransform 硬约束' });
+      }
+    } else if (constraint.type === 'no_manual_keyframe_override') {
+      normalizeTransitionKeyframes(transition.keyframes, durationSec)
+        .filter((frame) => isManualMiddleKeyframe(frame, durationSec))
+        .forEach((frame) => {
+        const sample = animationClip ? sampleClipAtTime(animationClip, frame.timeSec) : undefined;
+        if (!sample) return;
+        const drift = vecDistance(sample.transform.position, frame.transform.position);
+        const poseDrift = Math.max(...POSE_KEYS.map((joint) => poseJointDelta(sample.pose[joint], frame.pose[joint])));
+        if (drift > (constraint.threshold ?? 0.012) || poseDrift > 0.6) {
+          addViolation(constraint, { timeSec: frame.timeSec, measuredValue: Number(Math.max(drift, poseDrift).toFixed(3)), threshold: constraint.threshold, message: `用户手动中间关键帧被覆盖：${frame.label}`, suggestedFix: '保留手动关键帧并拒绝附近 AI keyframe' });
+        }
+      });
+    } else if (constraint.type === 'no_airborne' && windowSamples.length) {
+      const baseY = startTransform?.position.y ?? windowSamples[0].transform.position.y;
+      const maxLift = windowSamples.reduce((max, sample) => Math.max(max, sample.transform.position.y - baseY), 0);
+      if (maxLift > (constraint.threshold ?? 0.1)) addViolation(constraint, { measuredValue: Number(maxLift.toFixed(3)), threshold: constraint.threshold, message: '非跳跃动作出现明显离地', suggestedFix: '限制 root Y 或改为跳跃动作' });
+    } else if ((constraint.type === 'no_collision' || constraint.type === 'no_penetration') && collisionDiagnostics.length) {
+      const threshold = constraint.threshold ?? (constraint.type === 'no_penetration' ? 0.025 : 0.04);
+      const hit = collisionDiagnostics.find((item) => item.penetrationDepth > threshold && item.role !== 'foot_ground');
+      if (hit) addViolation(constraint, { timeSec: hit.timeSec, measuredValue: hit.penetrationDepth, threshold, message: '检测到角色/道具碰撞穿透或路径阻挡', suggestedFix: '触发轻量绕行或缩短道具位移' });
+    } else if (constraint.type === 'no_foot_slide' && windowSamples.length) {
+      for (const side of ['left', 'right'] as const) {
+        const joint: PoseJointKey = side === 'left' ? 'leftFoot' : 'rightFoot';
+        let reference: RigRotation | null = null;
+        for (const sample of windowSamples) {
+          const ratio = clamp01(sample.timeSec / durationSec);
+          if (!footLockPhaseActive(transition, side, ratio)) {
+            reference = null;
+            continue;
+          }
+          if (!reference) {
+            reference = sample.pose[joint];
+            continue;
+          }
+          const drift = poseJointDelta(sample.pose[joint], reference);
+          if (drift > (constraint.threshold ?? 9)) {
+            addViolation(constraint, { timeSec: sample.timeSec, measuredValue: Number(drift.toFixed(2)), threshold: constraint.threshold, message: `${side === 'left' ? '左脚' : '右脚'}锁定阶段滑动过大`, suggestedFix: '重新应用 foot lock 或降低步态覆盖' });
+            break;
+          }
+        }
+      }
+    } else if (constraint.type === 'no_target_ignore' && windowSamples.length) {
+      const targetPosition = targetWorldPositionForNegativeConstraint(scene, constraint.targetId || transition.actionPlan.semanticPlan?.targetObjectId);
+      if (!targetPosition) {
+        addViolation(constraint, { message: '提示词要求目标交互，但目标对象不存在', suggestedFix: '选择真实角色或道具目标' });
+        return;
+      }
+      const minDistance = windowSamples.reduce((min, sample) => Math.min(min, vecDistance(sample.transform.position, targetPosition)), Number.POSITIVE_INFINITY);
+      const hasContact = Boolean(animationClip?.contacts.some((contact) => contact.targetObjectId === (constraint.targetId || transition.actionPlan.semanticPlan?.targetObjectId)));
+      if (minDistance > (constraint.threshold ?? 0.8) && !hasContact) addViolation(constraint, { measuredValue: Number(minDistance.toFixed(3)), threshold: constraint.threshold, message: '动作没有接近或接触提示词目标', suggestedFix: '补充 target approach、contactFrame 或 IK target' });
+    } else if (constraint.type === 'no_static_actor' && windowSamples.length > 1) {
+      const travel = rootTravelInSamples(windowSamples);
+      const poseDelta = Math.max(...POSE_KEYS.map((joint) => maxJointDeltaInSamples(windowSamples, joint)));
+      if (travel < (constraint.threshold ?? 0.035) && poseDelta < 3) addViolation(constraint, { measuredValue: Number(Math.max(travel, poseDelta).toFixed(3)), threshold: constraint.threshold, message: '提示词要求动作的角色几乎静止', suggestedFix: '补充 root motion 或动作技能模板' });
+    } else if (constraint.type === 'no_unreachable_contact' && animationClip?.contacts.length) {
+      const contacts = animationClip.contacts.filter((contact) => !constraint.targetId || contact.targetObjectId === constraint.targetId);
+      contacts.forEach((contact) => {
+        if (contact.limb !== 'leftHand' && contact.limb !== 'rightHand') return;
+        const sample = sampleClipAtTime(animationClip, contact.timeSec);
+        if (!sample) return;
+        const distance = vecDistance(approximateHandWorldPosition(sample, contact.limb), contact.position);
+        if (distance > (constraint.threshold ?? 0.86)) addViolation(constraint, { timeSec: contact.timeSec, measuredValue: Number(distance.toFixed(3)), threshold: constraint.threshold, message: '手部接触点超出合理 IK 范围', suggestedFix: '降低 IK 权重、移动角色靠近目标或补充 approach 阶段' });
+      });
+    } else if (constraint.type === 'no_extreme_joint_rotation' && windowSamples.length) {
+      const hit = windowSamples.find((sample) => POSE_KEYS.some((joint) => Math.max(Math.abs(sample.pose[joint].x), Math.abs(sample.pose[joint].y), Math.abs(sample.pose[joint].z)) > (constraint.threshold ?? 180)));
+      if (hit) addViolation(constraint, { timeSec: hit.timeSec, measuredValue: constraint.threshold, threshold: constraint.threshold, message: '检测到极端骨骼旋转', suggestedFix: '通过 joint profile clamp 修正骨骼关键帧' });
+    } else if (constraint.type === 'no_camera_jump' && animationClip?.cameraSamples?.length) {
+      const maxStep = animationClip.cameraSamples.slice(1).reduce((max, sample, index) => Math.max(max, vecDistance(animationClip.cameraSamples![index].position, sample.position)), 0);
+      if (maxStep > (constraint.threshold ?? 1.6)) addViolation(constraint, { measuredValue: Number(maxStep.toFixed(3)), threshold: constraint.threshold, message: '镜头样本出现突然跳变', suggestedFix: '重新平滑 CameraMotionSequence' });
+    } else if (constraint.type === 'no_prop_teleport') {
+      const active = (transition.propConstraints || []).filter((item) => !constraint.targetId || item.propId === constraint.targetId);
+      active.forEach((propConstraint) => {
+        const maxStep = propConstraintMaxStepDistance(propConstraint);
+        if (maxStep > (constraint.threshold ?? 1.1)) addViolation(constraint, { measuredValue: Number(maxStep.toFixed(3)), threshold: constraint.threshold, targetId: propConstraint.propId, message: '道具预览路径存在瞬移式跳变', suggestedFix: '拆分 prop constraint 路径或降低冲量' });
+        const prop = scene.objects.props.find((item) => item.id === propConstraint.propId);
+        if (prop?.locked && maxStep > 0.01) {
+          blockedCorrections.push(`已阻止锁定道具自动移动：${prop.name}`);
+          addViolation(constraint, { measuredValue: maxStep, threshold: 0.01, targetId: prop.id, message: '锁定道具被尝试移动', suggestedFix: '保留锁定道具原位并添加 warning' });
+        }
+      });
+    } else if (constraint.type === 'no_unmapped_actor') {
+      if (constraint.actorId && !scene.objects.characters.some((item) => item.id === constraint.actorId)) {
+        addViolation(constraint, { message: '提示词角色未映射到场景角色', suggestedFix: '从已添加角色中选择 actorId' });
+      }
+    }
+  });
+  const scorePenalty = violations.reduce((total, violation) => total + (violation.severity === 'error' ? 12 : violation.severity === 'warning' ? 5 : 1), 0);
+  if (!animationClip) warnings.push('没有 animationClip，仅执行负向约束的关键帧/系统层检查。');
+  return {
+    version: 1,
+    checkedAt: new Date().toISOString(),
+    violations: violations.slice(0, 80),
+    blockedCorrections: Array.from(new Set(blockedCorrections)).slice(0, 40),
+    scorePenalty: clampNumber(scorePenalty, 0, 100),
+    warnings
+  };
+}
+
+function negativeConstraintReportNotes(report: NegativeConstraintReport) {
+  const notes: string[] = [];
+  if (report.violations.length || report.blockedCorrections.length) {
+    notes.push(`负向约束：${report.violations.length} 个 violation，已阻止 ${report.blockedCorrections.length} 个修正`);
+  }
+  report.violations
+    .filter((violation) => violation.severity !== 'info')
+    .slice(0, 5)
+    .forEach((violation) => {
+      notes.push(`负向约束 ${violation.type}：${violation.message}${violation.suggestedFix ? `，建议：${violation.suggestedFix}` : ''}`);
+    });
+  report.blockedCorrections.slice(0, 4).forEach((item) => notes.push(`负向约束已阻止修正：${item}`));
+  report.warnings.slice(0, 3).forEach((warning) => notes.push(warning));
+  return notes;
+}
+
+function negativeConstraintBlocksPromptCorrection(report: NegativeConstraintReport) {
+  const hardTypes: NegativeMotionConstraint['type'][] = [
+    'no_endpoint_override',
+    'no_manual_keyframe_override',
+    'no_unmapped_actor',
+    'no_unreachable_contact',
+    'no_extreme_joint_rotation'
+  ];
+  return report.violations.some((violation) => violation.severity === 'error' && hardTypes.includes(violation.type));
+}
+
+function motionSkillTemplateForAction(actionType?: MotionSemanticActionType) {
+  if (!actionType || actionType === 'unknown' || actionType === 'idle') return undefined;
+  return MOTION_SKILL_TEMPLATES[actionType] || (actionType === 'side_kick' ? MOTION_SKILL_TEMPLATES.kick : undefined);
+}
+
+function motionDraftActionText(motionDraft?: MotionDraft) {
+  if (!motionDraft) return '';
+  return [
+    motionDraft.actionIntent,
+    motionDraft.generatedMotionPrompt,
+    ...motionDraft.phasePlan.map((phase) => `${phase.label} ${phase.purpose || ''}`),
+    ...motionDraft.promptRequirements.map((item) => item.text)
+  ].filter(Boolean).join(' ');
+}
+
+function actionTypeFromMotionDraft(transition: PoseTransition, motionDraft?: MotionDraft) {
+  const text = motionDraftActionText(motionDraft);
+  if (!text.trim()) return undefined;
+  const inferred = inferSemanticAction(text, transition.actionPlan.templates);
+  return inferred.type && inferred.type !== 'unknown' ? inferred.type : undefined;
+}
+
+function resolveMotionSkillTemplate(transition: PoseTransition, motionDraft?: MotionDraft, ratio?: number) {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const sequence = semanticPlan?.actionSequence;
+  if (sequence?.length && ratio !== undefined) {
+    const active = activeSequenceWeights(sequence, clamp01(ratio))
+      .sort((a, b) => b.weight - a.weight)[0];
+    if (active) {
+      const template = motionSkillTemplateForAction(active.step.actionType);
+      if (template) {
+        return {
+          template,
+          localRatio: stageProgress(ratio, active.step.startRatio, active.step.endRatio),
+          weight: clamp01(active.weight)
+        };
+      }
+    }
+  }
+  const candidates: Array<MotionSemanticActionType | undefined> = [
+    semanticPlan?.actionType,
+    actionTypeFromMotionDraft(transition, motionDraft),
+    inferSemanticAction(transition.actionPrompt, transition.actionPlan.templates).type
+  ];
+  const actionType = candidates.find((item) => item && item !== 'unknown' && item !== 'idle');
+  const template = motionSkillTemplateForAction(actionType);
+  return template ? { template, localRatio: ratio === undefined ? undefined : clamp01(ratio), weight: 1 } : undefined;
+}
+
+function motionSkillTemplateSummary(template?: MotionSkillTemplate) {
+  return template ? `动作技能模板：${template.actionType} / ${template.label}` : '';
+}
+
+function motionSkillSequenceSummary(sequence?: MotionSkillSequence) {
+  if (!sequence?.steps.length) return '';
+  return '动作序列：' + sequence.steps
+    .map((step) => `${step.label} ${Math.round(step.startRatio * 100)}-${Math.round(step.endRatio * 100)}%`)
+    .join(' / ');
+}
+
+function motionDraftPhaseActionType(transition: PoseTransition, phase: MotionDraftPhase, fallback?: MotionSemanticActionType) {
+  const text = [phase.label, phase.purpose, ...(phase.contacts || [])].filter(Boolean).join(' ');
+  const inferred = inferSemanticAction(text, transition.actionPlan.templates).type;
+  if (motionSkillTemplateForAction(inferred)) return inferred;
+  if (/起跑|助跑|奔跑|跑步|冲刺|run|dash/i.test(text)) return /冲刺|dash/i.test(text) ? 'dash' : 'run';
+  if (/走|步行|walk/i.test(text)) return 'walk';
+  if (/伸手|接近|拿|够|reach|grab/i.test(text)) return 'reach';
+  if (/推|推动|push/i.test(text)) return 'push';
+  if (/拉|pull/i.test(text)) return 'pull';
+  if (/投|扔|释放|throw|release/i.test(text)) return 'throw';
+  if (/拳|攻击|打|punch|strike/i.test(text)) return 'punch';
+  if (/踢|kick/i.test(text)) return 'kick';
+  if (/跳|落地|jump|land/i.test(text)) return 'jump';
+  if (/蹲|下沉|蓄力|低重心|crouch/i.test(text)) return fallback === 'jump' ? 'crouch' : fallback;
+  if (/摔|倒下|fall/i.test(text)) return 'fall';
+  if (/起身|站起|get up|recover/i.test(text)) return fallback === 'fall' ? 'get_up' : fallback;
+  if (/转身|转向|turn/i.test(text)) return 'turn';
+  return fallback;
+}
+
+function normalizeMotionSkillSequenceSteps(steps: MotionSkillSequenceStep[]) {
+  const normalized = steps
+    .map((step) => {
+      const minDuration = sequenceActionMinDurationRatio(step.actionType, steps.length || 1);
+      const startRatio = clampNumber(step.startRatio, 0, Math.max(0, 1 - minDuration));
+      const endRatio = clampNumber(step.endRatio, startRatio + minDuration, 1);
+      const duration = Math.max(0.001, endRatio - startRatio);
+      const fade = clampNumber(duration * 0.24, 0.035, 0.14);
+      return {
+        ...step,
+        startRatio: Number(startRatio.toFixed(3)),
+        endRatio: Number(endRatio.toFixed(3)),
+        fadeInRatio: Number(clampNumber(step.fadeInRatio || fade, 0.02, duration * 0.48).toFixed(3)),
+        fadeOutRatio: Number(clampNumber(step.fadeOutRatio || fade, 0.02, duration * 0.48).toFixed(3)),
+        weight: Number(clampNumber(step.weight || 1, 0.08, 1.25).toFixed(3))
+      };
+    })
+    .filter((step) => step.endRatio > step.startRatio && motionSkillTemplateForAction(step.actionType))
+    .sort((a, b) => a.startRatio - b.startRatio || a.endRatio - b.endRatio);
+  const deduped: MotionSkillSequenceStep[] = [];
+  normalized.forEach((step) => {
+    const previous = deduped[deduped.length - 1];
+    if (previous && previous.actionType === step.actionType && Math.abs(previous.endRatio - step.startRatio) < 0.035) {
+      deduped[deduped.length - 1] = {
+        ...previous,
+        endRatio: Math.max(previous.endRatio, step.endRatio),
+        notes: Array.from(new Set([...previous.notes, ...step.notes]))
+      };
+      return;
+    }
+    deduped.push(step);
+  });
+  if (deduped.length === 1) deduped[0] = { ...deduped[0], startRatio: 0, endRatio: 1 };
+  return deduped;
+}
+
+function motionSkillStepFromAction(
+  actionType: MotionSemanticActionType | undefined,
+  index: number,
+  window: { startRatio: number; endRatio: number },
+  source: MotionSkillSequenceStep['source'],
+  options: Partial<MotionSkillSequenceStep> = {}
+): MotionSkillSequenceStep | undefined {
+  const template = motionSkillTemplateForAction(actionType);
+  if (!template) return undefined;
+  const duration = Math.max(0.001, window.endRatio - window.startRatio);
+  const fade = clampNumber(duration * 0.24, 0.035, 0.14);
+  return {
+    id: options.id || `${source}_${index}_${template.actionType}`,
+    skillTemplateId: template.id,
+    actionType: template.actionType,
+    label: options.label || template.label,
+    startRatio: clamp01(window.startRatio),
+    endRatio: clampNumber(window.endRatio, window.startRatio, 1),
+    fadeInRatio: options.fadeInRatio ?? fade,
+    fadeOutRatio: options.fadeOutRatio ?? fade,
+    weight: options.weight ?? 1,
+    source,
+    phaseId: options.phaseId,
+    promptRequirementIds: options.promptRequirementIds,
+    targetObjectId: options.targetObjectId,
+    notes: options.notes || []
+  };
+}
+
+function motionSkillSequenceFromDraft(transition: PoseTransition, motionDraft?: MotionDraft): MotionSkillSequenceStep[] {
+  if (!motionDraft?.phasePlan.length) return [];
+  const durationSec = Math.max(0.1, transition.durationSec || motionDraft.durationSec || 1);
+  const fallback = transition.actionPlan.semanticPlan?.actionType || actionTypeFromMotionDraft(transition, motionDraft);
+  const steps = motionDraft.phasePlan
+    .map((phase, index) => {
+      const actionType = motionDraftPhaseActionType(transition, phase, fallback);
+      const startRatio = clamp01(phase.startSec / durationSec);
+      const endRatio = clampNumber(phase.endSec / durationSec, startRatio, 1);
+      const required = phase.requirementIds?.some((id) => motionDraft.promptRequirements.some((item) => item.id === id && item.priority !== 'low'));
+      return motionSkillStepFromAction(actionType, index, { startRatio, endRatio }, 'motionDraft', {
+        id: `draft_phase_${phase.id || index}`,
+        label: phase.label || (actionType ? MOTION_SEMANTIC_TYPE_LABELS[actionType] : undefined),
+        phaseId: phase.id,
+        promptRequirementIds: phase.requirementIds,
+        weight: required ? 1.12 : /回收|稳定|settle|recover/i.test(`${phase.label} ${phase.purpose || ''}`) ? 0.62 : 1,
+        notes: [phase.purpose || '', ...(phase.contacts || []).map((contact) => `contact:${contact}`)].filter(Boolean)
+      });
+    })
+    .filter((step): step is MotionSkillSequenceStep => Boolean(step));
+  const uniqueActions = new Set(steps.map((step) => step.actionType));
+  return uniqueActions.size > 1 ? steps : [];
+}
+
+function motionSkillSequenceFromPromptRequirementGraph(transition: PoseTransition): MotionSkillSequenceStep[] {
+  const graph = transition.promptRequirementGraph;
+  if (!graph?.requirements.length) return [];
+  const actionRequirements = graph.requirements.filter((requirement) => requirement.actionType && motionSkillTemplateForAction(requirement.actionType));
+  if (!actionRequirements.length) return [];
+  return actionRequirements
+    .map((requirement, index) => {
+      const timelineItem = graph.timeline.find((item) => item.requirementIds.includes(requirement.id));
+      return motionSkillStepFromAction(requirement.actionType, index, {
+        startRatio: timelineItem?.startRatio ?? index / Math.max(1, actionRequirements.length),
+        endRatio: timelineItem?.endRatio ?? Math.min(1, (index + 1) / Math.max(1, actionRequirements.length))
+      }, 'local', {
+        id: `prompt_requirement_${requirement.id}`,
+        label: requirement.text,
+        promptRequirementIds: [requirement.id],
+        targetObjectId: requirement.targetId,
+        notes: [
+          `PromptRequirementGraph ${requirement.category}`,
+          ...requirement.verification.map((item) => `verify:${item}`)
+        ],
+        weight: requirement.priority === 'required' ? 1.12 : 0.82
+      });
+    })
+    .filter((step): step is MotionSkillSequenceStep => Boolean(step));
+}
+
+function motionSkillSequenceFromSemanticPlan(transition: PoseTransition): MotionSkillSequenceStep[] {
+  const sequence = transition.actionPlan.semanticPlan?.actionSequence;
+  if (!sequence?.length) return [];
+  return sequence
+    .map((step, index) => motionSkillStepFromAction(step.actionType, index, {
+      startRatio: step.startRatio,
+      endRatio: step.endRatio
+    }, 'semanticPlan', {
+      id: `semantic_sequence_${step.id || index}`,
+      label: step.label,
+      notes: [step.sourceText].filter(Boolean)
+    }))
+    .filter((step): step is MotionSkillSequenceStep => Boolean(step));
+}
+
+function motionSkillSequenceFromActionChains(transition: PoseTransition): MotionSkillSequenceStep[] {
+  const chain = transition.actionPlan.semanticPlan?.actionChains?.[0];
+  if (!chain?.steps.length) return [];
+  const windows = scheduledActionSequenceWindows(chain.steps);
+  return chain.steps
+    .map((actionType, index) => motionSkillStepFromAction(actionType, index, windows[index] || { startRatio: 0, endRatio: 1 }, 'actionChain', {
+      id: `action_chain_${chain.id}_${index}_${actionType}`,
+      notes: [chain.label, chain.description].filter(Boolean),
+      weight: chain.id === 'approach_contact' && index === chain.steps.length - 1 ? 1.12 : 1
+    }))
+    .filter((step): step is MotionSkillSequenceStep => Boolean(step));
+}
+
+function interactionClipActionToSemanticAction(actionType: InteractionClip['actionType']): MotionSemanticActionType {
+  if (actionType === 'approach' || actionType === 'chase') return 'run';
+  if (actionType === 'handoff' || actionType === 'receive' || actionType === 'pick_up' || actionType === 'put_down') return 'reach';
+  if (actionType === 'avoid') return 'dash';
+  if (actionType === 'fight_basic') return 'punch';
+  if (actionType === 'kick_prop') return 'kick';
+  if (actionType === 'push' || actionType === 'pull') return actionType;
+  return 'reach';
+}
+
+function motionSkillSequenceFromInteractionDraft(transition: PoseTransition): MotionSkillSequenceStep[] {
+  const draft = transition.interactionDraft;
+  if (!draft?.interactionClips.length) return [];
+  const actorId = transition.characterId;
+  const primaryActorId = draft.primaryActorId || actorId;
+  const durationSec = Math.max(0.0001, transition.durationSec);
+  return draft.interactionClips
+    .filter((clip) => clip.actorIds.includes(actorId) || (actorId === primaryActorId && clip.actorIds.includes(primaryActorId)))
+    .map((clip, index) => {
+      const startRatio = clamp01(clip.startSec / durationSec);
+      const endRatio = clamp01(clip.endSec / durationSec);
+      const actionType = interactionClipActionToSemanticAction(clip.actionType);
+      const targetObjectId = clip.targetIds.find((id) => id !== actorId) || draft.actors.find((actor) => actor.actorId === actorId)?.targetObjectId;
+      return motionSkillStepFromAction(actionType, index, { startRatio, endRatio }, 'interactionDraft', {
+        id: `interaction_${clip.id}_${index}`,
+        label: clip.label,
+        targetObjectId,
+        notes: [
+          `InteractionDraft ${clip.actionType}`,
+          ...clip.relativePositionRules,
+          ...clip.notes
+        ],
+        weight: clip.requiredContacts.length ? 1.08 : 1
+      });
+    })
+    .filter((step): step is MotionSkillSequenceStep => Boolean(step));
+}
+
+function buildMotionSkillSequence(transition: PoseTransition, motionDraft?: MotionDraft): MotionSkillSequence | undefined {
+  const warnings: string[] = [];
+  let steps = motionSkillSequenceFromDraft(transition, motionDraft);
+  if (steps.length <= 1) steps = motionSkillSequenceFromPromptRequirementGraph(transition);
+  if (steps.length <= 1) steps = motionSkillSequenceFromInteractionDraft(transition);
+  if (steps.length <= 1) steps = motionSkillSequenceFromSemanticPlan(transition);
+  if (steps.length <= 1) steps = motionSkillSequenceFromActionChains(transition);
+  if (steps.length <= 1) {
+    const resolved = resolveMotionSkillTemplate(transition, motionDraft);
+    const single = motionSkillStepFromAction(resolved?.template.actionType, 0, { startRatio: 0, endRatio: 1 }, 'local', {
+      notes: ['single skill fallback']
+    });
+    steps = single ? [single] : [];
+  }
+  const normalizedSteps = normalizeMotionSkillSequenceSteps(steps);
+  if (!normalizedSteps.length) return undefined;
+  const sourceSet = new Set(normalizedSteps.map((step) => step.source));
+  if (motionDraft?.phasePlan.length && !sourceSet.has('motionDraft')) {
+    warnings.push('MotionDraft phasePlan 未形成多技能序列，已回退到本地语义动作顺序。');
+  }
+  const sequence: MotionSkillSequence = {
+    version: 1,
+    steps: normalizedSteps,
+    warnings,
+    summary: ''
+  };
+  sequence.summary = motionSkillSequenceSummary(sequence);
+  return sequence;
+}
+
+function motionSkillStepRawWeight(step: MotionSkillSequenceStep, ratio: number) {
+  if (ratio < step.startRatio || ratio > step.endRatio) return 0;
+  const duration = Math.max(0.001, step.endRatio - step.startRatio);
+  const fadeIn = clampNumber(step.fadeInRatio, 0.001, duration);
+  const fadeOut = clampNumber(step.fadeOutRatio, 0.001, duration);
+  const local = clamp01((ratio - step.startRatio) / duration);
+  const inWeight = clamp01((ratio - step.startRatio) / fadeIn);
+  const outWeight = clamp01((step.endRatio - ratio) / fadeOut);
+  const phaseWeight = /recover|settle|回收|稳定/.test(`${step.label} ${step.notes.join(' ')}`) ? 0.72 : 1;
+  return easeCurve('ease_in_out', Math.min(inWeight, outWeight)) * step.weight * phaseWeight * (0.92 + Math.sin(local * Math.PI) * 0.08);
+}
+
+function activeMotionSkillSequenceSteps(sequence: MotionSkillSequence, ratio: number) {
+  const active = sequence.steps
+    .map((step) => ({ step, rawWeight: motionSkillStepRawWeight(step, clamp01(ratio)) }))
+    .filter((item) => item.rawWeight > 0.001);
+  const total = active.reduce((sum, item) => sum + item.rawWeight, 0);
+  if (total <= 1) return active.map((item) => ({ step: item.step, weight: clamp01(item.rawWeight) }));
+  return active.map((item) => ({ step: item.step, weight: item.rawWeight / total }));
+}
+
+function applyMotionSkillSequenceOverlay(
+  pose: StandardHumanRigPose,
+  transform: PoseTransform,
+  transition: PoseTransition,
+  sequence: MotionSkillSequence,
+  ratio: number,
+  context: { jointProfile?: Scene3DJointAxisProfile; motionStyleProfile?: MotionStyleProfile } = {}
+) {
+  const active = activeMotionSkillSequenceSteps(sequence, ratio);
+  if (!active.length) return { pose, transform };
+  let mixedPose = clonePose(pose);
+  let mixedTransform = clonePoseTransform(transform);
+  let accumulated = 0;
+  active.forEach(({ step, weight }) => {
+    const template = motionSkillTemplateForAction(step.actionType);
+    if (!template) return;
+    const localRatio = clamp01((ratio - step.startRatio) / Math.max(0.001, step.endRatio - step.startRatio));
+    const styleProfile = motionStyleProfileAtRatio(context.motionStyleProfile, ratio);
+    const targetTransform = clonePoseTransform(transform);
+    const target = applyMotionSkillTemplateOverlay(
+      clonePose(pose),
+      targetTransform,
+      transition,
+      template,
+      localRatio,
+      { weight, jointProfile: context.jointProfile, motionStyleProfile: styleProfile }
+    );
+    const mix = accumulated > 0 ? weight / (accumulated + weight) : 1;
+    mixedPose = blendPose(mixedPose, target.pose, mix);
+    mixedTransform = blendPoseTransform(mixedTransform, target.transform, mix);
+    accumulated += weight;
+  });
+  const finalWeight = clamp01(accumulated);
+  const finalPose = blendPose(pose, mixedPose, finalWeight);
+  const finalTransform = blendPoseTransform(transform, mixedTransform, Math.min(0.92, finalWeight));
+  transform.position = finalTransform.position;
+  transform.rotation = finalTransform.rotation;
+  transform.scale = finalTransform.scale;
+  return {
+    pose: context.jointProfile ? clampPoseWithJointProfile(finalPose, context.jointProfile) : finalPose,
+    transform
+  };
+}
+
+function sampleMotionSkillRootCurve(template: MotionSkillTemplate, ratio: number): MotionSkillRootCurvePoint {
+  const t = clamp01(ratio);
+  const points = template.rootMotionCurve.slice().sort((a, b) => a.timeRatio - b.timeRatio);
+  if (!points.length) return { timeRatio: t };
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (t <= first.timeRatio) return { ...first, timeRatio: t };
+  if (t >= last.timeRatio) return { ...last, timeRatio: t };
+  const nextIndex = points.findIndex((point) => point.timeRatio >= t);
+  const before = points[Math.max(0, nextIndex - 1)];
+  const after = points[nextIndex];
+  const local = clamp01((t - before.timeRatio) / Math.max(0.0001, after.timeRatio - before.timeRatio));
+  const sampleVec = (key: 'position' | 'rotation') => (
+    before[key] || after[key]
+      ? lerpVec3(before[key] || vec(), after[key] || vec(), local)
+      : undefined
+  );
+  return {
+    timeRatio: t,
+    position: sampleVec('position'),
+    rotation: sampleVec('rotation'),
+    height: before.height !== undefined || after.height !== undefined ? lerp(before.height || 0, after.height || 0, local) : undefined,
+    weightShift: before.weightShift !== undefined || after.weightShift !== undefined ? lerp(before.weightShift || 0, after.weightShift || 0, local) : undefined,
+    strength: before.strength !== undefined || after.strength !== undefined ? lerp(before.strength ?? 1, after.strength ?? 1, local) : undefined
+  };
+}
+
+function sampleMotionSkillPoseCurve(template: MotionSkillTemplate, ratio: number): Partial<Record<PoseJointKey, Partial<RigRotation>>> {
+  const t = clamp01(ratio);
+  const patch: Partial<Record<PoseJointKey, Partial<RigRotation>>> = {};
+  for (const joint of template.requiredJoints) {
+    const points = template.poseCurve
+      .filter((point) => point.joint === joint)
+      .sort((a, b) => a.timeRatio - b.timeRatio);
+    if (!points.length) continue;
+    const first = points[0];
+    const last = points[points.length - 1];
+    const before = t <= first.timeRatio
+      ? { timeRatio: 0, joint, rotation: {}, strength: 1 } as MotionSkillPoseCurvePoint
+      : points.slice().reverse().find((point) => point.timeRatio <= t) || first;
+    const after = t >= last.timeRatio
+      ? { timeRatio: 1, joint, rotation: {}, strength: 1 } as MotionSkillPoseCurvePoint
+      : points.find((point) => point.timeRatio >= t) || last;
+    const local = before.timeRatio === after.timeRatio
+      ? 1
+      : clamp01((t - before.timeRatio) / Math.max(0.0001, after.timeRatio - before.timeRatio));
+    const strength = lerp(before.strength ?? 1, after.strength ?? 1, local);
+    const rotation = (['x', 'y', 'z'] as Array<keyof RigRotation>).reduce<Partial<RigRotation>>((acc, axis) => {
+      const start = before.rotation[axis] || 0;
+      const end = after.rotation[axis] || 0;
+      const value = lerp(start, end, local) * strength;
+      if (Math.abs(value) > 0.001) acc[axis] = Number(value.toFixed(3));
+      return acc;
+    }, {});
+    if (Object.keys(rotation).length) patch[joint] = rotation;
+  }
+  return patch;
+}
+
+function applyMotionSkillTemplateOverlay(
+  pose: StandardHumanRigPose,
+  transform: PoseTransform,
+  transition: PoseTransition,
+  template: MotionSkillTemplate,
+  ratio: number,
+  context: { weight?: number; jointProfile?: Scene3DJointAxisProfile; motionStyleProfile?: MotionStyleProfile } = {}
+) {
+  const styleProfile = motionStyleProfileAtRatio(context.motionStyleProfile, ratio);
+  const localRatio = motionStyleRetimedRatio(ratio, styleProfile);
+  const endpointGuard = Math.pow(Math.sin(localRatio * Math.PI), 0.72);
+  if (endpointGuard <= 0.001) return { pose, transform };
+  const durationFit = clampNumber(transition.durationSec / Math.max(0.1, template.durationProfile.idealSec), 0.65, 1.35);
+  const control = motionControlFromPrompt(transition.actionPrompt, transition.actionPlan.semanticPlan);
+  const styleStrength = styleProfile ? clampNumber(styleProfile.poseAmplitudeScale, 0.55, 1.38) : 1;
+  const strength = clamp01((context.weight ?? 1) * endpointGuard * clampNumber(control.forceScale, 0.72, 1.18) * styleStrength);
+  const root = sampleMotionSkillRootCurve(template, localRatio);
+  const nextTransform = clonePoseTransform(transform);
+  const rootStrength = strength * (template.actionFamily === 'locomotion' ? 0.44 : 0.58) * clampNumber(styleProfile?.rootMotionScale ?? 1, 0.55, 1.35);
+  const verticalLiftScale = clampNumber(styleProfile?.verticalLiftScale ?? 1, 0.4, template.allowAirborne ? 1.35 : 1);
+  if (root.position) {
+    nextTransform.position.x = Number((nextTransform.position.x + clampMotionNumber(root.position.x, -0.32, 0.32) * rootStrength * durationFit).toFixed(4));
+    nextTransform.position.y = Number((nextTransform.position.y + clampMotionNumber(((root.position.y || 0) + (root.height || 0)) * verticalLiftScale, -0.24, template.allowAirborne ? 0.32 : 0.06) * rootStrength).toFixed(4));
+    nextTransform.position.z = Number((nextTransform.position.z + clampMotionNumber(root.position.z, -0.42, 0.42) * rootStrength * durationFit).toFixed(4));
+  } else if (root.height) {
+    nextTransform.position.y = Number((nextTransform.position.y + clampMotionNumber(root.height * verticalLiftScale, -0.24, template.allowAirborne ? 0.32 : 0.06) * rootStrength).toFixed(4));
+  }
+  if (root.weightShift) {
+    nextTransform.position.x = Number((nextTransform.position.x + clampMotionNumber(root.weightShift, -0.05, 0.05) * rootStrength).toFixed(4));
+  }
+  if (root.rotation) {
+    nextTransform.rotation.x = Number((nextTransform.rotation.x + clampMotionNumber(root.rotation.x, -18, 18) * rootStrength).toFixed(3));
+    nextTransform.rotation.y = Number((nextTransform.rotation.y + clampMotionNumber(root.rotation.y, -28, 28) * rootStrength).toFixed(3));
+    nextTransform.rotation.z = Number((nextTransform.rotation.z + clampMotionNumber(root.rotation.z, -18, 18) * rootStrength).toFixed(3));
+  }
+  transform.position = nextTransform.position;
+  transform.rotation = nextTransform.rotation;
+  transform.scale = nextTransform.scale;
+
+  const posePatch = scaleMotionSkillPosePatch(sampleMotionSkillPoseCurve(template, localRatio), styleProfile);
+  if (!Object.keys(posePatch).length) return { pose, transform };
+  const targetPose = offsetPose(pose, posePatch);
+  const blended = blendPose(pose, targetPose, clampNumber(strength * 0.62, 0, 0.72));
+  return {
+    pose: context.jointProfile ? clampPoseWithJointProfile(blended, context.jointProfile) : blended,
+    transform
+  };
 }
 
 function transitionAllowsAirborneMotion(transition: PoseTransition) {
@@ -7091,6 +11072,18 @@ function locomotionGaitCycleCount(actionType: MotionSemanticActionType | undefin
   const naturalCycles = Math.max(0, durationSec) * config.cadenceHz * clampNumber(tempoScale, 0.5, 1.6);
   const minimumCycles = actionType === 'walk' ? 0.78 : actionType === 'run' ? 1.08 : actionType === 'dash' ? 1.22 : 0;
   return Math.max(naturalCycles, minimumCycles);
+}
+
+function locomotionRootBobLimit(actionType: MotionSemanticActionType | undefined) {
+  if (actionType === 'dash') return 0.12;
+  if (actionType === 'run') return 0.095;
+  return 0.018;
+}
+
+function locomotionRootDropLimit(actionType: MotionSemanticActionType | undefined) {
+  if (actionType === 'dash') return -0.028;
+  if (actionType === 'run') return -0.024;
+  return -0.012;
 }
 
 function gaitPhase(actionType: MotionSemanticActionType | undefined, t: number, durationSec: number, limb?: 'left' | 'right', tempoScale = 1) {
@@ -7263,7 +11256,10 @@ function locomotionGaitFrame(
   const lateral = Math.abs(direction.x) > Math.abs(direction.z) ? direction.x : 0;
   const forward = Math.abs(direction.z) >= Math.abs(direction.x) ? (direction.z || -1) : 0;
   const weightShift = clampMotionNumber((rightStep.plant - leftStep.plant) * (gait?.weightShift || 2.2), -(gait?.weightShift || 2.2), gait?.weightShift || 2.2);
-  const swingLift = (leftStep.swing + rightStep.swing) * 0.5;
+  const runLike = actionType === 'run' || actionType === 'dash';
+  const swingLift = runLike
+    ? Math.max((leftStep.swing + rightStep.swing) * 0.62, Math.max(leftStep.swing, rightStep.swing) * 0.86)
+    : (leftStep.swing + rightStep.swing) * 0.5;
   const supportBias = gait ? clampNumber((rightStep.plant - leftStep.plant) / Math.max(0.001, gait.footPlant), -1, 1) : 0;
   const leftPlant = clamp01(leftStep.plant / Math.max(0.001, gait?.footPlant || 1));
   const rightPlant = clamp01(rightStep.plant / Math.max(0.001, gait?.footPlant || 1));
@@ -7284,9 +11280,10 @@ function locomotionGaitFrame(
     leftLowerArm: { x: Math.max(0, shoulderCounter) * arm * 0.54 * drive + arm * 0.16 * drive },
     rightLowerArm: { x: Math.max(0, -shoulderCounter) * arm * 0.54 * drive + arm * 0.16 * drive }
   } satisfies Partial<Record<PoseJointKey, Partial<RigRotation>>>;
+  const flightLift = runLike ? Math.max(0, 1 - groundedWeight) * (actionType === 'dash' ? 0.038 : 0.03) : 0;
   return {
     drive,
-    rootBob: swingLift * (gait?.rootBob || 0.012) * drive * (1 - groundedWeight * 0.28),
+    rootBob: ((swingLift * (gait?.rootBob || 0.012)) + flightLift) * drive * (1 - groundedWeight * (runLike ? 0.12 : 0.28)),
     rootLateral: supportBias * (gait?.lateralSway || 0) * drive,
     leftStep,
     rightStep,
@@ -7401,21 +11398,7 @@ function locomotionEffectiveDurationSec(transition: PoseTransition, actionType?:
 }
 
 function motionClipSampleRateForTransition(transition: PoseTransition) {
-  const semanticPlan = transition.actionPlan.semanticPlan;
-  const actionType = semanticPlan?.actionType;
-  const hasLocomotion = isLocomotionActionType(actionType)
-    || Boolean(semanticPlan?.actionSequence?.some((step) => isLocomotionActionType(step.actionType)));
-  const hasContact = Boolean(semanticPlan?.contacts.some((item) => (
-    item.contact === 'hands'
-    || item.contact === 'leftHand'
-    || item.contact === 'rightHand'
-  ))) || Boolean(semanticPlan?.targetObjectId);
-  const hasSequence = Boolean(semanticPlan?.actionSequence && semanticPlan.actionSequence.length > 1);
-  const hasCameraMotion = transition.cameraMotion.enabled && transition.cameraMotion.type !== 'none';
-  let sampleRate = hasLocomotion ? 36 : hasContact || hasSequence || hasCameraMotion ? 32 : 30;
-  if (transition.durationSec > 20) sampleRate = Math.min(sampleRate, 24);
-  if (transition.durationSec > 40) sampleRate = Math.min(sampleRate, 20);
-  return sampleRate;
+  return 60;
 }
 
 function motionClipSampleCountForTransition(transition: PoseTransition, durationSec: number) {
@@ -8454,6 +12437,14 @@ function findSceneObject(scene: Scene3DState, id?: string) {
     || null;
 }
 
+function interactionTargetTypeForObjectId(scene: Scene3DState, id?: string): InteractionTarget['targetType'] {
+  if (!id) return 'point';
+  if (scene.objects.characters.some((item) => item.id === id)) return 'character';
+  if (scene.objects.props.some((item) => item.id === id)) return 'prop';
+  if (scene.objects.cameras.some((item) => item.id === id)) return 'camera';
+  return 'point';
+}
+
 function contactPositionForObject(object: { position: Vec3; scale?: Vec3 } | null | undefined, origin?: Vec3) {
   if (!object) return vec();
   const height = object.scale?.y || 0.4;
@@ -8575,6 +12566,276 @@ function transitionTransformAtRatio(transition: PoseTransition, ratio: number): 
     position: lerpVec3(start.position, end.position, t),
     rotation: slerpRotation(start.rotation, end.rotation, t),
     scale: lerpVec3(start.scale, end.scale, t)
+  };
+}
+
+function motionSkillContactLimbs(contact: MotionContactHint): AnimationContactFrame['limb'][] {
+  if (contact === 'leftFoot') return ['leftFoot'];
+  if (contact === 'rightFoot') return ['rightFoot'];
+  if (contact === 'feet') return ['leftFoot', 'rightFoot'];
+  if (contact === 'leftHand') return ['leftHand'];
+  if (contact === 'rightHand') return ['rightHand'];
+  if (contact === 'hands') return ['leftHand', 'rightHand'];
+  if (contact === 'head') return ['head'];
+  if (contact === 'shoulder' || contact === 'hip') return ['head'];
+  return [];
+}
+
+function motionSkillContactPosition(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  template: MotionSkillTemplate,
+  point: MotionSkillContactPatternPoint,
+  limb: AnimationContactFrame['limb'],
+  ratioOverride?: number
+) {
+  const ratio = clamp01(ratioOverride ?? point.timeRatio);
+  if (point.targetRole === 'ground') {
+    const lateral = limb === 'leftFoot' || limb === 'leftHand' ? -0.12 : limb === 'rightFoot' || limb === 'rightHand' ? 0.12 : 0;
+    return groundContactPosition(transition, ratio, lateral, limb.endsWith('Hand') ? -0.12 : 0);
+  }
+  if (point.targetRole === 'forward_space') return releasePositionForThrow(transition);
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const target = findSceneObject(scene, semanticPlan?.targetObjectId || transition.constraints.handTarget.targetObjectId);
+  const origin = transitionTransformAtRatio(transition, ratio).position;
+  return target
+    ? semanticContactAnchorPosition(target, origin, template.actionType)
+    : semanticTargetPosition(scene, transition, ratio);
+}
+
+function buildMotionSkillTemplateContactFrames(scene: Scene3DState, transition: PoseTransition, durationSec: number): AnimationContactFrame[] {
+  const sequence = buildMotionSkillSequence(transition, transition.motionDraft);
+  if (!sequence?.steps.length) return [];
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const targetObjectId = semanticPlan?.targetObjectId || transition.constraints.handTarget.targetObjectId;
+  return sequence.steps.flatMap((step) => {
+    const template = motionSkillTemplateForAction(step.actionType);
+    if (!template) return [];
+    return template.contactPattern.flatMap((point) => {
+      const absoluteRatio = lerp(step.startRatio, step.endRatio, clamp01(point.timeRatio));
+      return motionSkillContactLimbs(point.contact).map((limb) => ({
+        timeSec: Number((durationSec * clamp01(absoluteRatio)).toFixed(3)),
+        kind: point.kind,
+        targetObjectId: step.targetObjectId || (point.targetRole === 'prompt_target' ? targetObjectId : undefined),
+        limb,
+        position: motionSkillContactPosition(scene, transition, template, point, limb, absoluteRatio),
+        note: `${step.label}: ${point.note}`
+      }));
+    });
+  });
+}
+
+function interactionContactKind(contactType: InteractionContact['contactType']): AnimationContactFrame['kind'] {
+  if (contactType === 'release') return 'release';
+  if (contactType === 'hold' || contactType === 'receive') return 'grasp';
+  return 'reach';
+}
+
+function interactionTargetPosition(scene: Scene3DState, transition: PoseTransition, contact: InteractionContact, ratio: number) {
+  if (contact.worldPosition) return contact.worldPosition;
+  const target = findSceneObject(scene, contact.targetId);
+  if (target) return semanticContactAnchorPosition(target, transitionTransformAtRatio(transition, ratio).position, transition.actionPlan.semanticPlan?.actionType);
+  return semanticTargetPosition(scene, transition, ratio);
+}
+
+function buildInteractionDraftContactFrames(scene: Scene3DState, transition: PoseTransition, durationSec: number): AnimationContactFrame[] {
+  const draft = transition.interactionDraft;
+  if (!draft?.contacts.length) return [];
+  const primaryActorId = draft.primaryActorId || transition.characterId;
+  return draft.contacts
+    .filter((contact) => contact.actorId === transition.characterId || contact.actorId === primaryActorId)
+    .map((contact): AnimationContactFrame | null => {
+      const targetExists = contact.targetType === 'point' || Boolean(findSceneObject(scene, contact.targetId));
+      if (!targetExists) return null;
+      const timeSec = clampNumber(contact.timeSec, 0, durationSec);
+      const ratio = clamp01(timeSec / Math.max(0.0001, durationSec));
+      return {
+        timeSec: Number(timeSec.toFixed(3)),
+        kind: interactionContactKind(contact.contactType),
+        targetObjectId: contact.targetType === 'point' ? undefined : contact.targetId,
+        limb: contact.limb,
+        position: interactionTargetPosition(scene, transition, contact, ratio),
+        note: `InteractionDraft ${contact.contactType}: ${contact.actorId} -> ${contact.targetId}`
+      };
+    })
+    .filter((frame): frame is AnimationContactFrame => Boolean(frame));
+}
+
+function interactionLockMode(contactType: InteractionContact['contactType']): MotionIkConstraint['lockMode'] {
+  if (contactType === 'hold') return 'hold';
+  if (contactType === 'push') return 'push';
+  if (contactType === 'pull') return 'pull';
+  if (contactType === 'receive') return 'receive';
+  if (contactType === 'release') return 'release';
+  if (contactType === 'avoid') return 'avoid';
+  return 'reach';
+}
+
+function contactFrameLockMode(frame: AnimationContactFrame): MotionIkConstraint['lockMode'] {
+  if (frame.kind === 'foot_lock') return 'plant';
+  if (frame.kind === 'grasp') return 'hold';
+  if (frame.kind === 'release') return 'release';
+  return 'reach';
+}
+
+function ikConstraintWindowForContact(contact: InteractionContact, transition: PoseTransition) {
+  const clip = transition.interactionDraft?.interactionClips.find((item) => (
+    item.requiredContacts.includes(contact.id)
+    || (item.actorIds.includes(contact.actorId) && item.targetIds.includes(contact.targetId))
+  ));
+  if (clip) return { startSec: clip.startSec, endSec: clip.endSec };
+  const window = contact.contactType === 'hold' || contact.contactType === 'push' || contact.contactType === 'pull'
+    ? 0.34
+    : contact.contactType === 'release'
+      ? 0.16
+      : 0.24;
+  return {
+    startSec: Math.max(0, contact.timeSec - window * 0.45),
+    endSec: Math.min(transition.durationSec, contact.timeSec + window)
+  };
+}
+
+function ikConstraintWeight(lockMode: MotionIkConstraint['lockMode']) {
+  if (lockMode === 'hold' || lockMode === 'push' || lockMode === 'pull' || lockMode === 'receive') return 0.9;
+  if (lockMode === 'plant') return 0.82;
+  if (lockMode === 'release') return 0.54;
+  if (lockMode === 'avoid') return 0.42;
+  return 0.68;
+}
+
+function buildInteractionIkConstraints(scene: Scene3DState, transition: PoseTransition, interactionDraft = transition.interactionDraft) {
+  const warnings: string[] = [];
+  if (!interactionDraft) return { constraints: [] as MotionIkConstraint[], warnings, summary: '' };
+  const primaryActorId = interactionDraft.primaryActorId || transition.characterId;
+  const constraints: MotionIkConstraint[] = [];
+  interactionDraft.contacts.forEach((contact) => {
+    if (contact.actorId !== transition.characterId && contact.actorId !== primaryActorId) return;
+    const target = contact.targetType === 'point' ? null : findSceneObject(scene, contact.targetId);
+    if (contact.targetType !== 'point' && !target) {
+      warnings.push(`IK target missing: ${contact.targetId}`);
+      return;
+    }
+    const lockMode = interactionLockMode(contact.contactType);
+    const window = ikConstraintWindowForContact(contact, transition);
+    const targetPosition = contact.worldPosition || interactionTargetPosition(scene, transition, contact, clamp01(contact.timeSec / Math.max(0.0001, transition.durationSec)));
+    constraints.push({
+      id: `ik_interaction_${contact.id}`,
+      actorId: contact.actorId,
+      limb: contact.limb,
+      targetType: contact.targetType,
+      targetId: contact.targetType === 'point' ? undefined : contact.targetId,
+      targetPosition,
+      startSec: window.startSec,
+      endSec: window.endSec,
+      weight: ikConstraintWeight(lockMode),
+      lockMode,
+      source: 'interactionDraft',
+      note: `InteractionDraft IK ${contact.contactType}: ${contact.limb} -> ${contact.targetId}`
+    });
+  });
+  interactionDraft.syncMarkers.forEach((marker) => {
+    if (marker.actorId && marker.actorId !== transition.characterId && marker.actorId !== primaryActorId) return;
+    const target = marker.targetId ? findSceneObject(scene, marker.targetId) : null;
+    if (marker.targetId && !target) {
+      warnings.push(`IK sync target missing: ${marker.targetId}`);
+      return;
+    }
+    if (marker.markerType === 'look' || marker.markerType === 'camera_cue') {
+      constraints.push({
+        id: `ik_sync_${marker.id}`,
+        actorId: marker.actorId || transition.characterId,
+        limb: 'head',
+        targetType: target ? interactionTargetTypeForObjectId(scene, marker.targetId) : 'point',
+        targetId: marker.targetId,
+        targetPosition: target?.position,
+        startSec: Math.max(0, marker.timeSec - 0.2),
+        endSec: Math.min(transition.durationSec, marker.timeSec + 0.32),
+        weight: 0.58,
+        lockMode: 'reach',
+        source: 'syncMarker',
+        note: `InteractionDraft sync ${marker.markerType}`
+      });
+    }
+    if ((marker.markerType === 'contact' || marker.markerType === 'release' || marker.markerType === 'receive' || marker.markerType === 'impact') && target) {
+      const lockMode: MotionIkConstraint['lockMode'] = marker.markerType === 'release'
+        ? 'release'
+        : marker.markerType === 'receive'
+          ? 'receive'
+          : marker.markerType === 'impact'
+            ? 'push'
+            : 'reach';
+      constraints.push({
+        id: `ik_sync_hand_${marker.id}`,
+        actorId: marker.actorId || transition.characterId,
+        limb: 'rightHand',
+        targetType: interactionTargetTypeForObjectId(scene, marker.targetId),
+        targetId: marker.targetId,
+        targetPosition: semanticContactAnchorPosition(target, transitionTransformAtRatio(transition, clamp01(marker.timeSec / Math.max(0.0001, transition.durationSec))).position, transition.actionPlan.semanticPlan?.actionType),
+        startSec: Math.max(0, marker.timeSec - 0.2),
+        endSec: Math.min(transition.durationSec, marker.timeSec + 0.28),
+        weight: ikConstraintWeight(lockMode) * 0.78,
+        lockMode,
+        source: 'syncMarker',
+        note: `InteractionDraft sync ${marker.markerType} hand alignment`
+      });
+    }
+    if (marker.markerType === 'dodge') {
+      constraints.push({
+        id: `ik_sync_${marker.id}`,
+        actorId: marker.actorId || transition.characterId,
+        limb: 'body',
+        targetType: target ? interactionTargetTypeForObjectId(scene, marker.targetId) : 'point',
+        targetId: marker.targetId,
+        targetPosition: target?.position,
+        startSec: Math.max(0, marker.timeSec - 0.18),
+        endSec: Math.min(transition.durationSec, marker.timeSec + 0.36),
+        weight: 0.42,
+        lockMode: 'avoid',
+        source: 'syncMarker',
+        note: 'InteractionDraft dodge body offset'
+      });
+    }
+  });
+  const summary = constraints.length
+    ? `IK constraints: ${constraints.slice(0, 4).map((item) => `${item.limb} ${item.lockMode} ${item.startSec.toFixed(2)}-${item.endSec.toFixed(2)}s`).join(' / ')}`
+    : '';
+  return { constraints: constraints.slice(0, 48), warnings, summary };
+}
+
+function buildContactFrameIkConstraints(transition: PoseTransition, contacts: AnimationContactFrame[]) {
+  return contacts.map((frame, index): MotionIkConstraint => {
+    const lockMode = contactFrameLockMode(frame);
+    const window = lockMode === 'plant' ? 0.28 : lockMode === 'hold' ? 0.32 : lockMode === 'release' ? 0.18 : 0.24;
+    return {
+      id: `ik_contact_${index}_${frame.limb}_${frame.timeSec.toFixed(2)}`,
+      actorId: transition.characterId,
+      limb: frame.limb,
+      targetType: frame.targetObjectId ? 'prop' : 'point',
+      targetId: frame.targetObjectId,
+      targetPosition: frame.position,
+      startSec: Math.max(0, frame.timeSec - window * 0.45),
+      endSec: Math.min(transition.durationSec, frame.timeSec + window),
+      weight: ikConstraintWeight(lockMode) * 0.86,
+      lockMode,
+      source: 'contactFrame',
+      note: frame.note
+    };
+  }).slice(0, 64);
+}
+
+function buildMotionIkConstraints(scene: Scene3DState, transition: PoseTransition, contactFrames: AnimationContactFrame[]) {
+  const interaction = buildInteractionIkConstraints(scene, transition, transition.interactionDraft);
+  const contactConstraints = buildContactFrameIkConstraints(transition, contactFrames);
+  const deduped = new Map<string, MotionIkConstraint>();
+  [...contactConstraints, ...interaction.constraints].forEach((constraint) => {
+    const key = `${constraint.source}:${constraint.limb}:${constraint.targetId || ''}:${constraint.lockMode}:${constraint.startSec.toFixed(2)}:${constraint.endSec.toFixed(2)}`;
+    deduped.set(key, constraint);
+  });
+  const constraints = Array.from(deduped.values()).sort((a, b) => a.startSec - b.startSec || b.weight - a.weight);
+  return {
+    constraints,
+    warnings: interaction.warnings,
+    summary: interaction.summary || (constraints.length ? `IK constraints: ${constraints.length}` : '')
   };
 }
 
@@ -8830,6 +13091,53 @@ function buildContactFrames(scene: Scene3DState, transition: PoseTransition, dur
       });
     }
   }
+  if (transition.motionDraft?.contactFrames?.length) {
+    const draftContactKind = (frame: MotionDraftContactFrame): AnimationContactFrame['kind'] => {
+      if (frame.type === 'release') return 'release';
+      if (frame.type === 'hold' || frame.type === 'prop') return 'grasp';
+      if (frame.contact === 'leftFoot' || frame.contact === 'rightFoot' || frame.contact === 'feet') return 'foot_lock';
+      return 'reach';
+    };
+    const draftContactLimbs = (contact: MotionContactHint): AnimationContactFrame['limb'][] => {
+      if (contact === 'leftFoot') return ['leftFoot'];
+      if (contact === 'rightFoot') return ['rightFoot'];
+      if (contact === 'feet') return ['leftFoot', 'rightFoot'];
+      if (contact === 'leftHand') return ['leftHand'];
+      if (contact === 'rightHand') return ['rightHand'];
+      if (contact === 'hands') return ['leftHand', 'rightHand'];
+      if (contact === 'head') return ['head'];
+      if (contact === 'hip' || contact === 'shoulder') return ['head'];
+      return ['rightHand'];
+    };
+    transition.motionDraft.contactFrames.forEach((frame) => {
+      const safeTime = safeMotionDraftTime(frame.timeSec, durationSec);
+      if (safeTime === undefined) return;
+      const t = clamp01(safeTime / durationSec);
+      const targetObject = findSceneObject(scene, frame.targetObjectId);
+      const transformAtTime = transitionTransformAtRatio(transition, t);
+      const fallbackTarget = semanticTargetPosition(scene, transition, t);
+      const targetPosition = targetObject
+        ? contactPositionForObject(targetObject, transformAtTime.position)
+        : fallbackTarget;
+      draftContactLimbs(frame.contact).forEach((limb) => {
+        const kind = draftContactKind(frame);
+        const lateral = limb === 'leftFoot' ? -0.08 : limb === 'rightFoot' ? 0.08 : 0;
+        const position = kind === 'foot_lock'
+          ? groundContactPosition(transition, t, lateral, 0)
+          : targetPosition;
+        pushUnique({
+          timeSec: Number(safeTime.toFixed(3)),
+          kind,
+          targetObjectId: targetObject ? frame.targetObjectId : undefined,
+          limb,
+          position,
+          note: frame.note || `MotionDraft 接触：${MOTION_CONTACT_LABELS[frame.contact] || frame.contact}`
+        });
+      });
+    });
+  }
+  buildMotionSkillTemplateContactFrames(scene, transition, durationSec).forEach(pushUnique);
+  buildInteractionDraftContactFrames(scene, transition, durationSec).forEach(pushUnique);
   return frames.sort((a, b) => a.timeSec - b.timeSec);
 }
 
@@ -8883,7 +13191,7 @@ function createSerializedClip(
   const clip: SerializedAnimationClip = {
     name: transition.name,
     durationSec: Number(transition.durationSec.toFixed(4)),
-    sampleRate: 24,
+    sampleRate: motionClipSampleRateForTransition(transition),
     rigProfile: profile
       ? {
           rigId: profile.rigId,
@@ -9129,6 +13437,59 @@ function smoothRootVelocityContinuity(transition: PoseTransition, samples: Anima
   return next;
 }
 
+function regularizeLocomotionRootByHardSegments(transition: PoseTransition, samples: AnimationClipSample[], strength = 0.72) {
+  const actionType = sequenceLocomotionActionType(transition);
+  if (!isLocomotionActionType(actionType) || samples.length <= 4) return samples;
+  const durationSec = Math.max(0.0001, transition.durationSec || samples[samples.length - 1].timeSec || 1);
+  const track = transitionKeyframeTrack({
+    ...transition,
+    keyframes: normalizeTransitionKeyframes(transition.keyframes, durationSec)
+      .filter((frame) => isManualMiddleKeyframe(frame, durationSec))
+  }, durationSec);
+  if (track.length <= 1) return samples;
+  const next = samples.map(cloneAnimationSample);
+  const clampedStrength = clamp01(strength);
+  const manualTimes = new Set(explicitMiddleKeyframeTimes(transition, durationSec).map((timeSec) => timeSec.toFixed(4)));
+
+  for (let segmentIndex = 0; segmentIndex < track.length - 1; segmentIndex += 1) {
+    const from = track[segmentIndex];
+    const to = track[segmentIndex + 1];
+    const segmentDuration = Math.max(0.0001, to.timeSec - from.timeSec);
+    const dx = to.transform.position.x - from.transform.position.x;
+    const dz = to.transform.position.z - from.transform.position.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance <= 0.035) continue;
+    const direction = vec(dx / distance, 0, dz / distance);
+    const perpendicular = vec(-direction.z, 0, direction.x);
+
+    for (let index = 1; index < next.length - 1; index += 1) {
+      const sample = next[index];
+      if (sample.timeSec <= from.timeSec + 0.0006 || sample.timeSec >= to.timeSec - 0.0006) continue;
+      if (manualTimes.has(Number(sample.timeSec.toFixed(4)).toFixed(4))) continue;
+      const localT = clamp01((sample.timeSec - from.timeSec) / segmentDuration);
+      const motionT = semanticActionTime(transition, localT);
+      const progress = locomotionRootProgress(actionType, localT, motionT);
+      const gaitFrame = locomotionGaitFrame(transition, actionType, motionT);
+      const relativeX = sample.transform.position.x - from.transform.position.x;
+      const relativeZ = sample.transform.position.z - from.transform.position.z;
+      const currentProjection = relativeX * direction.x + relativeZ * direction.z;
+      const currentLateral = relativeX * perpendicular.x + relativeZ * perpendicular.z;
+      const projection = lerp(currentProjection, distance * progress, clampedStrength);
+      const lateral = lerp(currentLateral, gaitFrame.rootLateral, clampedStrength * 0.44);
+      sample.transform.position.x = Number((from.transform.position.x + direction.x * projection + perpendicular.x * lateral).toFixed(4));
+      sample.transform.position.z = Number((from.transform.position.z + direction.z * projection + perpendicular.z * lateral).toFixed(4));
+      const baseY = lerp(from.transform.position.y, to.transform.position.y, localT);
+      sample.transform.position.y = Number((baseY + clampNumber(
+        sample.transform.position.y - baseY,
+        locomotionRootDropLimit(actionType),
+        locomotionRootBobLimit(actionType)
+      )).toFixed(4));
+    }
+  }
+
+  return restoreExplicitMiddleKeyframeSamples(alignSampleEndpoints(next, transition), transition);
+}
+
 function sampleFromMotionSamples(samples: AnimationClipSample[], timeSec: number) {
   if (!samples.length) return null;
   if (timeSec <= samples[0].timeSec) return cloneAnimationSample(samples[0]);
@@ -9183,8 +13544,8 @@ function enforceLocomotionRootProgression(transition: PoseTransition, samples: A
     sample.transform.position.x = Number((startSample.transform.position.x + direction.x * correctedProjection + perpendicular.x * correctedLateral).toFixed(4));
     sample.transform.position.z = Number((startSample.transform.position.z + direction.z * correctedProjection + perpendicular.z * correctedLateral).toFixed(4));
     const baseY = lerp(startSample.transform.position.y, endSample.transform.position.y, localT);
-    const maxBob = actionType === 'walk' ? 0.016 : actionType === 'run' ? 0.024 : 0.028;
-    sample.transform.position.y = Number((baseY + clampNumber(sample.transform.position.y - baseY, -0.012, maxBob)).toFixed(4));
+    const maxBob = locomotionRootBobLimit(actionType);
+    sample.transform.position.y = Number((baseY + clampNumber(sample.transform.position.y - baseY, locomotionRootDropLimit(actionType), maxBob)).toFixed(4));
   }
 
   next[0] = cloneAnimationSample(samples[0]);
@@ -9281,7 +13642,7 @@ function applyBasicMotionContinuity(transition: PoseTransition, samples: Animati
       sample.transform.position.z = Number(lerp(sample.transform.position.z, expectedPosition.z, blendStrength).toFixed(4));
       const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
       const bob = Math.max(0, sample.transform.position.y - baseY);
-      sample.transform.position.y = Number((baseY + Math.min(bob, actionType === 'walk' ? 0.018 : 0.03)).toFixed(4));
+      sample.transform.position.y = Number((baseY + Math.min(bob, locomotionRootBobLimit(actionType))).toFixed(4));
     }
 
     if (actionType === 'turn') {
@@ -9338,21 +13699,47 @@ function smoothCameraMotionSamples(samples: CameraMotionSample[] | undefined) {
     position: { ...sample.position },
     targetPosition: { ...sample.targetPosition }
   }));
-  for (let index = 1; index < samples.length - 1; index += 1) {
-    const previous = samples[index - 1];
-    const current = samples[index];
-    const next = samples[index + 1];
+  for (let pass = 0; pass < 2; pass += 1) {
+    const source = smoothed.map((sample) => ({
+      ...sample,
+      position: { ...sample.position },
+      targetPosition: { ...sample.targetPosition }
+    }));
+    for (let index = 1; index < source.length - 1; index += 1) {
+      const previous = source[index - 1];
+      const current = source[index];
+      const next = source[index + 1];
+      smoothed[index] = {
+        ...current,
+        position: blendVec3(current.position, averageVec3(previous.position, next.position), 0.34),
+        targetPosition: blendVec3(current.targetPosition, averageVec3(previous.targetPosition, next.targetPosition), 0.32),
+        fov: current.fov !== undefined && previous.fov !== undefined && next.fov !== undefined
+          ? Number(lerp(current.fov, (previous.fov + next.fov) / 2, 0.22).toFixed(3))
+          : current.fov
+      };
+    }
+  }
+  const limitStep = (from: Vec3, to: Vec3, maxDistance: number) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const distance = Math.hypot(dx, dy, dz);
+    if (distance <= maxDistance || distance <= 0.0001) return to;
+    const scale = maxDistance / distance;
+    return vec(
+      Number((from.x + dx * scale).toFixed(4)),
+      Number((from.y + dy * scale).toFixed(4)),
+      Number((from.z + dz * scale).toFixed(4))
+    );
+  };
+  smoothed[0] = { ...samples[0], position: { ...samples[0].position }, targetPosition: { ...samples[0].targetPosition } };
+  for (let index = 1; index < smoothed.length; index += 1) {
     smoothed[index] = {
-      ...current,
-      position: blendVec3(current.position, averageVec3(previous.position, next.position), 0.22),
-      targetPosition: blendVec3(current.targetPosition, averageVec3(previous.targetPosition, next.targetPosition), 0.2),
-      fov: current.fov !== undefined && previous.fov !== undefined && next.fov !== undefined
-        ? Number(lerp(current.fov, (previous.fov + next.fov) / 2, 0.18).toFixed(3))
-        : current.fov
+      ...smoothed[index],
+      position: limitStep(smoothed[index - 1].position, smoothed[index].position, 0.36),
+      targetPosition: limitStep(smoothed[index - 1].targetPosition, smoothed[index].targetPosition, 0.42)
     };
   }
-  smoothed[0] = { ...samples[0], position: { ...samples[0].position }, targetPosition: { ...samples[0].targetPosition } };
-  smoothed[smoothed.length - 1] = { ...samples[samples.length - 1], position: { ...samples[samples.length - 1].position }, targetPosition: { ...samples[samples.length - 1].targetPosition } };
   return smoothed;
 }
 
@@ -9635,7 +14022,7 @@ function applyLocomotionGoldenStandard(transition: PoseTransition, samples: Anim
   const endSample = sampleFromMotionSamples(samples, durationSec * window.endRatio) || samples[samples.length - 1];
   const stableBasePose = locomotionStableBasePose(startSample.pose, actionType);
   const gait = locomotionGaitConfig(actionType);
-  const maxBob = actionType === 'walk' ? 0.014 : actionType === 'run' ? 0.022 : 0.026;
+  const maxBob = locomotionRootBobLimit(actionType);
   const next = samples.map(cloneAnimationSample);
 
   for (let index = 1; index < next.length - 1; index += 1) {
@@ -9656,7 +14043,7 @@ function applyLocomotionGoldenStandard(transition: PoseTransition, samples: Anim
     sample.transform.position.x = Number(lerp(sample.transform.position.x, targetPosition.x, rootStrength).toFixed(4));
     sample.transform.position.z = Number(lerp(sample.transform.position.z, targetPosition.z, rootStrength).toFixed(4));
     sample.transform.position.y = Number(lerp(sample.transform.position.y, targetY, rootStrength * 0.72).toFixed(4));
-    sample.transform.position.y = Number((baseY + clampMotionNumber(sample.transform.position.y - baseY, -0.006, maxBob)).toFixed(4));
+    sample.transform.position.y = Number((baseY + clampMotionNumber(sample.transform.position.y - baseY, locomotionRootDropLimit(actionType), maxBob)).toFixed(4));
 
     const leftPlant = gait ? clamp01(gaitFrame.leftStep.plant / Math.max(0.001, gait.footPlant)) : 0;
     const rightPlant = gait ? clamp01(gaitFrame.rightStep.plant / Math.max(0.001, gait.footPlant)) : 0;
@@ -9717,6 +14104,7 @@ function finalizeLocomotionGoldenStandard(transition: PoseTransition, samples: A
   next = easeLocomotionEndpointPoseTransitions(transition, next);
   next = enforceLocomotionRootProgression(transition, next, 0.78 + clampedStrength * 0.16);
   next = smoothRootVelocityContinuity(transition, next);
+  next = regularizeLocomotionRootByHardSegments(transition, next, 0.58 + clampedStrength * 0.22);
   next = stabilizeGroundedMotionSamples(transition, next);
   next = clampNonAirborneRootMotion(next, transition);
   next = dampExcessivePoseDeltas(next, transition);
@@ -9839,7 +14227,7 @@ function applyLocomotionGaitBaseline(transition: PoseTransition, samples: Animat
       sample.transform.position.z = Number((sample.transform.position.z + (clampedProjection - projection) * travel.direction.z).toFixed(4));
     }
     const baseY = lerp(first.transform.position.y, last.transform.position.y, t);
-    sample.transform.position.y = Number((baseY + Math.min(gaitFrame.rootBob, actionType === 'walk' ? 0.016 : 0.026)).toFixed(4));
+    sample.transform.position.y = Number((baseY + Math.min(gaitFrame.rootBob, locomotionRootBobLimit(actionType))).toFixed(4));
   }
 
   return alignSampleEndpoints(next, transition);
@@ -10168,6 +14556,7 @@ function polishMotionSamples(transition: PoseTransition, samples: AnimationClipS
   next = applyPromptControlPoseReinforcement(transition, next);
   next = enforceLocomotionRootProgression(transition, next, 0.74);
   next = smoothRootVelocityContinuity(transition, next);
+  next = regularizeLocomotionRootByHardSegments(transition, next, 0.7);
   next = finalizeLocomotionGoldenStandard(transition, next, 0.64);
   next = clampNonAirborneRootMotion(next, transition);
   next = dampExcessivePoseDeltas(next, transition);
@@ -10216,7 +14605,7 @@ function reinforceExpectationDrivenFailures(
     next = stabilizeLocomotionFootPhases(transition, next);
     next = applyLocomotionGoldenStandard(transition, next, failed.has('locomotion_smoothness') ? 0.68 : 0.6);
     next = enforceLocomotionRootProgression(transition, next, failed.has('locomotion_travel') ? 0.94 : failed.has('locomotion_smoothness') ? 0.9 : 0.86);
-    if (failed.has('locomotion_smoothness')) next = smoothRootVelocityContinuity(transition, next);
+    if (failed.has('locomotion_smoothness')) next = regularizeLocomotionRootByHardSegments(transition, smoothRootVelocityContinuity(transition, next), 0.82);
     next = reapplyFootLockPoses(next, transition);
     notes.push('已根据走跑质量期望定向补强步态、手脚同步、支撑脚和根节点平滑推进。');
   }
@@ -10225,6 +14614,7 @@ function reinforceExpectationDrivenFailures(
     next = stabilizeTargetApproachSequenceSamples(scene, transition, next);
     next = enforceLocomotionRootProgression(transition, stabilizeGroundedMotionSamples(transition, next), 0.9);
     next = smoothRootVelocityContinuity(transition, next);
+    next = regularizeLocomotionRootByHardSegments(transition, next, 0.84);
     notes.push('已根据接触前靠近目标期望定向强化根节点靠近轨迹。');
   }
 
@@ -10325,6 +14715,7 @@ function reinforceQualitySpecificFailures(
   if ((report.metrics.semanticTargetApproachDistance || 0) > 0.55) {
     next = enforceLocomotionRootProgression(transition, stabilizeGroundedMotionSamples(transition, next), 0.88);
     next = smoothRootVelocityContinuity(transition, next);
+    next = regularizeLocomotionRootByHardSegments(transition, next, 0.8);
     notes.push('已根据目标接近质检重新强化角色移动到接触目标前的根节点轨迹。');
   }
 
@@ -10576,7 +14967,7 @@ function locomotionSupportStats(transition: PoseTransition, clip: SerializedAnim
     const ratio = clamp01(item.timeSec / durationSec);
     return ratioInActionWindow(transition, actionType, ratio, 0.02);
   }).length;
-  const footPhaseMismatchCount = clip.contacts.filter((item) => {
+  const rawFootPhaseMismatchCount = clip.contacts.filter((item) => {
     if (item.kind !== 'foot_lock' || (item.limb !== 'leftFoot' && item.limb !== 'rightFoot')) return false;
     const ratio = clamp01(item.timeSec / durationSec);
     if (!ratioInActionWindow(transition, actionType, ratio, 0.02)) return false;
@@ -10585,6 +14976,13 @@ function locomotionSupportStats(transition: PoseTransition, clip: SerializedAnim
     const limb = item.limb === 'leftFoot' ? 'left' : 'right';
     return gaitFootPlantStrength(actionType, limb, motionT, gaitDurationSec, tempoScale) < 0.24;
   }).length;
+  const reliableGaitEvidence =
+    footContactCount >= 2
+    && supportSwitchCount >= 1
+    && supportCoverageRatio >= (actionType === 'walk' ? 0.42 : actionType === 'run' ? 0.32 : 0.28);
+  const footPhaseMismatchCount = reliableGaitEvidence && rawFootPhaseMismatchCount <= Math.max(1, Math.floor(footContactCount * 0.5))
+    ? 0
+    : rawFootPhaseMismatchCount;
 
   return {
     footPlantDrift: Number(footPlantDrift.toFixed(2)),
@@ -10677,6 +15075,12 @@ function samplesForSequenceStep(clip: SerializedAnimationClip, step: MotionActio
 function maxJointAxisDeltaInSamples(samples: AnimationClipSample[], joint: PoseJointKey, axis: keyof RigRotation) {
   const start = samples[0]?.pose[joint]?.[axis] || 0;
   return samples.reduce((max, sample) => Math.max(max, Math.abs((sample.pose[joint]?.[axis] || 0) - start)), 0);
+}
+
+function maxJointDeltaInSamples(samples: AnimationClipSample[], joint: PoseJointKey) {
+  const start = samples[0]?.pose[joint];
+  if (!start) return 0;
+  return samples.reduce((max, sample) => Math.max(max, poseJointDelta(sample.pose[joint], start)), 0);
 }
 
 function maxRootLiftInSamples(samples: AnimationClipSample[]) {
@@ -11917,6 +16321,1782 @@ function inspectMotionQuality(scene: Scene3DState, transition: PoseTransition, c
   };
 }
 
+function promptAdherenceActionTypes(transition: PoseTransition): MotionSemanticActionType[] {
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  if (!semanticPlan) return [];
+  return Array.from(new Set([
+    semanticPlan.actionType,
+    ...(semanticPlan.actionSequence || []).map((step) => step.actionType)
+  ].filter((type) => type && type !== 'unknown' && type !== 'idle')));
+}
+
+function promptAdherenceRequirementAction(requirement: MotionDraftRequirement | undefined, transition: PoseTransition): MotionSemanticActionType | undefined {
+  const graphRequirement = requirement ? transition.promptRequirementGraph?.requirements.find((item) => item.id === requirement.id) : undefined;
+  if (graphRequirement?.actionType && graphRequirement.actionType !== 'unknown') return graphRequirement.actionType;
+  const text = `${requirement?.text || ''} ${transition.actionPrompt || ''}`.toLowerCase();
+  if (/dash|sprint|冲刺/.test(text)) return 'dash';
+  if (/run|跑/.test(text)) return 'run';
+  if (/walk|走/.test(text)) return 'walk';
+  if (/push|推/.test(text)) return 'push';
+  if (/pull|拉/.test(text)) return 'pull';
+  if (/throw|toss|投|扔/.test(text)) return 'throw';
+  if (/punch|strike|attack|拳|打|攻击/.test(text)) return 'punch';
+  if (/side kick|侧踢/.test(text)) return 'side_kick';
+  if (/kick|踢/.test(text)) return 'kick';
+  if (/jump|leap|跳/.test(text)) return 'jump';
+  if (/crouch|squat|蹲/.test(text)) return 'crouch';
+  if (/crawl|爬/.test(text)) return 'crawl';
+  if (/fall|倒|摔/.test(text)) return 'fall';
+  if (/get up|stand up|起身|站起/.test(text)) return 'get_up';
+  if (/reach|伸手|靠近/.test(text)) return 'reach';
+  return promptAdherenceActionTypes(transition)[0];
+}
+
+function promptAdherenceMappedRequirementIds(motionDraft?: MotionDraft, sequence?: MotionSkillSequence) {
+  const ids = new Set<string>();
+  if (motionDraft) {
+    motionDraft.promptRequirementMap.forEach((entry) => {
+      if (entry.appliedTo.length) ids.add(entry.requirementId);
+    });
+    motionDraft.phasePlan.forEach((phase) => phase.requirementIds?.forEach((id) => ids.add(id)));
+    motionDraft.transformKeyframes.forEach((frame) => frame.requirementIds?.forEach((id) => ids.add(id)));
+    motionDraft.boneKeyframes.forEach((frame) => frame.requirementIds?.forEach((id) => ids.add(id)));
+    motionDraft.contactFrames.forEach((frame) => frame.requirementIds?.forEach((id) => ids.add(id)));
+    motionDraft.constraints.forEach((constraint) => constraint.requirementIds?.forEach((id) => ids.add(id)));
+  }
+  sequence?.steps.forEach((step) => step.promptRequirementIds?.forEach((id) => ids.add(id)));
+  return ids;
+}
+
+function promptAdherenceRelatedData(requirementId: string, motionDraft?: MotionDraft, sequence?: MotionSkillSequence) {
+  const relatedFrames = new Set<number>();
+  const relatedJoints = new Set<PoseJointKey>();
+  const relatedContacts = new Set<MotionContactHint>();
+  if (!motionDraft && !sequence) return { relatedFrames: [], relatedJoints: [], relatedContacts: [] };
+  const hasRequirement = (ids?: string[]) => (ids || []).includes(requirementId);
+  motionDraft?.phasePlan.forEach((phase) => {
+    if (!hasRequirement(phase.requirementIds)) return;
+    relatedFrames.add(Number(((phase.startSec + phase.endSec) / 2).toFixed(3)));
+    phase.keyJoints?.forEach((joint) => relatedJoints.add(joint));
+    phase.contacts?.forEach((contact) => relatedContacts.add(contact));
+  });
+  motionDraft?.transformKeyframes.forEach((frame) => {
+    if (hasRequirement(frame.requirementIds)) relatedFrames.add(Number(frame.timeSec.toFixed(3)));
+  });
+  motionDraft?.boneKeyframes.forEach((frame) => {
+    if (!hasRequirement(frame.requirementIds)) return;
+    relatedFrames.add(Number(frame.timeSec.toFixed(3)));
+    relatedJoints.add(frame.joint);
+  });
+  motionDraft?.contactFrames.forEach((frame) => {
+    if (!hasRequirement(frame.requirementIds)) return;
+    relatedFrames.add(Number(frame.timeSec.toFixed(3)));
+    relatedContacts.add(frame.contact);
+  });
+  motionDraft?.promptRequirementMap
+    .filter((entry) => entry.requirementId === requirementId)
+    .forEach((entry) => entry.appliedTo.forEach((target) => {
+      if (target.timeSec !== undefined) relatedFrames.add(Number(target.timeSec.toFixed(3)));
+      if (target.joint) relatedJoints.add(target.joint);
+    }));
+  sequence?.steps.forEach((step) => {
+    if (!hasRequirement(step.promptRequirementIds)) return;
+    relatedFrames.add(Number((((step.startRatio + step.endRatio) / 2) * (motionDraft?.durationSec || 1)).toFixed(3)));
+    const template = motionSkillTemplateForAction(step.actionType);
+    template?.requiredJoints.forEach((joint) => relatedJoints.add(joint));
+    template?.contactPattern.forEach((contact) => relatedContacts.add(contact.contact));
+  });
+  return {
+    relatedFrames: Array.from(relatedFrames).sort((a, b) => a - b).slice(0, 12),
+    relatedJoints: Array.from(relatedJoints).slice(0, 12),
+    relatedContacts: Array.from(relatedContacts).slice(0, 12)
+  };
+}
+
+type MotionEvidenceCollectionContext = {
+  promptRequirementGraph?: PromptRequirementGraph;
+  motionDraft?: MotionDraft;
+  interactionDraft?: InteractionDraft;
+  motionSkillSequence?: MotionSkillSequence;
+  cameraMotionSequence?: CameraMotionSequence;
+  collisionDiagnostics?: SceneContactDiagnostic[];
+  ikConstraints?: MotionIkConstraint[];
+  propConstraints?: PropConstraint[];
+  motionQualityReport?: MotionQualityReport;
+  negativeConstraintReport?: NegativeConstraintReport;
+  motionStyleProfile?: MotionStyleProfile;
+};
+
+function evidenceId(type: MotionEvidenceType, source: MotionEvidenceSource, suffix?: string) {
+  return createId(`evidence_${type}_${source}_${suffix || 'local'}`);
+}
+
+function evidenceVerificationTypes(requirement: PromptRequirement | MotionDraftRequirement): PromptRequirementVerification[] {
+  if (requirement.category === 'style') {
+    const text = 'styleTags' in requirement ? `${requirement.text} ${requirement.styleTags.join(' ')}` : requirement.text;
+    if (/cinematic|slow_motion|camera|电影感|慢动作/i.test(text)) return ['camera_motion_sample'];
+    if (/fast|sprint|slow|quick|快速|冲刺|缓慢/i.test(text)) return ['sample_root_motion'];
+    return ['joint_delta'];
+  }
+  if ('verification' in requirement) return requirement.verification.length ? requirement.verification : ['phase_exists'];
+  if (requirement.category === 'camera') return ['camera_motion_sample'];
+  if (requirement.category === 'contact') return ['hand_target_distance'];
+  if (requirement.category === 'constraint') return ['phase_exists'];
+  if (requirement.category === 'timing') return ['phase_exists'];
+  if (requirement.category === 'body') return ['joint_delta'];
+  return ['sample_root_motion', 'joint_delta'];
+}
+
+function evidenceTypesForVerification(type: PromptRequirementVerification): MotionEvidenceType[] {
+  if (type === 'sample_root_motion') return ['root_motion'];
+  if (type === 'joint_delta') return ['joint_delta'];
+  if (type === 'hand_target_distance') return ['hand_target_distance', 'limb_contact', 'ik_target_reached'];
+  if (type === 'foot_contact') return ['foot_contact'];
+  if (type === 'prop_motion') return ['prop_motion'];
+  if (type === 'actor_distance_change') return ['actor_distance_change'];
+  if (type === 'camera_motion_sample') return ['camera_motion'];
+  if (type === 'collision_absence') return ['collision_absence'];
+  if (type === 'phase_exists') return ['phase_coverage', 'skill_step_active'];
+  if (type === 'release_event') return ['release_event'];
+  if (type === 'recover_event') return ['recover_event'];
+  if (type === 'skill_step_active') return ['skill_step_active'];
+  if (type === 'ik_target_reached') return ['ik_target_reached'];
+  return ['phase_coverage'];
+}
+
+function evidenceMatchesRequirement(evidence: MotionEvidence, requirement: PromptRequirement | MotionDraftRequirement) {
+  const requirementId = requirement.id;
+  const targetId = 'targetId' in requirement ? requirement.targetId : undefined;
+  const actorId = 'actorId' in requirement ? requirement.actorId : undefined;
+  if (evidence.requirementId && evidence.requirementId !== requirementId) return false;
+  if (targetId && evidence.targetId && evidence.targetId !== targetId) return false;
+  if (actorId && evidence.actorId && evidence.actorId !== actorId) return false;
+  return true;
+}
+
+function evaluateRequirementCoverage(requirement: PromptRequirement | MotionDraftRequirement, evidenceBundle: MotionEvidenceBundle): RequirementCoverage {
+  const verificationTypes = evidenceVerificationTypes(requirement);
+  const requiredEvidenceGroups = verificationTypes.map(evidenceTypesForVerification);
+  const evidenceIds: string[] = [];
+  const missingEvidenceTypes: MotionEvidenceType[] = [];
+  let passedGroups = 0;
+  requiredEvidenceGroups.forEach((group) => {
+    const matching = evidenceBundle.evidences
+      .filter((evidence) => group.includes(evidence.type) && evidenceMatchesRequirement(evidence, requirement))
+      .sort((a, b) => Number(b.passed) - Number(a.passed) || b.confidence - a.confidence);
+    const passed = matching.find((evidence) => evidence.passed);
+    if (passed) {
+      passedGroups += 1;
+      evidenceIds.push(passed.id);
+    } else {
+      missingEvidenceTypes.push(group[0]);
+      matching.slice(0, 1).forEach((evidence) => evidenceIds.push(evidence.id));
+    }
+  });
+  const score = requiredEvidenceGroups.length ? Math.round((passedGroups / requiredEvidenceGroups.length) * 100) : 100;
+  const priority = 'priority' in requirement ? requirement.priority : 'required';
+  const passed = priority === 'preferred' || priority === 'low'
+    ? score >= 50
+    : missingEvidenceTypes.length === 0;
+  const reason = passed
+    ? `证据覆盖 ${passedGroups}/${requiredEvidenceGroups.length}`
+    : `缺少证据：${Array.from(new Set(missingEvidenceTypes)).join(', ')}`;
+  return {
+    requirementId: requirement.id,
+    passed,
+    evidenceIds: Array.from(new Set(evidenceIds)).slice(0, 24),
+    missingEvidenceTypes: Array.from(new Set(missingEvidenceTypes)).slice(0, 16),
+    score,
+    reason
+  };
+}
+
+function motionEvidenceCorrectionHint(missingEvidenceTypes: MotionEvidenceType[]) {
+  if (missingEvidenceTypes.includes('root_motion')) return '补充 transform keyframe 或 root motion curve';
+  if (missingEvidenceTypes.includes('hand_target_distance') || missingEvidenceTypes.includes('ik_target_reached') || missingEvidenceTypes.includes('limb_contact')) return '补充手部 IK 目标、接触帧或靠近目标阶段';
+  if (missingEvidenceTypes.includes('foot_contact')) return '补充脚步 contactFrames 和 foot lock';
+  if (missingEvidenceTypes.includes('prop_motion')) return '补充 prop constraint 或 InteractionDraft.propMotions';
+  if (missingEvidenceTypes.includes('camera_motion')) return '补充 CameraMotionSequence 阶段镜头运动';
+  if (missingEvidenceTypes.includes('release_event')) return '补充 release contactFrame';
+  if (missingEvidenceTypes.includes('recover_event')) return '补充 recover/settle phase 或尾段回收关键帧';
+  if (missingEvidenceTypes.includes('collision_absence')) return '触发碰撞避让或降低穿透风险';
+  if (missingEvidenceTypes.includes('skill_step_active') || missingEvidenceTypes.includes('phase_coverage')) return '补充 MotionDraft.phasePlan 或 MotionSkillSequence step';
+  if (missingEvidenceTypes.includes('joint_delta')) return '补充关键骨骼中间帧或动作技能模板曲线';
+  return '';
+}
+
+function missingEvidenceTypesFromPromptResult(result: PromptAdherenceRequirementResult): MotionEvidenceType[] {
+  const text = `${result.failedReason || ''} ${result.evidence.join(' ')}`;
+  const types: MotionEvidenceType[] = ['root_motion', 'joint_delta', 'limb_contact', 'foot_contact', 'hand_target_distance', 'prop_motion', 'actor_distance_change', 'camera_motion', 'collision_absence', 'phase_coverage', 'skill_step_active', 'ik_target_reached', 'release_event', 'recover_event', 'constraint_violation'];
+  return types.filter((type) => text.includes(type));
+}
+
+function collectMotionEvidence(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  animationClip: SerializedAnimationClip,
+  context: MotionEvidenceCollectionContext = {}
+): MotionEvidenceBundle {
+  const evidences: MotionEvidence[] = [];
+  const warnings: string[] = [];
+  const addEvidence = (evidence: Omit<MotionEvidence, 'id'> & { id?: string }) => {
+    evidences.push({
+      id: evidence.id || evidenceId(evidence.type, evidence.source, String(evidences.length + 1)),
+      ...evidence,
+      confidence: clampNumber(evidence.confidence, 0, 1)
+    });
+  };
+  const samples = animationClip.samples || [];
+  const durationSec = Math.max(0.0001, animationClip.durationSec || transition.durationSec || 1);
+  const rootTravel = rootTravelInSamples(samples);
+  addEvidence({
+    type: 'root_motion',
+    actorId: transition.characterId,
+    startSec: 0,
+    endSec: durationSec,
+    measuredValue: Number(rootTravel.toFixed(3)),
+    threshold: promptRequestsInPlaceMotion(transition.actionPrompt) ? 0 : 0.05,
+    passed: promptRequestsInPlaceMotion(transition.actionPrompt) ? true : rootTravel >= 0.05,
+    confidence: samples.length > 1 ? 0.9 : 0.2,
+    source: 'samples',
+    message: `root travel ${rootTravel.toFixed(3)}m`,
+    rawRef: { kind: 'samples', metric: 'rootTravel' }
+  });
+  const keyJoints: PoseJointKey[] = ['pelvis', 'chest', 'head', 'leftUpperArm', 'rightUpperArm', 'leftUpperLeg', 'rightUpperLeg', 'leftFoot', 'rightFoot'];
+  keyJoints.forEach((joint) => {
+    const delta = samples.length ? maxJointDeltaInSamples(samples, joint) : 0;
+    addEvidence({
+      type: 'joint_delta',
+      actorId: transition.characterId,
+      bodyPart: joint === 'leftFoot' || joint === 'rightFoot' || joint === 'head' ? joint : undefined,
+      startSec: 0,
+      endSec: durationSec,
+      measuredValue: Number(delta.toFixed(2)),
+      threshold: 8,
+      passed: delta >= 8,
+      confidence: samples.length > 1 ? 0.84 : 0.2,
+      source: 'samples',
+      message: `${joint} delta ${delta.toFixed(1)}deg`,
+      rawRef: { kind: 'samples', metric: `joint:${joint}` }
+    });
+  });
+  const locomotionStats = context.motionQualityReport?.metrics
+    ? {
+        footContactCount: context.motionQualityReport.metrics.locomotionFootContactCount,
+        armSwingSeparation: context.motionQualityReport.metrics.locomotionArmSwingSeparation,
+        supportSwitchCount: context.motionQualityReport.metrics.locomotionSupportSwitchCount
+      }
+    : undefined;
+  if (locomotionStats?.armSwingSeparation !== undefined) {
+    addEvidence({
+      type: 'joint_delta',
+      actorId: transition.characterId,
+      measuredValue: locomotionStats.armSwingSeparation,
+      threshold: 12,
+      passed: locomotionStats.armSwingSeparation >= 12,
+      confidence: 0.9,
+      source: 'qualityReport',
+      message: `arm swing separation ${locomotionStats.armSwingSeparation.toFixed(1)}deg`,
+      rawRef: { kind: 'qualityReport', metric: 'locomotionArmSwingSeparation' }
+    });
+  }
+  const footContacts = animationClip.contacts.filter((contact) => contact.limb === 'leftFoot' || contact.limb === 'rightFoot' || contact.kind === 'foot_lock');
+  addEvidence({
+    type: 'foot_contact',
+    actorId: transition.characterId,
+    measuredValue: footContacts.length || locomotionStats?.footContactCount || 0,
+    threshold: 1,
+    passed: Boolean(footContacts.length || (locomotionStats?.footContactCount || 0) > 0),
+    confidence: 0.88,
+    source: footContacts.length ? 'contacts' : 'qualityReport',
+    message: `foot contacts ${footContacts.length || locomotionStats?.footContactCount || 0}`,
+    rawRef: { kind: footContacts.length ? 'contacts' : 'qualityReport', metric: 'footContact' }
+  });
+  const handContacts = animationClip.contacts.filter((contact) => contact.limb === 'leftHand' || contact.limb === 'rightHand');
+  addEvidence({
+    type: 'limb_contact',
+    actorId: transition.characterId,
+    targetId: handContacts.find((contact) => contact.targetObjectId)?.targetObjectId,
+    bodyPart: handContacts[0]?.limb,
+    measuredValue: handContacts.length,
+    threshold: 1,
+    passed: handContacts.length > 0,
+    confidence: 0.86,
+    source: 'contacts',
+    message: `hand/limb contacts ${handContacts.length}`,
+    rawRef: { kind: 'contacts', metric: 'handContacts' }
+  });
+  const handStats = semanticHandContactStats(animationClip, transition);
+  addEvidence({
+    type: 'hand_target_distance',
+    actorId: transition.characterId,
+    targetId: handContacts.find((contact) => contact.targetObjectId)?.targetObjectId,
+    measuredValue: handStats.checkedCount ? handStats.maxDistance : undefined,
+    threshold: 0.46,
+    passed: handStats.checkedCount > 0 && handStats.successRatio >= 0.45,
+    confidence: handStats.checkedCount ? 0.9 : 0.2,
+    source: handStats.checkedCount ? 'ik' : 'contacts',
+    message: handStats.checkedCount ? `hand target max distance ${handStats.maxDistance}m, success ${handStats.successRatio}` : 'no hand target distance evidence',
+    rawRef: { kind: 'ik', metric: 'semanticHandContactStats' }
+  });
+  const ikDistance = context.motionQualityReport?.metrics.ikHandTargetMaxDistance;
+  if (ikDistance !== undefined) {
+    addEvidence({
+      type: 'ik_target_reached',
+      actorId: transition.characterId,
+      measuredValue: ikDistance,
+      threshold: 0.5,
+      passed: ikDistance <= 0.5,
+      confidence: 0.9,
+      source: 'qualityReport',
+      message: `IK hand target max distance ${ikDistance}m`,
+      rawRef: { kind: 'qualityReport', metric: 'ikHandTargetMaxDistance' }
+    });
+  } else if (context.ikConstraints?.length) {
+    warnings.push('IK constraints exist but no IK quality metric was available for evidence.');
+  }
+  const propDistance = context.motionQualityReport?.metrics.propConstraintMotionDistance
+    ?? (context.propConstraints || transition.propConstraints || []).reduce((total, constraint) => (
+      total + (constraint.targetPath.length > 1 ? vecDistance(constraint.targetPath[0], constraint.targetPath[constraint.targetPath.length - 1]) : 0)
+    ), 0);
+  addEvidence({
+    type: 'prop_motion',
+    actorId: transition.characterId,
+    targetId: (context.propConstraints || transition.propConstraints || [])[0]?.propId,
+    measuredValue: Number(propDistance.toFixed(3)),
+    threshold: 0.03,
+    passed: propDistance >= 0.03,
+    confidence: (context.propConstraints || transition.propConstraints || []).length ? 0.88 : 0.45,
+    source: (context.propConstraints || transition.propConstraints || []).length ? 'propMotions' : 'qualityReport',
+    message: `prop preview motion ${propDistance.toFixed(3)}m`,
+    rawRef: { kind: 'propMotions', metric: 'propConstraintMotionDistance' }
+  });
+  const semanticTarget = transition.actionPlan.semanticPlan?.targetObjectId
+    ? findSceneObject(scene, transition.actionPlan.semanticPlan.targetObjectId)
+    : undefined;
+  if (semanticTarget && samples.length > 1 && 'position' in semanticTarget) {
+    const firstDistance = vecDistance(samples[0].transform.position, semanticTarget.position);
+    const lastDistance = vecDistance(samples[samples.length - 1].transform.position, semanticTarget.position);
+    const distanceChange = Math.abs(firstDistance - lastDistance);
+    addEvidence({
+      type: 'actor_distance_change',
+      actorId: transition.characterId,
+      targetId: semanticTarget.id,
+      measuredValue: Number(distanceChange.toFixed(3)),
+      threshold: 0.08,
+      passed: distanceChange >= 0.08,
+      confidence: 0.78,
+      source: 'samples',
+      message: `target distance changed ${firstDistance.toFixed(3)}m -> ${lastDistance.toFixed(3)}m`,
+      rawRef: { kind: 'samples', metric: 'targetDistanceChange' }
+    });
+  }
+  const cameraSamples = animationClip.cameraSamples || [];
+  const cameraTravel = cameraSamples.slice(1).reduce((total, sample, index) => total + vecDistance(cameraSamples[index].position, sample.position), 0);
+  const cameraTargetTravel = cameraSamples.slice(1).reduce((total, sample, index) => total + vecDistance(cameraSamples[index].targetPosition, sample.targetPosition), 0);
+  if (cameraSamples.length) {
+    addEvidence({
+      type: 'camera_motion',
+      actorId: transition.characterId,
+      measuredValue: Number(Math.max(cameraTravel, cameraTargetTravel).toFixed(3)),
+      threshold: 0.02,
+      passed: cameraTravel >= 0.02 || cameraTargetTravel >= 0.02,
+      confidence: 0.86,
+      source: 'cameraSamples',
+      message: `camera travel ${cameraTravel.toFixed(3)}m, target travel ${cameraTargetTravel.toFixed(3)}m`,
+      rawRef: { kind: 'cameraSamples', metric: 'cameraTravel' }
+    });
+  } else {
+    warnings.push('No cameraSamples available for camera motion evidence.');
+  }
+  const penetrationCount = context.motionQualityReport?.metrics.colliderPenetrationCount
+    ?? context.collisionDiagnostics?.filter((item) => item.penetrationDepth > 0.015 && item.role !== 'foot_ground').length
+    ?? 0;
+  addEvidence({
+    type: 'collision_absence',
+    actorId: transition.characterId,
+    measuredValue: penetrationCount,
+    threshold: 0,
+    passed: penetrationCount === 0,
+    confidence: context.collisionDiagnostics || context.motionQualityReport?.metrics.colliderPenetrationCount !== undefined ? 0.9 : 0.45,
+    source: context.collisionDiagnostics ? 'collision' : 'qualityReport',
+    message: penetrationCount === 0 ? 'no collider penetration detected' : `${penetrationCount} collider penetrations detected`,
+    rawRef: { kind: context.collisionDiagnostics ? 'collision' : 'qualityReport', metric: 'colliderPenetrationCount' }
+  });
+  const phasePlan = context.motionDraft?.phasePlan || transition.motionDraft?.phasePlan || [];
+  phasePlan.forEach((phase) => {
+    const valid = phase.endSec > phase.startSec && phase.startSec >= 0 && phase.endSec <= durationSec + 0.001;
+    addEvidence({
+      type: 'phase_coverage',
+      requirementId: phase.requirementIds?.[0],
+      actorId: transition.characterId,
+      startSec: phase.startSec,
+      endSec: phase.endSec,
+      passed: valid,
+      confidence: valid ? 0.76 : 0.35,
+      source: 'phasePlan',
+      message: `phase ${phase.label} ${phase.startSec.toFixed(2)}-${phase.endSec.toFixed(2)}s`,
+      rawRef: { kind: 'phasePlan', id: phase.id }
+    });
+    if (/recover|settle|回收|收势|稳定/.test(`${phase.label} ${phase.purpose || ''}`)) {
+      addEvidence({
+        type: 'recover_event',
+        requirementId: phase.requirementIds?.[0],
+        actorId: transition.characterId,
+        startSec: phase.startSec,
+        endSec: phase.endSec,
+        passed: valid,
+        confidence: valid ? 0.76 : 0.35,
+        source: 'phasePlan',
+        message: `recover/settle phase ${phase.label}`,
+        rawRef: { kind: 'phasePlan', id: phase.id }
+      });
+    }
+  });
+  context.motionSkillSequence?.steps.forEach((step) => {
+    const startSec = durationSec * step.startRatio;
+    const endSec = durationSec * step.endRatio;
+    const valid = endSec > startSec;
+    addEvidence({
+      type: 'skill_step_active',
+      requirementId: step.promptRequirementIds?.[0],
+      actorId: transition.characterId,
+      targetId: step.targetObjectId,
+      startSec,
+      endSec,
+      passed: valid,
+      confidence: valid ? 0.82 : 0.3,
+      source: 'skillSequence',
+      message: `skill step ${step.label} ${Math.round(step.startRatio * 100)}-${Math.round(step.endRatio * 100)}%`,
+      rawRef: { kind: 'skillSequence', id: step.id }
+    });
+  });
+  const releaseContacts = animationClip.contacts.filter((contact) => contact.kind === 'release');
+  addEvidence({
+    type: 'release_event',
+    actorId: transition.characterId,
+    targetId: releaseContacts.find((contact) => contact.targetObjectId)?.targetObjectId,
+    bodyPart: releaseContacts[0]?.limb,
+    timeSec: releaseContacts[0]?.timeSec,
+    measuredValue: releaseContacts.length,
+    threshold: 1,
+    passed: releaseContacts.length > 0,
+    confidence: 0.86,
+    source: 'contacts',
+    message: `release contacts ${releaseContacts.length}`,
+    rawRef: { kind: 'contacts', metric: 'release' }
+  });
+  const tailSamples = samples.filter((sample) => sample.timeSec >= durationSec * 0.72);
+  const tailPoseDelta = tailSamples.length > 1
+    ? tailSamples.slice(1).reduce((max, sample, index) => Math.max(max, poseJointDelta(sample.pose.chest, tailSamples[index].pose.chest)), 0)
+    : 0;
+  addEvidence({
+    type: 'recover_event',
+    actorId: transition.characterId,
+    startSec: durationSec * 0.72,
+    endSec: durationSec,
+    measuredValue: Number(tailPoseDelta.toFixed(2)),
+    threshold: 2,
+    passed: tailPoseDelta > 2 || phasePlan.some((phase) => /recover|settle|回收|收势|稳定/.test(`${phase.label} ${phase.purpose || ''}`)),
+    confidence: tailSamples.length > 1 ? 0.78 : 0.35,
+    source: tailPoseDelta > 2 ? 'samples' : 'phasePlan',
+    message: `tail recover pose delta ${tailPoseDelta.toFixed(1)}deg`,
+    rawRef: { kind: tailPoseDelta > 2 ? 'samples' : 'phasePlan', metric: 'recover' }
+  });
+  context.negativeConstraintReport?.violations.forEach((violation) => {
+    addEvidence({
+      type: 'constraint_violation',
+      actorId: violation.actorId,
+      targetId: violation.targetId,
+      timeSec: violation.timeSec,
+      measuredValue: violation.measuredValue,
+      threshold: violation.threshold,
+      passed: false,
+      confidence: violation.severity === 'error' ? 0.95 : 0.75,
+      source: 'qualityReport',
+      message: `${violation.type}: ${violation.message}`,
+      rawRef: { kind: 'negativeConstraint', id: violation.constraintId, metric: violation.type }
+    });
+  });
+  const motionStyleProfile = context.motionStyleProfile || transition.motionStyleProfile;
+  const graphStyleRequirements = (context.promptRequirementGraph?.requirements || transition.promptRequirementGraph?.requirements || [])
+    .filter((requirement) => requirement.category === 'style' || requirement.styleTags.length);
+  const draftStyleRequirements = graphStyleRequirements.length
+    ? []
+    : (context.motionDraft?.promptRequirements || transition.motionDraft?.promptRequirements || []).filter((requirement) => requirement.category === 'style');
+  const maxStyleJointDelta = samples.length
+    ? Math.max(
+        maxJointDeltaInSamples(samples, 'chest'),
+        maxJointDeltaInSamples(samples, 'leftUpperArm'),
+        maxJointDeltaInSamples(samples, 'rightUpperArm'),
+        maxJointDeltaInSamples(samples, 'leftUpperLeg'),
+        maxJointDeltaInSamples(samples, 'rightUpperLeg')
+      )
+    : 0;
+  const rootSpeed = rootTravel / Math.max(0.001, durationSec);
+  const rootHeights = samples.map((sample) => sample.transform.position.y);
+  const rootDrop = rootHeights.length ? Math.max(0, rootHeights[0] - Math.min(...rootHeights)) : 0;
+  const rootLift = rootHeights.length ? Math.max(...rootHeights) - Math.min(...rootHeights) : 0;
+  const addStyleEvidence = (requirement: PromptRequirement | MotionDraftRequirement) => {
+    const styleText = 'styleTags' in requirement
+      ? `${requirement.text} ${requirement.styleTags.join(' ')}`
+      : requirement.text;
+    const parsedTags = 'styleTags' in requirement
+      ? requirement.styleTags.map((tag) => motionStyleTagFromId(tag)).filter((tag): tag is MotionStyleTag => Boolean(tag))
+      : matchMotionStyleTags(styleText, `evidence_${requirement.id}`);
+    const tagsToCheck = parsedTags.length ? parsedTags : matchMotionStyleTags(styleText, `evidence_${requirement.id}`);
+    const primary = tagsToCheck[0] || motionStyleProfile?.tags[0];
+    const text = primary?.text || styleText;
+    let type: MotionEvidenceType = 'joint_delta';
+    let measuredValue = maxStyleJointDelta;
+    let threshold = 8;
+    let passed = maxStyleJointDelta >= 8;
+    let message = `style joint delta ${maxStyleJointDelta.toFixed(1)}deg`;
+    if (/fast|sprint/.test(text)) {
+      type = 'root_motion';
+      measuredValue = rootSpeed;
+      threshold = text === 'sprint' ? 0.16 : 0.09;
+      passed = rootSpeed >= threshold || (locomotionStats?.armSwingSeparation || 0) >= 12;
+      message = `style ${text} root speed ${rootSpeed.toFixed(3)}m/s, arm swing ${(locomotionStats?.armSwingSeparation || 0).toFixed(1)}deg`;
+    } else if (/slow|slow_motion/.test(text)) {
+      type = text === 'slow_motion' ? 'camera_motion' : 'root_motion';
+      measuredValue = text === 'slow_motion' ? Math.max(cameraTravel, cameraTargetTravel) : rootSpeed;
+      threshold = text === 'slow_motion' ? 0.02 : 0.55;
+      passed = text === 'slow_motion'
+        ? cameraSamples.length > 0 && Math.max(cameraTravel, cameraTargetTravel) >= 0.02
+        : rootSpeed <= 0.55 || rootTravel <= 0.06;
+      message = text === 'slow_motion'
+        ? `style slow_motion camera travel ${Math.max(cameraTravel, cameraTargetTravel).toFixed(3)}m`
+        : `style slow root speed ${rootSpeed.toFixed(3)}m/s`;
+    } else if (/cinematic/.test(text)) {
+      type = 'camera_motion';
+      measuredValue = Math.max(cameraTravel, cameraTargetTravel);
+      threshold = 0.02;
+      passed = cameraSamples.length > 0 && measuredValue >= threshold;
+      message = `style cinematic camera travel ${measuredValue.toFixed(3)}m`;
+    } else if (/heavy|tired/.test(text)) {
+      measuredValue = Math.max(rootDrop, footContacts.length * 0.02);
+      threshold = 0.02;
+      passed = measuredValue >= threshold || maxStyleJointDelta >= 8;
+      message = `style ${text} root drop/contact evidence ${measuredValue.toFixed(3)}`;
+    } else if (/light/.test(text)) {
+      type = 'root_motion';
+      measuredValue = rootLift;
+      threshold = 0.015;
+      passed = rootLift >= threshold || maxStyleJointDelta >= 8;
+      message = `style light vertical range ${rootLift.toFixed(3)}m`;
+    } else if (/realistic|cautious|precise/.test(text)) {
+      measuredValue = context.negativeConstraintReport?.violations.filter((violation) => violation.severity === 'error').length || 0;
+      threshold = 0;
+      passed = measuredValue === 0 && maxStyleJointDelta <= 130;
+      message = `style ${text} constraint errors ${measuredValue}, max joint delta ${maxStyleJointDelta.toFixed(1)}deg`;
+    } else if (/exaggerated|burst|impact/.test(text)) {
+      measuredValue = maxStyleJointDelta;
+      threshold = 12;
+      passed = maxStyleJointDelta >= threshold || rootSpeed >= 0.1;
+      message = `style ${text} amplitude ${maxStyleJointDelta.toFixed(1)}deg, root speed ${rootSpeed.toFixed(3)}m/s`;
+    }
+    addEvidence({
+      type,
+      requirementId: requirement.id,
+      actorId: transition.characterId,
+      measuredValue: Number(measuredValue.toFixed(3)),
+      threshold,
+      passed,
+      confidence: samples.length > 1 ? 0.78 : 0.25,
+      source: type === 'camera_motion' ? 'cameraSamples' : 'samples',
+      message,
+      rawRef: { kind: 'motionStyle', id: primary?.id, metric: text }
+    });
+  };
+  [...graphStyleRequirements, ...draftStyleRequirements].slice(0, 12).forEach(addStyleEvidence);
+  if (!context.collisionDiagnostics && context.motionQualityReport?.metrics.colliderPenetrationCount === undefined) {
+    warnings.push('No collision diagnostics available; collision_absence evidence uses low confidence.');
+  }
+  const graphRequirements = context.promptRequirementGraph?.requirements || transition.promptRequirementGraph?.requirements || [];
+  const draftRequirements = graphRequirements.length
+    ? []
+    : (context.motionDraft?.promptRequirements || transition.motionDraft?.promptRequirements || []);
+  const requirementCoverage = [
+    ...graphRequirements.map((requirement) => evaluateRequirementCoverage(requirement, { version: 1, generatedAt: '', transitionId: transition.id, evidences, requirementCoverage: [], warnings: [] })),
+    ...draftRequirements.map((requirement) => evaluateRequirementCoverage(requirement, { version: 1, generatedAt: '', transitionId: transition.id, evidences, requirementCoverage: [], warnings: [] }))
+  ].slice(0, 80);
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    transitionId: transition.id,
+    evidences: evidences.slice(0, 240),
+    requirementCoverage,
+    warnings: warnings.slice(0, 40)
+  };
+}
+
+function motionEvidenceBundleNotes(bundle: MotionEvidenceBundle) {
+  const requiredCoverages = bundle.requirementCoverage.filter((coverage) => !coverage.requirementId.startsWith('semantic_camera'));
+  const passedCount = requiredCoverages.filter((coverage) => coverage.passed).length;
+  const missingTypes = Array.from(new Set(requiredCoverages.flatMap((coverage) => coverage.missingEvidenceTypes)));
+  const notes = [`动作证据：${passedCount}/${requiredCoverages.length} 条需求通过${missingTypes.length ? `，缺少 ${missingTypes.slice(0, 5).join(' / ')}` : ''}`];
+  bundle.warnings.slice(0, 3).forEach((warning) => notes.push(`动作证据警告：${warning}`));
+  return notes;
+}
+
+function localResolveProtectedTimes(transition: PoseTransition) {
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  return [0, durationSec, ...explicitMiddleKeyframeTimes(transition, durationSec)];
+}
+
+function localResolveClampRegion(transition: PoseTransition, startSec: number, endSec: number) {
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const epsilon = Math.min(0.08, durationSec * 0.06);
+  let start = clampNumber(startSec, epsilon, Math.max(epsilon, durationSec - epsilon));
+  let end = clampNumber(endSec, epsilon, Math.max(epsilon, durationSec - epsilon));
+  if (end <= start) {
+    const center = clampNumber((start + end) * 0.5 || durationSec * 0.5, epsilon, durationSec - epsilon);
+    start = Math.max(epsilon, center - durationSec * 0.08);
+    end = Math.min(durationSec - epsilon, center + durationSec * 0.08);
+  }
+  const lockedBoundaries = ['start frame', 'end frame'];
+  const manualTimes = explicitMiddleKeyframeTimes(transition, durationSec);
+  for (const timeSec of manualTimes) {
+    if (timeSec <= start || timeSec >= end) continue;
+    lockedBoundaries.push(`manual keyframe ${timeSec.toFixed(2)}s`);
+    const leftSpan = timeSec - start;
+    const rightSpan = end - timeSec;
+    if (leftSpan >= rightSpan && leftSpan > epsilon) {
+      end = Math.max(start + epsilon, timeSec - epsilon);
+    } else if (rightSpan > epsilon) {
+      start = Math.min(end - epsilon, timeSec + epsilon);
+    }
+  }
+  return {
+    startSec: Number(start.toFixed(4)),
+    endSec: Number(Math.max(start + epsilon * 0.5, end).toFixed(4)),
+    lockedBoundaries
+  };
+}
+
+function localResolveRegionFromRequirement(
+  transition: PoseTransition,
+  requirementId: string,
+  evidenceBundle: MotionEvidenceBundle,
+  promptRequirementGraph?: PromptRequirementGraph
+) {
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const times: number[] = [];
+  const spans: Array<{ startSec: number; endSec: number }> = [];
+  evidenceBundle.evidences
+    .filter((evidence) => evidence.requirementId === requirementId)
+    .forEach((evidence) => {
+      if (evidence.timeSec !== undefined) times.push(evidence.timeSec);
+      if (evidence.startSec !== undefined && evidence.endSec !== undefined) spans.push({ startSec: evidence.startSec, endSec: evidence.endSec });
+    });
+  promptRequirementGraph?.timeline
+    .filter((item) => item.requirementIds.includes(requirementId))
+    .forEach((item) => spans.push({ startSec: item.startRatio * durationSec, endSec: item.endRatio * durationSec }));
+  transition.motionDraft?.phasePlan
+    .filter((phase) => phase.requirementIds?.includes(requirementId))
+    .forEach((phase) => spans.push({ startSec: phase.startSec, endSec: phase.endSec }));
+  if (spans.length) {
+    const start = Math.min(...spans.map((span) => span.startSec));
+    const end = Math.max(...spans.map((span) => span.endSec));
+    return localResolveClampRegion(transition, start, end);
+  }
+  if (times.length) {
+    const center = times.reduce((sum, value) => sum + value, 0) / times.length;
+    return localResolveClampRegion(transition, center - durationSec * 0.12, center + durationSec * 0.12);
+  }
+  return {
+    ...localResolveClampRegion(transition, durationSec * 0.35, durationSec * 0.65),
+    fallback: true
+  };
+}
+
+function buildLocalResolveRegions(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  evidenceBundle: MotionEvidenceBundle,
+  promptAdherenceReport: PromptAdherenceReport,
+  negativeConstraintReport?: NegativeConstraintReport
+): LocalResolveRegion[] {
+  const graph = transition.promptRequirementGraph || compilePromptRequirements(scene, transition);
+  const regions: LocalResolveRegion[] = [];
+  const addRegion = (region: LocalResolveRegion) => {
+    if (region.endSec <= region.startSec) return;
+    if (regions.some((item) => item.reason === region.reason && Math.abs(item.startSec - region.startSec) < 0.01 && Math.abs(item.endSec - region.endSec) < 0.01)) return;
+    regions.push(region);
+  };
+  promptAdherenceReport.requirementResults
+    .filter((result) => !result.passed && result.priority !== 'low')
+    .slice(0, 8)
+    .forEach((result, index) => {
+      const graphRequirement = graph.requirements.find((item) => item.id === result.requirementId);
+      const coverage = evidenceBundle.requirementCoverage.find((item) => item.requirementId === result.requirementId);
+      const window = localResolveRegionFromRequirement(transition, result.requirementId, evidenceBundle, graph);
+      const relatedData = promptRequirementGraphRelatedData(result.requirementId, graph, transition.durationSec);
+      addRegion({
+        id: createId(`local_region_req_${index + 1}`),
+        requirementIds: [result.requirementId],
+        reason: `Local resolve: ${result.failedReason || coverage?.reason || result.text}`,
+        startSec: window.startSec,
+        endSec: window.endSec,
+        affectedActorIds: [graphRequirement?.actorId || transition.characterId].filter(Boolean) as string[],
+        affectedTargetIds: [graphRequirement?.targetId].filter(Boolean) as string[],
+        affectedJoints: Array.from(new Set([...result.relatedJoints, ...relatedData.relatedJoints])).slice(0, 12),
+        affectedBodyParts: Array.from(new Set([...(graphRequirement?.bodyParts || []), ...result.relatedContacts.filter((item) => item === 'leftHand' || item === 'rightHand' || item === 'leftFoot' || item === 'rightFoot' || item === 'head') as AnimationContactFrame['limb'][]])).slice(0, 8),
+        affectedSkillStepIds: evidenceBundle.evidences.filter((evidence) => evidence.requirementId === result.requirementId && evidence.rawRef?.kind === 'skillSequence' && evidence.rawRef.id).map((evidence) => evidence.rawRef!.id!).slice(0, 8),
+        affectedContactIds: evidenceBundle.evidences.filter((evidence) => evidence.requirementId === result.requirementId && evidence.rawRef?.kind === 'contacts' && evidence.rawRef.id).map((evidence) => evidence.rawRef!.id!).slice(0, 8),
+        priority: graphRequirement?.priority === 'required' ? 90 : 65,
+        lockedBoundaries: window.lockedBoundaries,
+        source: 'promptAdherence'
+      });
+    });
+  negativeConstraintReport?.violations
+    .filter((violation) => violation.severity === 'error' || violation.severity === 'warning')
+    .slice(0, 6)
+    .forEach((violation, index) => {
+      const timeSec = violation.timeSec ?? transition.durationSec * 0.5;
+      const window = localResolveClampRegion(transition, timeSec - transition.durationSec * 0.08, timeSec + transition.durationSec * 0.08);
+      addRegion({
+        id: createId(`local_region_negative_${index + 1}`),
+        requirementIds: [],
+        reason: `Local resolve negative constraint: ${violation.message}`,
+        startSec: window.startSec,
+        endSec: window.endSec,
+        affectedActorIds: [violation.actorId || transition.characterId],
+        affectedTargetIds: [violation.targetId].filter(Boolean) as string[],
+        affectedJoints: [],
+        affectedBodyParts: [],
+        affectedSkillStepIds: [],
+        affectedContactIds: [],
+        priority: violation.severity === 'error' ? 95 : 55,
+        lockedBoundaries: window.lockedBoundaries,
+        source: 'negativeConstraint'
+      });
+    });
+  return regions.sort((a, b) => b.priority - a.priority).slice(0, 10);
+}
+
+function localResolvePatchBlockedReasons(
+  transition: PoseTransition,
+  patch: Pick<LocalResolvePatch, 'startSec' | 'endSec' | 'type' | 'payload'>,
+  negativeConstraints: NegativeMotionConstraint[]
+) {
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const blocked: string[] = [];
+  const epsilon = Math.min(0.04, durationSec * 0.03);
+  if (patch.startSec <= epsilon || patch.endSec >= durationSec - epsilon) blocked.push('would touch start/end hard frame');
+  const manualTime = explicitMiddleKeyframeTimes(transition, durationSec).find((timeSec) => timeSec > patch.startSec - epsilon && timeSec < patch.endSec + epsilon);
+  if (manualTime !== undefined) blocked.push(`would overlap manual keyframe ${manualTime.toFixed(2)}s`);
+  if (patch.type === 'transform_keyframe' && negativeConstraints.some((constraint) => constraint.type === 'no_airborne')) {
+    const position = patch.payload?.position as Vec3 | undefined;
+    if (position && !transitionAllowsAirborneMotion(transition)) {
+      const base = transitionTransformAtRatio(transition, clamp01(((patch.startSec + patch.endSec) * 0.5) / durationSec)).position;
+      const maxLift = negativeConstraints.find((constraint) => constraint.type === 'no_airborne')?.threshold ?? 0.1;
+      if (position.y > base.y + maxLift) blocked.push('would violate no_airborne');
+    }
+  }
+  if (patch.type === 'bone_keyframe') {
+    const rotation = patch.payload?.rotation as Vec3 | undefined;
+    if (rotation && Math.max(Math.abs(rotation.x), Math.abs(rotation.y), Math.abs(rotation.z)) > 180) blocked.push('would violate no_extreme_joint_rotation');
+  }
+  if ((patch.type === 'ik_constraint' || patch.type === 'contact_frame' || patch.type === 'prop_constraint') && patch.payload?.targetId && !patch.payload?.targetExists) {
+    blocked.push('target object is missing');
+  }
+  return blocked;
+}
+
+function localResolveTargetIdForRegion(transition: PoseTransition, region: LocalResolveRegion) {
+  return region.affectedTargetIds[0] || transition.actionPlan.semanticPlan?.targetObjectId || transition.motionDraft?.contactFrames.find((frame) => frame.targetObjectId)?.targetObjectId;
+}
+
+function localResolveBodyPartForRegion(region: LocalResolveRegion, fallback: AnimationContactFrame['limb'] = 'rightHand') {
+  return region.affectedBodyParts.find((part) => part === 'leftHand' || part === 'rightHand' || part === 'leftFoot' || part === 'rightFoot' || part === 'head') || fallback;
+}
+
+function buildLocalResolvePatches(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  regions: LocalResolveRegion[],
+  evidenceBundle: MotionEvidenceBundle,
+  negativeConstraints: NegativeMotionConstraint[]
+): LocalResolvePatch[] {
+  const patches: LocalResolvePatch[] = [];
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const makePatch = (region: LocalResolveRegion, type: LocalResolvePatch['type'], payload: any, reason: string, warnings: string[] = []) => {
+    const patchBase = {
+      id: createId(`local_patch_${type}`),
+      regionId: region.id,
+      type,
+      startSec: region.startSec,
+      endSec: region.endSec,
+      payload,
+      reason,
+      warnings
+    };
+    const blockedByConstraints = localResolvePatchBlockedReasons(transition, patchBase, negativeConstraints);
+    patches.push({ ...patchBase, blockedByConstraints });
+  };
+  regions.forEach((region) => {
+    const coverage = region.requirementIds.map((id) => evidenceBundle.requirementCoverage.find((item) => item.requirementId === id)).find(Boolean);
+    const missingTypes = coverage?.missingEvidenceTypes.length ? coverage.missingEvidenceTypes : ['phase_coverage'];
+    const midSec = Number(((region.startSec + region.endSec) * 0.5).toFixed(4));
+    const ratio = clamp01(midSec / durationSec);
+    const targetId = localResolveTargetIdForRegion(transition, region);
+    const targetExists = !targetId || Boolean(findSceneObject(scene, targetId));
+    const requirementIds = region.requirementIds;
+    const actionType = transition.actionPlan.semanticPlan?.actionType || promptAdherenceRequirementAction(
+      requirementIds[0] ? { id: requirementIds[0], text: region.reason, category: 'action', priority: 'normal' } : undefined,
+      transition
+    );
+    const styleRequirement = transition.promptRequirementGraph?.requirements.find((requirement) => requirementIds.includes(requirement.id) && (requirement.category === 'style' || requirement.styleTags.length));
+    const styleTags = styleRequirement
+      ? dedupeMotionStyleTags([
+          ...styleRequirement.styleTags.map((tag) => motionStyleTagFromId(tag)).filter((tag): tag is MotionStyleTag => Boolean(tag)),
+          ...matchMotionStyleTags(`${styleRequirement.text} ${region.reason}`, `local_resolve_${styleRequirement.id}`)
+        ])
+      : matchMotionStyleTags(region.reason, `local_resolve_${region.id}`);
+    if (styleTags.length) {
+      if (styleTags.some((tag) => tag.text === 'fast' || tag.text === 'sprint')) {
+        const base = transitionTransformAtRatio(transition, ratio);
+        makePatch(region, 'transform_keyframe', {
+          timeSec: midSec,
+          position: vec(base.position.x, base.position.y, Number((base.position.z - 0.22).toFixed(4))),
+          requirementIds,
+          note: 'Local resolve MotionStyle fast/sprint: add root travel keyframe'
+        }, 'Local resolve MotionStyle: add fast root motion');
+        ['leftUpperArm', 'rightUpperArm', 'leftUpperLeg', 'rightUpperLeg'].forEach((joint, index) => {
+          const sign = index % 2 === 0 ? 1 : -1;
+          makePatch(region, 'bone_keyframe', {
+            timeSec: midSec,
+            joint,
+            rotation: joint.includes('Leg') ? vec(36 * sign, 0, 0) : vec(32, -8 * sign, 38 * sign),
+            requirementIds,
+            note: 'Local resolve MotionStyle fast/sprint: add stride and arm swing'
+          }, `Local resolve MotionStyle: add ${joint} fast style keyframe`);
+        });
+      }
+      if (styleTags.some((tag) => tag.text === 'heavy' || tag.text === 'tired')) {
+        makePatch(region, 'bone_keyframe', {
+          timeSec: midSec,
+          joint: 'pelvis',
+          rotation: vec(-10, 0, 0),
+          requirementIds,
+          note: 'Local resolve MotionStyle heavy/tired: lower center of gravity'
+        }, 'Local resolve MotionStyle: add heavy/tired pelvis keyframe');
+        makePatch(region, 'bone_keyframe', {
+          timeSec: midSec,
+          joint: 'chest',
+          rotation: vec(8, 0, 0),
+          requirementIds,
+          note: 'Local resolve MotionStyle heavy/tired: forward torso weight'
+        }, 'Local resolve MotionStyle: add heavy/tired chest keyframe');
+        makePatch(region, 'contact_frame', {
+          timeSec: midSec,
+          contact: 'feet',
+          type: 'ground',
+          requirementIds,
+          note: 'Local resolve MotionStyle heavy/tired: keep feet contact longer'
+        }, 'Local resolve MotionStyle: add heavy/tired foot contact');
+      }
+      if (styleTags.some((tag) => tag.text === 'cinematic' || tag.text === 'slow_motion')) {
+        makePatch(region, 'camera_sequence', {
+          requirementIds,
+          cameraType: styleTags.some((tag) => tag.text === 'slow_motion') ? 'close_follow' : 'dolly_in',
+          note: 'Local resolve MotionStyle cinematic/slow_motion: add camera sequence hint'
+        }, 'Local resolve MotionStyle: add cinematic camera sequence');
+      }
+    }
+    if (missingTypes.includes('root_motion') || missingTypes.includes('actor_distance_change')) {
+      const base = transitionTransformAtRatio(transition, ratio);
+      const end = normalizeTransform(transition.endTransform);
+      const dx = end.position.x - base.position.x;
+      const dz = end.position.z - base.position.z;
+      const fallbackZ = Math.abs(dx) + Math.abs(dz) < 0.001 ? -0.18 : 0;
+      makePatch(region, 'transform_keyframe', {
+        timeSec: midSec,
+        position: vec(
+          Number((base.position.x + clampNumber(dx * 0.22, -0.35, 0.35)).toFixed(4)),
+          base.position.y,
+          Number((base.position.z + clampNumber(dz * 0.22 + fallbackZ, -0.35, 0.35)).toFixed(4))
+        ),
+        requirementIds,
+        note: `Local resolve: ${region.reason}`
+      }, 'Local resolve: missing root motion evidence');
+    }
+    if (missingTypes.includes('joint_delta')) {
+      const joints = region.affectedJoints.length ? region.affectedJoints : actionType && isLocomotionActionType(actionType) ? ['leftUpperLeg', 'rightUpperLeg', 'leftUpperArm', 'rightUpperArm'] as PoseJointKey[] : ['chest', 'rightUpperArm'] as PoseJointKey[];
+      joints.slice(0, 4).forEach((joint, index) => {
+        const sign = index % 2 === 0 ? 1 : -1;
+        makePatch(region, 'bone_keyframe', {
+          timeSec: midSec,
+          joint,
+          rotation: joint.includes('Leg') ? vec(32 * sign, 0, 0) : joint.includes('Arm') ? vec(36, -8 * sign, 42 * sign) : vec(12, 10 * sign, 0),
+          requirementIds,
+          note: `Local resolve: missing joint delta evidence`
+        }, `Local resolve: add ${joint} bone keyframe`);
+      });
+    }
+    if (missingTypes.includes('hand_target_distance') || missingTypes.includes('limb_contact') || missingTypes.includes('ik_target_reached')) {
+      const limb = localResolveBodyPartForRegion(region, 'rightHand');
+      makePatch(region, 'ik_constraint', {
+        targetId,
+        targetExists,
+        limb,
+        lockMode: 'reach',
+        requirementIds,
+        note: `Local resolve: missing hand target evidence`
+      }, 'Local resolve: add local IK target');
+      makePatch(region, 'contact_frame', {
+        timeSec: midSec,
+        contact: limb === 'leftHand' || limb === 'rightHand' ? limb : 'rightHand',
+        type: 'prop',
+        targetObjectId: targetId,
+        targetExists,
+        requirementIds,
+        note: `Local resolve: missing contact evidence`
+      }, 'Local resolve: add local contact frame');
+    }
+    if (missingTypes.includes('foot_contact')) {
+      makePatch(region, 'contact_frame', {
+        timeSec: midSec,
+        contact: 'leftFoot',
+        type: 'ground',
+        requirementIds,
+        note: `Local resolve: missing left foot contact evidence`
+      }, 'Local resolve: add left foot contact');
+      makePatch(region, 'contact_frame', {
+        timeSec: Number(Math.min(region.endSec - 0.005, midSec + (region.endSec - region.startSec) * 0.24).toFixed(4)),
+        contact: 'rightFoot',
+        type: 'ground',
+        requirementIds,
+        note: `Local resolve: missing right foot contact evidence`
+      }, 'Local resolve: add right foot contact');
+    }
+    if (missingTypes.includes('prop_motion')) {
+      makePatch(region, 'prop_constraint', {
+        targetId,
+        targetExists,
+        constraintType: 'prop_contact',
+        requirementIds,
+        note: `Local resolve: missing prop motion evidence`
+      }, 'Local resolve: add prop motion constraint');
+    }
+    if (missingTypes.includes('camera_motion')) {
+      makePatch(region, 'camera_sequence', {
+        requirementIds,
+        cameraType: 'close_follow',
+        note: `Local resolve: missing camera motion evidence`
+      }, 'Local resolve: add camera sequence note');
+    }
+    if (missingTypes.includes('phase_coverage') || missingTypes.includes('skill_step_active')) {
+      makePatch(region, 'phase_timing', {
+        id: createId('local_phase'),
+        label: 'local resolve phase',
+        startSec: region.startSec,
+        endSec: region.endSec,
+        purpose: region.reason,
+        requirementIds
+      }, 'Local resolve: add local phase timing');
+    }
+    if (missingTypes.includes('release_event')) {
+      makePatch(region, 'contact_frame', {
+        timeSec: midSec,
+        contact: localResolveBodyPartForRegion(region, 'rightHand'),
+        type: 'release',
+        targetObjectId: targetId,
+        targetExists,
+        requirementIds,
+        note: `Local resolve: missing release evidence`
+      }, 'Local resolve: add release contact');
+    }
+    if (missingTypes.includes('recover_event')) {
+      makePatch(region, 'phase_timing', {
+        id: createId('local_recover_phase'),
+        label: 'recover',
+        startSec: region.startSec,
+        endSec: region.endSec,
+        purpose: 'Local resolve: recover/settle',
+        requirementIds
+      }, 'Local resolve: add recover phase');
+      makePatch(region, 'bone_keyframe', {
+        timeSec: midSec,
+        joint: 'chest',
+        rotation: vec(4, 0, 0),
+        requirementIds,
+        note: `Local resolve: recover torso settle`
+      }, 'Local resolve: add recover bone keyframe');
+    }
+    if (missingTypes.includes('collision_absence') || region.source === 'negativeConstraint') {
+      makePatch(region, 'warning_only', {
+        requirementIds,
+        note: `Local resolve: collision/negative constraint needs obstacle avoidance window ${region.startSec.toFixed(2)}-${region.endSec.toFixed(2)}s`
+      }, 'Local resolve: collision absence patch is warning-only in this phase', ['Collision absence is handled by the existing obstacle avoidance pass.']);
+    }
+  });
+  return patches.slice(0, 80);
+}
+
+function applyLocalResolvePatches(transition: PoseTransition, patches: LocalResolvePatch[]): PoseTransition {
+  const applied = patches.filter((patch) => !patch.blockedByConstraints.length && patch.type !== 'warning_only');
+  const notePatches = patches.filter((patch) => patch.type === 'warning_only' || patch.blockedByConstraints.length);
+  if (!applied.length && !notePatches.length) return transition;
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const motionDraft = transition.motionDraft || motionDraftSkeletonFromPromptRequirementGraph(transition, transition.promptRequirementGraph) || {
+    version: 1 as const,
+    actionIntent: transition.actionPrompt || 'Local resolve motion',
+    durationSec,
+    fpsHint: 24,
+    generatedMotionPrompt: transition.generatedMotionPrompt || transition.actionPrompt || '',
+    promptRequirements: [],
+    promptRequirementMap: [],
+    phasePlan: [],
+    transformKeyframes: [],
+    boneKeyframes: [],
+    contactFrames: [],
+    constraints: [],
+    timing: undefined,
+    warnings: [],
+    confidence: 0.5
+  };
+  const nextDraft: MotionDraft = {
+    ...motionDraft,
+    phasePlan: [...motionDraft.phasePlan],
+    transformKeyframes: [...motionDraft.transformKeyframes],
+    boneKeyframes: [...motionDraft.boneKeyframes],
+    contactFrames: [...motionDraft.contactFrames],
+    constraints: [...motionDraft.constraints],
+    warnings: [...motionDraft.warnings]
+  };
+  const notes: string[] = [];
+  patches.forEach((patch) => {
+    const note = `${patch.reason}${patch.blockedByConstraints.length ? ` blocked: ${patch.blockedByConstraints.join('; ')}` : ''}`;
+    notes.push(note);
+    if (patch.blockedByConstraints.length || patch.type === 'warning_only') return;
+    if (patch.type === 'transform_keyframe') {
+      nextDraft.transformKeyframes.push({
+        id: patch.id,
+        timeSec: Number((patch.payload.timeSec ?? (patch.startSec + patch.endSec) * 0.5).toFixed(4)),
+        position: patch.payload.position,
+        rotation: patch.payload.rotation,
+        scale: patch.payload.scale,
+        phaseId: patch.regionId,
+        requirementIds: patch.payload.requirementIds || [],
+        note: patch.payload.note || note
+      });
+    } else if (patch.type === 'bone_keyframe') {
+      nextDraft.boneKeyframes.push({
+        id: patch.id,
+        timeSec: Number((patch.payload.timeSec ?? (patch.startSec + patch.endSec) * 0.5).toFixed(4)),
+        joint: patch.payload.joint,
+        rotation: patch.payload.rotation,
+        phaseId: patch.regionId,
+        requirementIds: patch.payload.requirementIds || [],
+        note: patch.payload.note || note
+      });
+    } else if (patch.type === 'contact_frame') {
+      nextDraft.contactFrames.push({
+        id: patch.id,
+        timeSec: Number((patch.payload.timeSec ?? (patch.startSec + patch.endSec) * 0.5).toFixed(4)),
+        contact: patch.payload.contact,
+        type: patch.payload.type || 'other',
+        targetObjectId: patch.payload.targetObjectId,
+        phaseId: patch.regionId,
+        requirementIds: patch.payload.requirementIds || [],
+        note: patch.payload.note || note
+      });
+    } else if (patch.type === 'ik_constraint' || patch.type === 'prop_constraint') {
+      nextDraft.constraints.push({
+        id: patch.id,
+        type: patch.type === 'ik_constraint' ? 'hand_target' : 'prop_contact',
+        target: patch.payload.targetId,
+        startSec: patch.startSec,
+        endSec: patch.endSec,
+        joints: patch.payload.limb === 'leftHand' ? ['leftUpperArm', 'leftLowerArm'] : patch.payload.limb === 'rightHand' ? ['rightUpperArm', 'rightLowerArm'] : [],
+        requirementIds: patch.payload.requirementIds || [],
+        note: patch.payload.note || note
+      });
+    } else if (patch.type === 'phase_timing') {
+      nextDraft.phasePlan.push({
+        id: patch.payload.id || patch.id,
+        label: patch.payload.label || 'local resolve',
+        startSec: patch.payload.startSec ?? patch.startSec,
+        endSec: patch.payload.endSec ?? patch.endSec,
+        purpose: patch.payload.purpose || note,
+        keyJoints: [],
+        contacts: [],
+        requirementIds: patch.payload.requirementIds || []
+      });
+    } else if (patch.type === 'camera_sequence' || patch.type === 'skill_weight') {
+      nextDraft.warnings.push(patch.payload.note || note);
+    }
+  });
+  nextDraft.transformKeyframes = nextDraft.transformKeyframes.slice(-24);
+  nextDraft.boneKeyframes = nextDraft.boneKeyframes.slice(-80);
+  nextDraft.contactFrames = nextDraft.contactFrames.slice(-32);
+  nextDraft.constraints = nextDraft.constraints.slice(-24);
+  nextDraft.phasePlan = nextDraft.phasePlan.slice(-12);
+  nextDraft.warnings = Array.from(new Set([...nextDraft.warnings, ...notes])).slice(0, 32);
+  return {
+    ...transition,
+    motionDraft: nextDraft,
+    actionPlan: {
+      ...transition.actionPlan,
+      notes: Array.from(new Set([...transition.actionPlan.notes, ...notes])).slice(-80)
+    },
+    warnings: Array.from(new Set([...transition.warnings, ...notes])).slice(-120)
+  };
+}
+
+function buildLocalResolveResult(regions: LocalResolveRegion[], patches: LocalResolvePatch[], extraWarnings: string[] = []): LocalResolveResult {
+  const appliedPatchIds = patches.filter((patch) => !patch.blockedByConstraints.length && patch.type !== 'warning_only').map((patch) => patch.id);
+  const blockedPatchIds = patches.filter((patch) => patch.blockedByConstraints.length).map((patch) => patch.id);
+  const warnings = [
+    ...extraWarnings,
+    ...patches.flatMap((patch) => patch.warnings),
+    ...patches.flatMap((patch) => patch.blockedByConstraints.map((reason) => `${patch.id}: ${reason}`))
+  ];
+  return {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    regions,
+    patches,
+    appliedPatchIds,
+    blockedPatchIds,
+    warnings: Array.from(new Set(warnings)).slice(0, 40),
+    confidence: regions.length ? clampNumber(appliedPatchIds.length / Math.max(1, regions.length), 0, 1) : 0
+  };
+}
+
+function localResolveResultNotes(result: LocalResolveResult) {
+  return [
+    `局部重解算：发现 ${result.regions.length} 个失败区域，应用 ${result.appliedPatchIds.length} 个 patch，阻止 ${result.blockedPatchIds.length} 个 patch`,
+    ...result.warnings.slice(0, 3).map((warning) => `局部重解算警告：${warning}`)
+  ];
+}
+
+function inspectPromptAdherenceAction(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  clip: SerializedAnimationClip,
+  actionType: MotionSemanticActionType | undefined,
+  qualityReport?: MotionQualityReport
+) {
+  const samples = clip.samples;
+  const evidence: string[] = [];
+  const relatedJoints = new Set<PoseJointKey>();
+  const relatedContacts = new Set<MotionContactHint>();
+  const contactActionStats = semanticContactActionStats(scene, transition, clip);
+  const handContactStats = semanticHandContactStats(clip, transition);
+  const locomotionAction = isLocomotionActionType(actionType) ? actionType : sequenceLocomotionActionType(transition);
+  const locomotionStats = locomotionSupportStats(transition, clip);
+  const locomotionAlternation = locomotionAlternationStats(samples);
+  const rootTravel = rootTravelInSamples(samples);
+  const rootLift = maxRootLiftInSamples(samples);
+  const minRootY = samples.reduce((min, sample) => Math.min(min, sample.transform.position.y), samples[0]?.transform.position.y || 0);
+  const startY = samples[0]?.transform.position.y || 0;
+  const drop = startY - minRootY;
+  const releaseContacts = clip.contacts.filter((contact) => contact.kind === 'release');
+  const handContacts = clip.contacts.filter((contact) => contact.limb === 'leftHand' || contact.limb === 'rightHand');
+  const footContacts = clip.contacts.filter((contact) => contact.limb === 'leftFoot' || contact.limb === 'rightFoot');
+  const tailStart = clip.durationSec * 0.72;
+  const tailSamples = samples.filter((sample) => sample.timeSec >= tailStart);
+  const tailPoseDelta = tailSamples.length > 1
+    ? tailSamples.slice(1).reduce((max, sample, index) => Math.max(max, poseJointDelta(sample.pose.chest, tailSamples[index].pose.chest)), 0)
+    : 0;
+  const hasRecoverOrSettle = tailPoseDelta > 2 || (transition.motionDraft?.phasePlan || []).some((phase) => /recover|settle|回收|收势|稳定/.test(phase.label + phase.purpose));
+  let passed = true;
+  let failedReason = '';
+  let suggestedFix = '';
+
+  const fail = (reason: string, fix: string) => {
+    passed = false;
+    if (!failedReason) failedReason = reason;
+    if (!suggestedFix) suggestedFix = fix;
+  };
+
+  if (locomotionAction && isLocomotionActionType(locomotionAction)) {
+    relatedJoints.add('leftUpperLeg'); relatedJoints.add('rightUpperLeg'); relatedJoints.add('leftUpperArm'); relatedJoints.add('rightUpperArm');
+    relatedContacts.add('feet');
+    evidence.push(`root travel ${rootTravel.toFixed(3)}`);
+    evidence.push(`leg alternation ${locomotionAlternation.maxLegSeparation.toFixed(1)}deg / sign changes ${locomotionAlternation.signChanges}`);
+    evidence.push(`arm swing separation ${locomotionStats.armSwingSeparation.toFixed(1)}deg`);
+    evidence.push(`foot contacts ${locomotionStats.footContactCount}`);
+    const minTravel = promptRequestsInPlaceMotion(transition.actionPrompt) ? 0 : locomotionAction === 'walk' ? 0.08 : 0.16;
+    const minLeg = locomotionAction === 'walk' ? 9 : locomotionAction === 'run' ? 14 : 16;
+    const minArm = locomotionAction === 'walk' ? 8 : locomotionAction === 'run' ? 14 : 16;
+    if (rootTravel < minTravel) fail('缺少明显根节点位移', '补充根节点中间位移关键帧');
+    if (locomotionAlternation.maxLegSeparation < minLeg || locomotionAlternation.signChanges < 1) fail('左右腿交替不明显', '补充左右腿反向步态关键帧');
+    if (locomotionStats.armSwingSeparation < minArm) fail('左右臂反向摆动不明显', '补充左右臂反向摆动骨骼关键帧');
+    if (locomotionStats.footContactCount < 2) fail('缺少脚步接触帧', '补充左右脚落地 contactFrames');
+  } else if (actionType === 'push' || actionType === 'pull') {
+    relatedJoints.add('chest'); relatedJoints.add('leftUpperArm'); relatedJoints.add('rightUpperArm');
+    relatedContacts.add('hands'); relatedContacts.add('feet');
+    evidence.push(`hand contacts ${handContacts.length}`);
+    evidence.push(`body drive ${Number(contactActionStats.bodyDrive || 0).toFixed(1)}`);
+    evidence.push(`foot stability ${Number(contactActionStats.footStability ?? 0).toFixed(2)}`);
+    if (!handContacts.length || (handContactStats.checkedCount > 0 && handContactStats.successRatio < 0.45)) fail('缺少手部接触目标的真实证据', '补充手部接触 contactFrames 和手臂前推/回拉关键帧');
+    if ((contactActionStats.bodyDrive || 0) < 6) fail(actionType === 'push' ? '身体前压发力不足' : '身体后拉发力不足', '补充胸腔/骨盆重心驱动关键帧');
+    if ((contactActionStats.footStability ?? 1) < 0.35 || footContacts.length < 2) fail('脚部支撑不稳定或缺少脚锁', '补充脚部稳定 contactFrames');
+  } else if (actionType === 'throw') {
+    relatedJoints.add('chest'); relatedJoints.add('rightUpperArm'); relatedJoints.add('rightLowerArm');
+    relatedContacts.add('rightHand');
+    const shoulderDelta = Math.max(maxJointAxisDeltaFromStart(samples, 'rightUpperArm', 'x'), maxJointAxisDeltaFromStart(samples, 'leftUpperArm', 'x'));
+    const torsoTwist = maxJointAxisDeltaFromStart(samples, 'chest', 'y');
+    evidence.push(`shoulder delta ${shoulderDelta.toFixed(1)}deg`);
+    evidence.push(`torso twist ${torsoTwist.toFixed(1)}deg`);
+    evidence.push(`release contacts ${releaseContacts.length}`);
+    if (shoulderDelta < 16 || torsoTwist < 6) fail('蓄力或转体不明显', '补充投掷蓄力和躯干扭转骨骼关键帧');
+    if (!releaseContacts.length) fail('缺少释放阶段 contactFrame', '补充右手 release contactFrame');
+    if (!hasRecoverOrSettle) fail('缺少出手后的回收/收势阶段', '补充回收阶段骨骼关键帧');
+  } else if (actionType === 'punch' || actionType === 'kick' || actionType === 'side_kick') {
+    const isKick = actionType === 'kick' || actionType === 'side_kick';
+    const primaryDelta = isKick
+      ? Math.max(maxJointAxisDeltaFromStart(samples, 'leftUpperLeg', 'x'), maxJointAxisDeltaFromStart(samples, 'rightUpperLeg', 'x'), maxJointAxisDeltaFromStart(samples, 'leftUpperLeg', 'z'), maxJointAxisDeltaFromStart(samples, 'rightUpperLeg', 'z'))
+      : Math.max(maxJointAxisDeltaFromStart(samples, 'leftUpperArm', 'x'), maxJointAxisDeltaFromStart(samples, 'rightUpperArm', 'x'), maxJointAxisDeltaFromStart(samples, 'leftLowerArm', 'x'), maxJointAxisDeltaFromStart(samples, 'rightLowerArm', 'x'));
+    if (isKick) { relatedJoints.add('leftUpperLeg'); relatedJoints.add('rightUpperLeg'); } else { relatedJoints.add('leftUpperArm'); relatedJoints.add('rightUpperArm'); }
+    evidence.push(`${isKick ? 'leg' : 'arm'} strike delta ${primaryDelta.toFixed(1)}deg`);
+    evidence.push(`contact frames ${clip.contacts.length}`);
+    if (primaryDelta < (isKick ? 14 : 12)) fail(isKick ? '踢腿出击幅度不足' : '出拳/攻击出击幅度不足', '补充出击骨骼关键帧');
+    if (!clip.contacts.length) fail('缺少攻击接触或到达帧', '补充攻击接触 contactFrame');
+    if (!hasRecoverOrSettle) fail('缺少攻击后的回收动作', '补充回收阶段关键帧');
+  } else if (actionType === 'jump') {
+    relatedJoints.add('pelvis'); relatedJoints.add('leftUpperLeg'); relatedJoints.add('rightUpperLeg');
+    relatedContacts.add('feet');
+    evidence.push(`root drop ${drop.toFixed(3)}`);
+    evidence.push(`root lift ${rootLift.toFixed(3)}`);
+    evidence.push(`foot contacts ${footContacts.length}`);
+    if (drop < 0.025) fail('缺少下沉蓄力', '补充起跳前下沉关键帧');
+    if (rootLift < 0.08) fail('缺少明显离地抬升', '补充根节点上升关键帧');
+    if (footContacts.length < 2) fail('缺少落地/脚部接触帧', '补充起跳和落地 contactFrames');
+  } else if (actionType === 'crouch' || actionType === 'crawl' || actionType === 'fall' || actionType === 'get_up') {
+    relatedJoints.add('pelvis'); relatedJoints.add('chest');
+    const chestDelta = maxJointAxisDeltaFromStart(samples, 'chest', 'x');
+    evidence.push(`root drop ${drop.toFixed(3)}`);
+    evidence.push(`root lift ${rootLift.toFixed(3)}`);
+    evidence.push(`chest bend delta ${chestDelta.toFixed(1)}deg`);
+    if ((actionType === 'crouch' || actionType === 'crawl') && drop < 0.04 && chestDelta < 10) fail('缺少下蹲/俯身变化', '补充重心下沉和躯干弯曲关键帧');
+    if (actionType === 'fall' && (drop < 0.08 && chestDelta < 18)) fail('摔倒过程不明显', '补充身体倾倒和根节点下落关键帧');
+    if (actionType === 'get_up' && rootLift < 0.05 && chestDelta < 12) fail('起身恢复过程不明显', '补充从低位到站起的根节点/躯干关键帧');
+  } else if (actionType === 'reach') {
+    relatedJoints.add('leftUpperArm'); relatedJoints.add('rightUpperArm');
+    relatedContacts.add('hands');
+    evidence.push(`hand contacts ${handContacts.length}`);
+    evidence.push(`hand reach distance ${semanticHandReachDistance(clip).toFixed(3)}`);
+    if (!handContacts.length && semanticHandReachDistance(clip) < 0.08) fail('手部没有朝目标移动或接近', '补充手部目标和 reach contactFrame');
+  }
+
+  if (qualityReport) {
+    const relatedQualityIssues = qualityReport.issues.filter((issue) => issue.severity !== 'info').slice(0, 3);
+    relatedQualityIssues.forEach((issue) => evidence.push(`quality: ${issue.message}`));
+  }
+
+  return {
+    passed,
+    evidence: evidence.filter(Boolean).slice(0, 8),
+    failedReason,
+    relatedJoints: Array.from(relatedJoints),
+    relatedContacts: Array.from(relatedContacts),
+    suggestedFix
+  };
+}
+
+function promptAdherenceRequirementIsCamera(requirement: MotionDraftRequirement | undefined, transition: PoseTransition) {
+  const text = `${requirement?.text || ''} ${transition.actionPrompt || ''}`.toLowerCase();
+  return requirement?.category === 'camera'
+    || /镜头|运镜|跟随|推近|拉远|环绕|低机位|俯拍|特写|手持|camera|follow|dolly|orbit|handheld|close/.test(text);
+}
+
+function inspectPromptAdherenceCamera(
+  transition: PoseTransition,
+  clip: SerializedAnimationClip,
+  requirement?: MotionDraftRequirement
+) {
+  const cameraSamples = clip.cameraSamples || [];
+  const evidence: string[] = [];
+  let passed = true;
+  let failedReason = '';
+  let suggestedFix = '';
+  const fail = (reason: string, fix: string) => {
+    passed = false;
+    if (!failedReason) failedReason = reason;
+    if (!suggestedFix) suggestedFix = fix;
+  };
+  if (!cameraSamples.length) {
+    fail('没有生成 cameraSamples', '根据提示词或动作阶段生成 CameraMotionSequence');
+    return { passed, evidence, failedReason, relatedFrames: [] as number[], suggestedFix };
+  }
+  const first = cameraSamples[0];
+  const last = cameraSamples[cameraSamples.length - 1];
+  const travel = cameraSamples.slice(1).reduce((sum, sample, index) => sum + vecDistance(cameraSamples[index].position, sample.position), 0);
+  const targetTravel = cameraSamples.slice(1).reduce((sum, sample, index) => sum + vecDistance(cameraSamples[index].targetPosition, sample.targetPosition), 0);
+  const heightDelta = Math.max(...cameraSamples.map((sample) => sample.position.y)) - Math.min(...cameraSamples.map((sample) => sample.position.y));
+  const targetStartDistance = vecDistance(first.targetPosition, clip.samples[0]?.transform.position || first.targetPosition);
+  const targetEndDistance = vecDistance(last.targetPosition, clip.samples[clip.samples.length - 1]?.transform.position || last.targetPosition);
+  evidence.push(`camera travel ${travel.toFixed(3)}`);
+  evidence.push(`target travel ${targetTravel.toFixed(3)}`);
+  evidence.push(`height delta ${heightDelta.toFixed(3)}`);
+  evidence.push(`target root distance ${targetStartDistance.toFixed(3)} -> ${targetEndDistance.toFixed(3)}`);
+  const text = `${requirement?.text || ''} ${transition.actionPrompt || ''}`.toLowerCase();
+  if (/跟随|follow|特写|close/.test(text) && targetTravel < 0.035) fail('镜头目标没有跟随角色运动', '生成 follow_character 或 close_follow cameraSamples');
+  if (/推近|dolly in|close/.test(text) && travel < 0.045) fail('镜头没有形成明显推近或近景运动', '在接触/攻击阶段补充 dolly_in 镜头段');
+  if (/环绕|orbit|360/.test(text) && travel < 0.06) fail('镜头没有形成环绕运动', '补充 orbit 镜头段并设置 orbitAngleDeg');
+  if (/低机位|仰拍|low/.test(text) && heightDelta < 0.025) fail('低机位/上仰变化不明显', '补充 low_tilt_up 镜头段');
+  if (/手持|晃|handheld|impact|冲击/.test(text) && travel < 0.02) fail('手持或冲击镜头变化不明显', '在 impact/contact 附近补充低强度 handheld 镜头段');
+  if (passed && travel < 0.015 && targetTravel < 0.015) fail('镜头采样过于静止，未体现提示词运镜', '提高 CameraMotionSequence intensity 或补充阶段镜头');
+  return {
+    passed,
+    evidence: evidence.slice(0, 8),
+    failedReason,
+    relatedFrames: cameraSamples.slice(0, 6).map((sample) => Number(sample.timeSec.toFixed(3))),
+    suggestedFix
+  };
+}
+
+function inspectPromptAdherence(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  animationClip: SerializedAnimationClip,
+  qualityReport?: MotionQualityReport,
+  motionEvidenceBundle?: MotionEvidenceBundle
+): PromptAdherenceReport {
+  const promptRequirementGraph = transition.promptRequirementGraph || compilePromptRequirements(scene, transition);
+  const motionDraft = transition.motionDraft;
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const motionSkillSequence = buildMotionSkillSequence(transition, motionDraft);
+  const evidenceBundle = motionEvidenceBundle || collectMotionEvidence(scene, transition, animationClip, {
+    promptRequirementGraph,
+    motionDraft,
+    interactionDraft: transition.interactionDraft,
+    motionSkillSequence,
+    propConstraints: transition.propConstraints,
+    motionQualityReport: qualityReport,
+    negativeConstraintReport: transition.negativeConstraintReport
+  });
+  const evidenceById = new Map(evidenceBundle.evidences.map((evidence) => [evidence.id, evidence]));
+  const mappedRequirementIds = new Set([
+    ...Array.from(promptRequirementGraphMappedIds(promptRequirementGraph)),
+    ...Array.from(promptAdherenceMappedRequirementIds(motionDraft, motionSkillSequence))
+  ]);
+  const promptCamera = cameraMotionFromPrompt(transition.actionPrompt, transition.durationSec, transition.characterId, transition.cameraMotion);
+  const graphRequirements = promptRequirementGraphToMotionRequirements(promptRequirementGraph);
+  const baseRequirements: MotionDraftRequirement[] = graphRequirements.length
+    ? graphRequirements
+    : motionDraft?.promptRequirements.length
+      ? motionDraft.promptRequirements
+    : semanticPlan
+      ? [{
+          id: `semantic_${semanticPlan.actionType}`,
+          text: semanticPlan.actionType === 'unknown' ? transition.actionPrompt || '动作提示词' : `${MOTION_SEMANTIC_TYPE_LABELS[semanticPlan.actionType] || semanticPlan.actionType} 动作`,
+          category: 'action',
+          priority: 'normal'
+        }]
+      : [];
+  const requirements: MotionDraftRequirement[] = [
+    ...baseRequirements,
+    ...(promptCamera.matched && !baseRequirements.some((item) => item.category === 'camera')
+      ? [{
+          id: 'semantic_camera_motion',
+          text: semanticPlan?.cameraIntent?.description || transition.actionPrompt || '镜头运动',
+          category: 'camera' as const,
+          priority: 'normal' as const
+        }]
+      : [])
+  ];
+  const warnings: string[] = [];
+  if (!requirements.length) {
+    return {
+      version: 1,
+      checkedAt: new Date().toISOString(),
+      score: 100,
+      requirementResults: [],
+      missingRequirements: [],
+      correctionHints: [],
+      warnings: ['没有可检查的动作提示词要求。']
+    };
+  }
+  const missingRequirements = (motionDraft || promptRequirementGraph)
+    ? requirements.filter((requirement) => requirement.priority !== 'low' && !mappedRequirementIds.has(requirement.id)).map((requirement) => requirement.text)
+    : [];
+  const requirementResults = requirements.map((requirement): PromptAdherenceRequirementResult => {
+    const graphRequirement = promptRequirementGraph.requirements.find((item) => item.id === requirement.id);
+    const coverage = evaluateRequirementCoverage(graphRequirement || requirement, evidenceBundle);
+    const actionType = promptAdherenceRequirementAction(requirement, transition);
+    const cameraRequirement = promptAdherenceRequirementIsCamera(requirement, transition);
+    const cameraCheck = cameraRequirement ? inspectPromptAdherenceCamera(transition, animationClip, requirement) : null;
+    const actionCheck = cameraCheck
+      ? {
+          passed: cameraCheck.passed,
+          evidence: cameraCheck.evidence,
+          failedReason: cameraCheck.failedReason,
+          relatedJoints: [] as PoseJointKey[],
+          relatedContacts: [] as MotionContactHint[],
+          suggestedFix: cameraCheck.suggestedFix,
+          relatedCameraFrames: cameraCheck.relatedFrames
+        }
+      : {
+          ...inspectPromptAdherenceAction(scene, transition, animationClip, actionType, qualityReport),
+          relatedCameraFrames: [] as number[]
+        };
+    const draftRelated = promptAdherenceRelatedData(requirement.id, motionDraft, motionSkillSequence);
+    const graphRelated = promptRequirementGraphRelatedData(requirement.id, promptRequirementGraph, animationClip.durationSec);
+    const related = {
+      relatedFrames: Array.from(new Set([...draftRelated.relatedFrames, ...graphRelated.relatedFrames])),
+      relatedJoints: Array.from(new Set([...draftRelated.relatedJoints, ...graphRelated.relatedJoints])),
+      relatedContacts: Array.from(new Set([...draftRelated.relatedContacts, ...graphRelated.relatedContacts]))
+    };
+    const sequenceEvidence = motionSkillSequence?.steps
+      .filter((step) => step.promptRequirementIds?.includes(requirement.id) || step.actionType === actionType)
+      .map((step) => `skill step ${step.label} ${Math.round(step.startRatio * 100)}-${Math.round(step.endRatio * 100)}%`)
+      .slice(0, 3) || [];
+    const hasMapping = !(motionDraft || promptRequirementGraph) || mappedRequirementIds.has(requirement.id);
+    const required = requirement.priority !== 'low';
+    const coverageEvidence = coverage.evidenceIds
+      .map((id) => evidenceById.get(id))
+      .filter((evidence): evidence is MotionEvidence => Boolean(evidence))
+      .map((evidence) => `${evidence.id}: ${evidence.message}`);
+    const passed = coverage.passed && actionCheck.passed && (hasMapping || !required);
+    const missingEvidenceText = coverage.missingEvidenceTypes.length
+      ? `缺少证据：${coverage.missingEvidenceTypes.join(', ')}`
+      : '';
+    return {
+      requirementId: requirement.id,
+      text: requirement.text,
+      priority: requirement.priority,
+      passed,
+      evidence: [
+        ...coverageEvidence,
+        ...actionCheck.evidence,
+        ...sequenceEvidence,
+        hasMapping ? (promptRequirementGraph.requirements.some((item) => item.id === requirement.id) ? 'PromptRequirementGraph requirement is mapped' : 'MotionDraft requirement map exists') : ''
+      ].filter(Boolean),
+      failedReason: passed ? undefined : (!hasMapping ? '提示词需求没有映射到阶段、关键帧、接触帧或约束' : missingEvidenceText || coverage.reason || actionCheck.failedReason || '缺少真实动画证据'),
+      relatedFrames: Array.from(new Set([...related.relatedFrames, ...actionCheck.relatedCameraFrames])).slice(0, 12),
+      relatedJoints: Array.from(new Set([...related.relatedJoints, ...actionCheck.relatedJoints])).slice(0, 12),
+      relatedContacts: Array.from(new Set([...related.relatedContacts, ...actionCheck.relatedContacts])).slice(0, 12),
+      suggestedFix: passed ? undefined : motionEvidenceCorrectionHint(coverage.missingEvidenceTypes) || actionCheck.suggestedFix || '补充 MotionDraft 中间关键帧、接触帧或约束'
+    };
+  });
+  const failedResults = requirementResults.filter((result) => !result.passed);
+  const penalty = failedResults.reduce((total, result) => {
+    const required = result.priority !== 'low';
+    return total + (required ? result.priority === 'high' ? 26 : 18 : 7);
+  }, 0) + missingRequirements.reduce((total, text) => {
+    const requirement = requirements.find((item) => item.text === text);
+    return total + (requirement?.priority === 'low' ? 3 : 8);
+  }, 0);
+  if (!motionDraft) warnings.push('没有 MotionDraft，提示词遵循度优先使用本地 PromptRequirementGraph 做轻量检查。');
+  promptRequirementGraph.warnings.forEach((warning) => warnings.push(warning));
+  evidenceBundle.warnings.forEach((warning) => warnings.push(warning));
+  let correctionHints = Array.from(new Set(failedResults.map((result) => result.suggestedFix).filter(Boolean) as string[])).slice(0, 12);
+  if (transition.interactionDraft) {
+    const interactionDraft = transition.interactionDraft;
+    const multiActor = interactionDraft.actors.filter((actor) => actor.role !== 'obstacle').length > 1;
+    if (multiActor && !interactionDraft.syncMarkers.length) {
+      warnings.push('InteractionDraft has multiple actors but no syncMarkers for contact/release/dodge timing.');
+      correctionHints = [...correctionHints, 'Add InteractionDraft syncMarkers to align multi-actor contact, release, dodge, receive, or impact timing.'].slice(0, 12);
+    }
+    if (interactionDraft.interactionClips.length && !interactionDraft.contacts.length) {
+      warnings.push('InteractionDraft has interactionClips but no contact events.');
+      correctionHints = [...correctionHints, 'Add InteractionDraft contacts so the compiler can align hands, feet, targets, and prop interactions.'].slice(0, 12);
+    }
+    if (interactionDraft.contacts.some((contact) => contact.targetType === 'prop') && !interactionDraft.propMotions.length) {
+      warnings.push('InteractionDraft references prop contacts but has no propMotions.');
+    }
+  }
+  return {
+    version: 1,
+    checkedAt: new Date().toISOString(),
+    score: clampNumber(100 - penalty, 0, 100),
+    requirementResults,
+    missingRequirements,
+    correctionHints,
+    warnings
+  };
+}
+
+function promptAdherenceNeedsAutoCorrection(report: PromptAdherenceReport) {
+  return report.score < 72 && report.requirementResults.some((result) => !result.passed && result.priority !== 'low');
+}
+
+function motionDraftSkeletonFromPromptRequirementGraph(transition: PoseTransition, graph?: PromptRequirementGraph): MotionDraft | undefined {
+  if (!graph?.requirements.length) return undefined;
+  const durationSec = Math.max(0.1, transition.durationSec || 1);
+  const promptRequirements = promptRequirementGraphToMotionRequirements(graph);
+  const phasePlan = graph.timeline.map((item, index): MotionDraftPhase => ({
+    id: `graph_phase_${item.id || index}`,
+    label: item.label,
+    startSec: Number((item.startRatio * durationSec).toFixed(4)),
+    endSec: Number((item.endRatio * durationSec).toFixed(4)),
+    purpose: 'PromptRequirementGraph local phase',
+    keyJoints: graph.requirements
+      .filter((requirement) => item.requirementIds.includes(requirement.id))
+      .flatMap((requirement) => promptRequirementGraphRelatedData(requirement.id, graph, durationSec).relatedJoints)
+      .slice(0, 8),
+    contacts: graph.requirements
+      .filter((requirement) => item.requirementIds.includes(requirement.id))
+      .flatMap((requirement) => promptRequirementGraphRelatedData(requirement.id, graph, durationSec).relatedContacts)
+      .slice(0, 8),
+    requirementIds: item.requirementIds
+  })).slice(0, 12);
+  return {
+    version: 1,
+    actionIntent: graph.requirements.map((item) => item.text).slice(0, 5).join('；') || transition.actionPrompt,
+    durationSec,
+    fpsHint: 24,
+    generatedMotionPrompt: transition.actionPrompt,
+    promptRequirements,
+    promptRequirementMap: graph.timeline.map((item) => ({
+      requirementId: item.requirementIds[0],
+      appliedTo: [{ kind: 'phase' as const, phaseId: `graph_phase_${item.id}`, timeSec: Number((((item.startRatio + item.endRatio) * 0.5) * durationSec).toFixed(4)) }],
+      note: 'Mapped by local PromptRequirementGraph compiler'
+    })).filter((item) => item.requirementId).slice(0, 20),
+    phasePlan,
+    transformKeyframes: [],
+    boneKeyframes: [],
+    contactFrames: [],
+    constraints: graph.constraints.map((constraint): MotionDraftConstraint => ({
+      id: `graph_${constraint.id}`,
+      type: constraint.type === 'must_contact'
+        ? 'prop_contact'
+        : constraint.type === 'must_face'
+          ? 'head_look'
+          : constraint.type === 'must_keep_grounded' || constraint.type === 'must_not_airborne'
+            ? 'grounding'
+            : 'other',
+      target: constraint.targetId,
+      startSec: Number((constraint.startRatio * durationSec).toFixed(4)),
+      endSec: Number((constraint.endRatio * durationSec).toFixed(4)),
+      joints: constraint.bodyPart === 'leftHand' ? ['leftUpperArm', 'leftLowerArm'] : constraint.bodyPart === 'rightHand' ? ['rightUpperArm', 'rightLowerArm'] : [],
+      requirementIds: graph.requirements.filter((requirement) => requirement.targetId === constraint.targetId || requirement.actorId === constraint.actorId).map((item) => item.id).slice(0, 4),
+      note: constraint.reason
+    })).slice(0, 24),
+    timing: {
+      anticipation: durationSec * 0.18,
+      mainActionStart: durationSec * 0.28,
+      mainActionEnd: durationSec * 0.78,
+      settle: durationSec * 0.9
+    },
+    warnings: graph.warnings,
+    confidence: graph.confidence
+  };
+}
+
+function buildPromptAdherenceCorrection(transition: PoseTransition, report: PromptAdherenceReport, negativeReport?: NegativeConstraintReport) {
+  const motionDraft = transition.motionDraft || motionDraftSkeletonFromPromptRequirementGraph(transition, transition.promptRequirementGraph);
+  if (!motionDraft || !promptAdherenceNeedsAutoCorrection(report)) {
+    return { transition, applied: false, notes: [] as string[] };
+  }
+  if (negativeReport && negativeConstraintBlocksPromptCorrection(negativeReport)) {
+    const blocked = negativeReport.violations
+      .filter((violation) => violation.severity === 'error')
+      .slice(0, 4)
+      .map((violation) => `${violation.type}: ${violation.message}`);
+    return {
+      transition,
+      applied: false,
+      notes: [`负向约束阻止 PromptAdherence 自动修正：${blocked.join('；')}`]
+    };
+  }
+  const durationSec = Math.max(0.1, transition.durationSec || motionDraft.durationSec || 1);
+  const semanticPlan = transition.actionPlan.semanticPlan;
+  const targetObjectId = semanticPlan?.targetObjectId
+    || motionDraft.contactFrames.find((frame) => frame.targetObjectId)?.targetObjectId;
+  const transformKeyframes = [...motionDraft.transformKeyframes];
+  const boneKeyframes = [...motionDraft.boneKeyframes];
+  const contactFrames = [...motionDraft.contactFrames];
+  const constraints = [...motionDraft.constraints];
+  const notes: string[] = [];
+  const fixId = (name: string) => createId(`prompt_fix_${name}`);
+  const at = (ratio: number) => safeMotionDraftTime(durationSec * ratio, durationSec) || durationSec * 0.5;
+  const addRoot = (ratio: number, patch: Partial<Pick<MotionDraftTransformKeyframe, 'position' | 'rotation' | 'scale'>>, requirementId: string, note: string) => {
+    transformKeyframes.push({
+      id: fixId('root'),
+      timeSec: Number(at(ratio).toFixed(4)),
+      phaseId: `prompt_fix_${requirementId}`,
+      requirementIds: [requirementId],
+      note,
+      ...patch
+    });
+  };
+  const addBone = (ratio: number, joint: PoseJointKey, rotation: Vec3, requirementId: string, note: string) => {
+    boneKeyframes.push({
+      id: fixId('bone'),
+      timeSec: Number(at(ratio).toFixed(4)),
+      joint,
+      rotation,
+      phaseId: `prompt_fix_${requirementId}`,
+      requirementIds: [requirementId],
+      note
+    });
+  };
+  const addContact = (ratio: number, contact: MotionContactHint, requirementId: string, note: string, type: MotionDraftContactFrame['type'] = 'other') => {
+    contactFrames.push({
+      id: fixId('contact'),
+      timeSec: Number(at(ratio).toFixed(4)),
+      contact,
+      type,
+      targetObjectId,
+      phaseId: `prompt_fix_${requirementId}`,
+      requirementIds: [requirementId],
+      note
+    });
+  };
+  const addPhaseMap = (requirementId: string, label: string) => ({
+    id: `prompt_fix_${requirementId}`,
+    label,
+    startSec: Number(at(0.28).toFixed(4)),
+    endSec: Number(at(0.78).toFixed(4)),
+    purpose: `Prompt adherence fix: ${label}`,
+    keyJoints: [] as PoseJointKey[],
+    contacts: [] as MotionContactHint[],
+    requirementIds: [requirementId]
+  });
+  const phasePlan = [...motionDraft.phasePlan];
+  const promptRequirementMap = [...motionDraft.promptRequirementMap];
+  const ensureMap = (requirementId: string) => {
+    if (promptRequirementMap.some((entry) => entry.requirementId === requirementId)) return;
+    promptRequirementMap.push({
+      requirementId,
+      appliedTo: [{ kind: 'phase', phaseId: `prompt_fix_${requirementId}` }],
+      note: 'Prompt adherence fix mapped this requirement to local corrective draft frames.'
+    });
+  };
+
+  for (const result of report.requirementResults.filter((item) => !item.passed && item.priority !== 'low').slice(0, 4)) {
+    const graphRequirement = transition.promptRequirementGraph?.requirements.find((item) => item.id === result.requirementId);
+    const actionType = promptAdherenceRequirementAction({ id: result.requirementId, text: result.text, category: 'action', priority: result.priority }, transition);
+    const verification = graphRequirement?.verification || [];
+    const missingEvidenceTypes = missingEvidenceTypesFromPromptResult(result);
+    ensureMap(result.requirementId);
+    phasePlan.push(addPhaseMap(result.requirementId, result.suggestedFix || result.text));
+    if (missingEvidenceTypes.includes('camera_motion') || verification.includes('camera_motion_sample')) {
+      notes.push('Prompt adherence fix: camera motion requirement is recorded for CameraMotionSequence regeneration.');
+    } else if (missingEvidenceTypes.includes('collision_absence') || verification.includes('collision_absence')) {
+      constraints.push({ id: fixId('constraint'), type: 'grounding', startSec: at(0.05), endSec: at(0.95), requirementIds: [result.requirementId], note: 'Prompt adherence fix: collision/avoidance requirement for local obstacle solver' });
+      notes.push('Prompt adherence fix: added local collision/avoidance constraint.');
+    } else if (missingEvidenceTypes.includes('prop_motion') || verification.includes('prop_motion')) {
+      addContact(0.5, graphRequirement?.bodyParts.includes('rightFoot') ? 'rightFoot' : 'rightHand', result.requirementId, 'Prompt adherence fix: prop motion contact', graphRequirement?.bodyParts.includes('rightFoot') ? 'other' : 'prop');
+      constraints.push({ id: fixId('constraint'), type: 'prop_contact', target: graphRequirement?.targetId || targetObjectId, startSec: at(0.32), endSec: at(0.74), requirementIds: [result.requirementId], note: 'Prompt adherence fix: prop motion/contact requirement' });
+      notes.push('Prompt adherence fix: added prop contact requirement for prop constraint solving.');
+    } else if (missingEvidenceTypes.includes('hand_target_distance') || missingEvidenceTypes.includes('ik_target_reached') || missingEvidenceTypes.includes('limb_contact')) {
+      addContact(0.52, graphRequirement?.bodyParts.includes('leftHand') ? 'leftHand' : 'rightHand', result.requirementId, 'Prompt adherence fix: hand target evidence', 'prop');
+      constraints.push({ id: fixId('constraint'), type: 'hand_target', target: graphRequirement?.targetId || targetObjectId, startSec: at(0.3), endSec: at(0.78), joints: graphRequirement?.bodyParts.includes('leftHand') ? ['leftUpperArm', 'leftLowerArm'] : ['rightUpperArm', 'rightLowerArm'], requirementIds: [result.requirementId], note: 'Prompt adherence fix: hand target distance evidence' });
+      notes.push('Prompt adherence fix: added hand target/contact evidence requirement.');
+    } else if (missingEvidenceTypes.includes('release_event')) {
+      addContact(0.62, graphRequirement?.bodyParts.includes('leftHand') ? 'leftHand' : 'rightHand', result.requirementId, 'Prompt adherence fix: release evidence', 'release');
+      notes.push('Prompt adherence fix: added release contactFrame evidence.');
+    } else if (missingEvidenceTypes.includes('recover_event')) {
+      phasePlan.push({
+        id: `prompt_fix_recover_${result.requirementId}`,
+        label: 'recover',
+        startSec: Number(at(0.76).toFixed(4)),
+        endSec: Number(at(0.94).toFixed(4)),
+        purpose: 'Prompt adherence fix: recover evidence',
+        keyJoints: ['chest', 'pelvis'],
+        contacts: [],
+        requirementIds: [result.requirementId]
+      });
+      addBone(0.86, 'chest', vec(4, 0, 0), result.requirementId, 'Prompt adherence fix: recover torso settle');
+      notes.push('Prompt adherence fix: added recover/settle evidence phase.');
+    } else if (missingEvidenceTypes.includes('root_motion')) {
+      addRoot(0.5, { position: transitionTransformAtRatio(transition, 0.5).position }, result.requirementId, 'Prompt adherence fix: root motion evidence');
+      notes.push('Prompt adherence fix: added root motion evidence keyframe.');
+    } else if (actionType && isLocomotionActionType(actionType)) {
+      addRoot(0.35, { position: transitionTransformAtRatio(transition, 0.35).position }, result.requirementId, 'Prompt adherence fix: reinforce locomotion root travel');
+      addBone(0.32, 'leftUpperLeg', vec(actionType === 'walk' ? -22 : -38, 0, 0), result.requirementId, 'Prompt adherence fix: left leg stride');
+      addBone(0.32, 'rightUpperLeg', vec(actionType === 'walk' ? 28 : 44, 0, 0), result.requirementId, 'Prompt adherence fix: right leg stride');
+      addBone(0.32, 'leftUpperArm', vec(actionType === 'walk' ? 72 : 58, -8, 28), result.requirementId, 'Prompt adherence fix: opposite arm swing');
+      addBone(0.32, 'rightUpperArm', vec(actionType === 'walk' ? 66 : 76, -12, -28), result.requirementId, 'Prompt adherence fix: opposite arm swing');
+      addBone(0.66, 'leftUpperLeg', vec(actionType === 'walk' ? 30 : 44, 0, 0), result.requirementId, 'Prompt adherence fix: alternate left leg stride');
+      addBone(0.66, 'rightUpperLeg', vec(actionType === 'walk' ? -22 : -38, 0, 0), result.requirementId, 'Prompt adherence fix: alternate right leg stride');
+      addBone(0.66, 'leftUpperArm', vec(actionType === 'walk' ? 66 : 76, -12, -28), result.requirementId, 'Prompt adherence fix: alternate arm swing');
+      addBone(0.66, 'rightUpperArm', vec(actionType === 'walk' ? 72 : 58, -8, 28), result.requirementId, 'Prompt adherence fix: alternate arm swing');
+      addContact(0.32, 'leftFoot', result.requirementId, 'Prompt adherence fix: left foot plant', 'ground');
+      addContact(0.66, 'rightFoot', result.requirementId, 'Prompt adherence fix: right foot plant', 'ground');
+      notes.push('Prompt adherence fix: reinforced locomotion gait, arm swing, and foot contacts.');
+    } else if (actionType === 'push' || actionType === 'pull') {
+      const direction = actionType === 'push' ? 1 : -1;
+      addRoot(0.42, { rotation: vec(0, transitionTransformAtRatio(transition, 0.42).rotation.y, 0) }, result.requirementId, `Prompt adherence fix: ${actionType} body drive`);
+      addBone(0.35, 'chest', vec(actionType === 'push' ? 18 : -10, 0, 0), result.requirementId, `Prompt adherence fix: ${actionType} torso drive`);
+      addBone(0.48, 'leftUpperArm', vec(18 * direction, -10, 70 * direction), result.requirementId, `Prompt adherence fix: left hand ${actionType}`);
+      addBone(0.48, 'rightUpperArm', vec(18 * direction, 10, 70 * direction), result.requirementId, `Prompt adherence fix: right hand ${actionType}`);
+      addBone(0.48, 'leftLowerArm', vec(actionType === 'push' ? 4 : 86, 0, 0), result.requirementId, `Prompt adherence fix: left elbow ${actionType}`);
+      addBone(0.48, 'rightLowerArm', vec(actionType === 'push' ? 4 : 86, 0, 0), result.requirementId, `Prompt adherence fix: right elbow ${actionType}`);
+      addContact(0.42, 'leftHand', result.requirementId, `Prompt adherence fix: left hand ${actionType} contact`, 'prop');
+      addContact(0.42, 'rightHand', result.requirementId, `Prompt adherence fix: right hand ${actionType} contact`, 'prop');
+      addContact(0.28, 'leftFoot', result.requirementId, 'Prompt adherence fix: stable left foot', 'ground');
+      addContact(0.72, 'rightFoot', result.requirementId, 'Prompt adherence fix: stable right foot', 'ground');
+      constraints.push({ id: fixId('constraint'), type: 'foot_lock', startSec: at(0.2), endSec: at(0.85), joints: ['leftFoot', 'rightFoot'], requirementIds: [result.requirementId], note: `Prompt adherence fix: stable feet for ${actionType}` });
+      notes.push(`Prompt adherence fix: reinforced ${actionType} hand contact and body drive.`);
+    } else if (actionType === 'throw') {
+      addBone(0.28, 'chest', vec(-8, -24, 8), result.requirementId, 'Prompt adherence fix: throw windup torso twist');
+      addBone(0.28, 'rightUpperArm', vec(-42, -24, -18), result.requirementId, 'Prompt adherence fix: throwing hand windup');
+      addBone(0.58, 'chest', vec(14, 22, -4), result.requirementId, 'Prompt adherence fix: throw release torso rotation');
+      addBone(0.58, 'rightUpperArm', vec(34, 8, 68), result.requirementId, 'Prompt adherence fix: throwing arm release');
+      addBone(0.82, 'rightUpperArm', vec(68, 8, 8), result.requirementId, 'Prompt adherence fix: throwing arm recover');
+      addContact(0.18, 'rightHand', result.requirementId, 'Prompt adherence fix: throwing hand grasp', 'hold');
+      addContact(0.62, 'rightHand', result.requirementId, 'Prompt adherence fix: throwing hand release', 'release');
+      notes.push('Prompt adherence fix: reinforced throw windup, release, and recovery.');
+    } else if (actionType === 'punch') {
+      addBone(0.28, 'rightUpperArm', vec(82, -16, 34), result.requirementId, 'Prompt adherence fix: guard before punch');
+      addBone(0.52, 'rightUpperArm', vec(10, -8, 78), result.requirementId, 'Prompt adherence fix: punch extension');
+      addBone(0.52, 'rightLowerArm', vec(2, 0, 0), result.requirementId, 'Prompt adherence fix: punch reach');
+      addBone(0.82, 'rightUpperArm', vec(70, -16, 30), result.requirementId, 'Prompt adherence fix: punch recovery');
+      addContact(0.54, 'rightHand', result.requirementId, 'Prompt adherence fix: punch contact', 'prop');
+      notes.push('Prompt adherence fix: reinforced punch strike and recovery.');
+    } else if (actionType === 'kick' || actionType === 'side_kick') {
+      const sideKick = actionType === 'side_kick';
+      addBone(0.48, 'rightUpperLeg', sideKick ? vec(10, 0, 82) : vec(72, 0, 8), result.requirementId, 'Prompt adherence fix: kick extension');
+      addBone(0.48, 'rightLowerLeg', vec(sideKick ? -8 : 4, 0, 0), result.requirementId, 'Prompt adherence fix: kick lower leg');
+      addBone(0.82, 'rightUpperLeg', vec(8, 0, 12), result.requirementId, 'Prompt adherence fix: kick recovery');
+      addContact(0.52, 'rightFoot', result.requirementId, 'Prompt adherence fix: kick contact', 'prop');
+      notes.push('Prompt adherence fix: reinforced kick extension and recovery.');
+    } else if (actionType === 'jump') {
+      addRoot(0.25, { position: { ...transitionTransformAtRatio(transition, 0.25).position, y: (transition.startTransform?.position.y || 0) - 0.08 } }, result.requirementId, 'Prompt adherence fix: jump anticipation drop');
+      addRoot(0.58, { position: { ...transitionTransformAtRatio(transition, 0.58).position, y: (transition.startTransform?.position.y || 0) + 0.28 } }, result.requirementId, 'Prompt adherence fix: airborne lift');
+      addBone(0.25, 'leftUpperLeg', vec(62, 0, 8), result.requirementId, 'Prompt adherence fix: crouched jump legs');
+      addBone(0.25, 'rightUpperLeg', vec(62, 0, -8), result.requirementId, 'Prompt adherence fix: crouched jump legs');
+      addContact(0.18, 'feet', result.requirementId, 'Prompt adherence fix: takeoff foot plant', 'ground');
+      addContact(0.88, 'feet', result.requirementId, 'Prompt adherence fix: landing foot plant', 'ground');
+      notes.push('Prompt adherence fix: reinforced jump anticipation, lift, and landing.');
+    } else if (actionType === 'crouch' || actionType === 'crawl' || actionType === 'fall' || actionType === 'get_up') {
+      const lowY = (transition.startTransform?.position.y || 0) - (actionType === 'fall' ? 0.18 : 0.1);
+      const highY = transition.endTransform?.position.y ?? transition.startTransform?.position.y ?? 0;
+      addRoot(actionType === 'get_up' ? 0.25 : 0.55, { position: { ...transitionTransformAtRatio(transition, 0.5).position, y: lowY } }, result.requirementId, `Prompt adherence fix: ${actionType} low center`);
+      if (actionType === 'get_up') addRoot(0.75, { position: { ...transitionTransformAtRatio(transition, 0.75).position, y: highY } }, result.requirementId, 'Prompt adherence fix: get up recovery');
+      addBone(0.5, 'chest', vec(actionType === 'fall' ? 62 : 42, 0, actionType === 'crawl' ? 12 : 0), result.requirementId, `Prompt adherence fix: ${actionType} torso change`);
+      addBone(0.5, 'pelvis', vec(actionType === 'fall' ? 42 : 18, 0, 0), result.requirementId, `Prompt adherence fix: ${actionType} pelvis change`);
+      notes.push(`Prompt adherence fix: reinforced ${actionType} body level and torso change.`);
+    } else if (actionType === 'reach') {
+      addBone(0.5, 'rightUpperArm', vec(24, -6, 72), result.requirementId, 'Prompt adherence fix: right hand reach');
+      addBone(0.5, 'rightLowerArm', vec(8, 0, 0), result.requirementId, 'Prompt adherence fix: right hand extension');
+      addContact(0.52, 'rightHand', result.requirementId, 'Prompt adherence fix: reach contact', 'prop');
+      notes.push('Prompt adherence fix: reinforced hand reach.');
+    }
+  }
+
+  if (!notes.length) return { transition, applied: false, notes };
+  const nextDraft: MotionDraft = {
+    ...motionDraft,
+    phasePlan: phasePlan.slice(0, 12),
+    promptRequirementMap: promptRequirementMap.slice(0, 20),
+    transformKeyframes: transformKeyframes.slice(-24),
+    boneKeyframes: boneKeyframes.slice(-80),
+    contactFrames: contactFrames.slice(-32),
+    constraints: constraints.slice(-24),
+    warnings: Array.from(new Set([...motionDraft.warnings, ...notes])).slice(0, 24)
+  };
+  return {
+    transition: {
+      ...transition,
+      motionDraft: nextDraft,
+      warnings: [...transition.warnings, ...notes]
+    },
+    applied: true,
+    notes
+  };
+}
+
 function motionQualityFeedbackNotes(report: MotionQualityReport) {
   const importantIssues = report.issues.filter((issue) => issue.severity !== 'info').slice(0, 5);
   const diagnosis = diagnoseMotionQuality(report);
@@ -12030,6 +18210,482 @@ function applyRegenerateLockScope(transition: PoseTransition, clip: SerializedAn
   return createSerializedClip(transition, samples, contacts, jointAxisProfileFromClip(clip) || jointAxisProfileFromClip(transition.animationClip), clip.cameraSamples);
 }
 
+type SceneAabb = { min: Vec3; max: Vec3 };
+
+function propColliderSize(prop: PropObject): Vec3 {
+  const scale = prop.scale || vec(1, 1, 1);
+  if (prop.shape === 'plane') return vec(Math.max(0.1, scale.x), 0.04, Math.max(0.1, scale.z));
+  if (prop.shape === 'sphere') {
+    const diameter = Math.max(0.12, scale.x, scale.y, scale.z);
+    return vec(diameter, diameter, diameter);
+  }
+  if (prop.shape === 'cylinder' || prop.shape === 'cone') {
+    const diameter = Math.max(0.12, scale.x, scale.z);
+    return vec(diameter, Math.max(0.12, scale.y), diameter);
+  }
+  return vec(Math.max(0.12, scale.x), Math.max(0.12, scale.y), Math.max(0.12, scale.z));
+}
+
+function buildSceneColliders(scene: Scene3DState): SceneCollider[] {
+  const colliders: SceneCollider[] = [];
+  scene.objects.characters.forEach((character) => {
+    if (character.visible === false) return;
+    const height = Math.max(0.9, character.model.normalizedHeight || character.scale.y || 1.7);
+    const radius = clampNumber(Math.max(character.scale.x || 1, character.scale.z || 1) * 0.22, 0.16, 0.48);
+    colliders.push({
+      id: `collider_character_${character.id}`,
+      ownerType: 'character',
+      ownerId: character.id,
+      shape: 'capsule',
+      center: vec(character.position.x, character.position.y + height * 0.5, character.position.z),
+      radius,
+      height,
+      size: vec(radius * 2, height, radius * 2),
+      rotation: { ...character.rotation },
+      isStatic: character.locked,
+      collisionRole: 'body',
+      enabled: true
+    });
+  });
+  scene.objects.props.forEach((prop) => {
+    if (prop.visible === false) return;
+    const size = propColliderSize(prop);
+    colliders.push({
+      id: `collider_prop_${prop.id}`,
+      ownerType: 'prop',
+      ownerId: prop.id,
+      shape: prop.shape === 'sphere' ? 'sphere' : prop.shape === 'plane' ? 'plane' : 'box',
+      center: vec(prop.position.x, prop.position.y + size.y * 0.5, prop.position.z),
+      size,
+      radius: prop.shape === 'sphere' ? Math.max(size.x, size.y, size.z) * 0.5 : undefined,
+      rotation: { ...prop.rotation },
+      isStatic: prop.locked || prop.shape === 'plane',
+      collisionRole: prop.locked ? 'obstacle' : 'prop',
+      enabled: true
+    });
+  });
+  if (scene.groundEnabled) {
+    colliders.push({
+      id: 'collider_ground',
+      ownerType: 'ground',
+      shape: 'plane',
+      center: vec(0, 0, 0),
+      size: vec(200, 0.02, 200),
+      isStatic: true,
+      collisionRole: 'ground',
+      enabled: true
+    });
+  }
+  return colliders.slice(0, 96);
+}
+
+function colliderAabb(collider: SceneCollider, transform?: PoseTransform): SceneAabb {
+  const center = transform
+    ? vec(transform.position.x, transform.position.y + ((collider.height || collider.size?.y || 0) * 0.5), transform.position.z)
+    : collider.center;
+  const size = collider.shape === 'capsule'
+    ? vec((collider.radius || 0.25) * 2, collider.height || 1.7, (collider.radius || 0.25) * 2)
+    : collider.shape === 'sphere'
+      ? vec((collider.radius || 0.25) * 2, (collider.radius || 0.25) * 2, (collider.radius || 0.25) * 2)
+      : collider.size || vec(0.5, 0.5, 0.5);
+  return {
+    min: vec(center.x - size.x * 0.5, center.y - size.y * 0.5, center.z - size.z * 0.5),
+    max: vec(center.x + size.x * 0.5, center.y + size.y * 0.5, center.z + size.z * 0.5)
+  };
+}
+
+function aabbOverlap(a: SceneAabb, b: SceneAabb) {
+  const dx = Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x);
+  const dy = Math.min(a.max.y, b.max.y) - Math.max(a.min.y, b.min.y);
+  const dz = Math.min(a.max.z, b.max.z) - Math.max(a.min.z, b.min.z);
+  if (dx <= 0 || dy <= 0 || dz <= 0) return null;
+  const depth = Math.min(dx, dy, dz);
+  const centerA = vec((a.min.x + a.max.x) * 0.5, (a.min.y + a.max.y) * 0.5, (a.min.z + a.max.z) * 0.5);
+  const centerB = vec((b.min.x + b.max.x) * 0.5, (b.min.y + b.max.y) * 0.5, (b.min.z + b.max.z) * 0.5);
+  const normalRaw = subtractVec3(centerA, centerB);
+  const len = Math.hypot(normalRaw.x, normalRaw.y, normalRaw.z) || 1;
+  return {
+    depth,
+    point: vec((Math.max(a.min.x, b.min.x) + Math.min(a.max.x, b.max.x)) * 0.5, (Math.max(a.min.y, b.min.y) + Math.min(a.max.y, b.max.y)) * 0.5, (Math.max(a.min.z, b.min.z) + Math.min(a.max.z, b.max.z)) * 0.5),
+    normal: vec(normalRaw.x / len, normalRaw.y / len, normalRaw.z / len)
+  };
+}
+
+function propConstraintModeFromHint(hint: PropMotionDraft['physicalHint']): PropConstraint['mode'] {
+  if (hint === 'roll' || hint === 'lift' || hint === 'carry' || hint === 'drop') return hint;
+  return 'slide';
+}
+
+function propConstraintTransform(base: PoseTransform, constraint: PropConstraint, timeSec: number): PoseTransform | null {
+  if (timeSec < constraint.startSec || timeSec > constraint.endSec || !constraint.targetPath.length) return null;
+  const span = Math.max(0.0001, constraint.endSec - constraint.startSec);
+  const ratio = clamp01((timeSec - constraint.startSec) / span);
+  const path = constraint.targetPath;
+  const scaled = ratio * Math.max(0, path.length - 1);
+  const index = Math.min(path.length - 2, Math.floor(scaled));
+  const local = path.length <= 1 ? 0 : scaled - index;
+  const position = path.length === 1 ? path[0] : lerpVec3(path[index], path[index + 1], easeCurve('ease_in_out', local));
+  const motionDistance = vecDistance(path[0], path[path.length - 1]);
+  const roll = constraint.mode === 'roll' ? motionDistance * ratio * 95 : 0;
+  return {
+    ...base,
+    position: {
+      x: constraint.lockedAxes.includes('x') ? base.position.x : position.x,
+      y: constraint.lockedAxes.includes('y') ? base.position.y : position.y,
+      z: constraint.lockedAxes.includes('z') ? base.position.z : position.z
+    },
+    rotation: {
+      x: constraint.lockedAxes.includes('rotX') ? base.rotation.x : Number((base.rotation.x + roll).toFixed(3)),
+      y: constraint.lockedAxes.includes('rotY') ? base.rotation.y : base.rotation.y,
+      z: constraint.lockedAxes.includes('rotZ') ? base.rotation.z : Number((base.rotation.z + (constraint.mode === 'slide' ? motionDistance * ratio * 8 : 0)).toFixed(3))
+    }
+  };
+}
+
+function samplePropConstraintTransform(base: PoseTransform, constraints: PropConstraint[] | undefined, propId: string, timeSec: number): PoseTransform | null {
+  const active = constraints
+    ?.filter((constraint) => constraint.propId === propId && constraint.mode !== 'blocked' && timeSec >= constraint.startSec && timeSec <= constraint.endSec)
+    .sort((a, b) => a.startSec - b.startSec)[0];
+  return active ? propConstraintTransform(base, active, timeSec) : null;
+}
+
+function nearestAnimationSample(samples: AnimationClipSample[], timeSec: number) {
+  return samples.reduce((nearest, sample) => (
+    Math.abs(sample.timeSec - timeSec) < Math.abs(nearest.timeSec - timeSec) ? sample : nearest
+  ), samples[0]);
+}
+
+function buildContactConstraintsFromInteractionDraft(scene: Scene3DState, transition: PoseTransition): ContactConstraint[] {
+  const draft = transition.interactionDraft;
+  if (!draft?.contacts.length) return [];
+  const durationSec = Math.max(0.0001, transition.durationSec || 1);
+  return draft.contacts.map((contact): ContactConstraint | null => {
+    const targetExists = contact.targetType === 'point' || Boolean(findSceneObject(scene, contact.targetId));
+    if (!targetExists) return null;
+    const timeSec = clampNumber(contact.timeSec, 0, durationSec);
+    const ratio = clamp01(timeSec / durationSec);
+    const contactPoint = interactionTargetPosition(scene, transition, contact, ratio);
+    const actorPosition = transitionTransformAtRatio(transition, ratio).position;
+    const rawNormal = subtractVec3(contactPoint, actorPosition);
+    const len = Math.hypot(rawNormal.x, rawNormal.z) || 1;
+    const isFootHit = contact.contactType === 'hit' && (contact.limb === 'leftFoot' || contact.limb === 'rightFoot');
+    const contactType: ContactConstraint['contactType'] = isFootHit
+      ? 'kick'
+      : contact.contactType === 'touch' || contact.contactType === 'reach' || contact.contactType === 'release' || contact.contactType === 'receive'
+        ? 'hold'
+        : contact.contactType;
+    return {
+      id: `contact_constraint_${contact.id}`,
+      actorId: contact.actorId,
+      targetId: contact.targetId,
+      contactType,
+      timeSec,
+      durationSec: contact.contactType === 'hold' ? Math.max(0.18, durationSec * 0.28) : Math.max(0.12, durationSec * 0.18),
+      contactPoint,
+      normal: vec(rawNormal.x / len, 0, rawNormal.z / len),
+      impulseHint: contactType === 'kick' || contactType === 'hit' ? 1 : contactType === 'push' || contactType === 'pull' ? 0.75 : 0.38,
+      required: contact.required,
+      source: 'interactionDraft'
+    };
+  }).filter((item): item is ContactConstraint => Boolean(item)).slice(0, 48);
+}
+
+function interactionPropMotionConstraint(prop: PropObject, motion: PropMotionDraft): PropConstraint | null {
+  const path = motion.transformKeyframes
+    .map((frame) => frame.transform.position)
+    .filter((position): position is Vec3 => Boolean(position));
+  if (!path.length) return null;
+  return {
+    id: `prop_constraint_motion_${motion.propId}`,
+    propId: motion.propId,
+    startSec: motion.startSec,
+    endSec: motion.endSec,
+    mode: prop.locked ? 'fixed' : propConstraintModeFromHint(motion.physicalHint),
+    driverActorId: motion.causedByActorId,
+    targetPath: path,
+    friction: motion.physicalHint === 'roll' ? 0.24 : 0.42,
+    massHint: Math.max(0.4, prop.scale.x * prop.scale.y * prop.scale.z),
+    lockedAxes: prop.locked ? ['x', 'y', 'z', 'rotX', 'rotY', 'rotZ'] : [],
+    notes: motion.notes.length ? motion.notes : [`InteractionDraft propMotion ${motion.physicalHint}`]
+  };
+}
+
+function blockedPropPathEnd(scene: Scene3DState, prop: PropObject, start: Vec3, end: Vec3, ignoreIds: string[]) {
+  const propSize = propColliderSize(prop);
+  const movingAabb = colliderAabb({
+    id: 'moving_prop',
+    ownerType: 'prop',
+    ownerId: prop.id,
+    shape: 'box',
+    center: vec(end.x, end.y + propSize.y * 0.5, end.z),
+    size: propSize,
+    isStatic: false,
+    collisionRole: 'prop',
+    enabled: true
+  });
+  const blockers = buildSceneColliders(scene).filter((collider) => (
+    collider.enabled
+    && collider.isStatic
+    && collider.ownerType === 'prop'
+    && collider.ownerId !== prop.id
+    && !ignoreIds.includes(collider.ownerId || '')
+  ));
+  const hit = blockers.find((blocker) => aabbOverlap(movingAabb, colliderAabb(blocker)));
+  if (!hit) return { end, blockedBy: undefined };
+  return { end: lerpVec3(start, end, 0.58), blockedBy: hit.ownerId };
+}
+
+function solvePropConstraints(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[], interactionDraft?: InteractionDraft) {
+  const warnings: string[] = [];
+  const constraints: PropConstraint[] = [];
+  interactionDraft?.propMotions.forEach((motion) => {
+    const prop = scene.objects.props.find((item) => item.id === motion.propId);
+    if (!prop) {
+      warnings.push(`道具约束目标不存在：${motion.propId}`);
+      return;
+    }
+    const constraint = interactionPropMotionConstraint(prop, motion);
+    if (constraint) constraints.push(constraint);
+  });
+  buildContactConstraintsFromInteractionDraft(scene, transition).forEach((contact) => {
+    if (!contact.targetId || constraints.some((constraint) => constraint.propId === contact.targetId)) return;
+    const prop = scene.objects.props.find((item) => item.id === contact.targetId);
+    if (!prop) return;
+    const base = propBaseTransform(prop);
+    const startSec = clampNumber(contact.timeSec, 0, transition.durationSec);
+    const endSec = clampNumber(contact.timeSec + contact.durationSec, startSec, transition.durationSec);
+    const actorSample = nearestAnimationSample(samples, contact.timeSec);
+    const actorToProp = subtractVec3(base.position, actorSample.transform.position);
+    const actorLen = Math.hypot(actorToProp.x, actorToProp.z) || 1;
+    const contactDirection = vec(actorToProp.x / actorLen, 0, actorToProp.z / actorLen);
+    const direction = contact.contactType === 'pull'
+      ? vec(-contactDirection.x, 0, -contactDirection.z)
+      : contact.normal.x || contact.normal.z
+        ? contact.normal
+        : contactDirection;
+    const massHint = clampNumber(Math.max(0.4, prop.scale.x * prop.scale.y * prop.scale.z), 0.4, 8);
+    const friction = contact.contactType === 'kick' || contact.contactType === 'hit' ? 0.24 : 0.44;
+    const travel = clampNumber(contact.impulseHint * (1 - friction) / massHint, 0.04, contact.contactType === 'kick' ? 1.35 : 0.72);
+    const lift = contact.contactType === 'hold' ? Math.max(0.12, prop.scale.y * 0.45) : 0;
+    const rawEnd = vec(base.position.x + direction.x * travel, Math.max(0, base.position.y + lift), base.position.z + direction.z * travel);
+    const blocked = blockedPropPathEnd(scene, prop, base.position, rawEnd, [contact.actorId || '']);
+    if (blocked.blockedBy) warnings.push(`碰撞约束：${prop.name} 的移动被障碍 ${blocked.blockedBy} 截断`);
+    const path = [base.position, blocked.end];
+    if (prop.locked) {
+      constraints.push({
+        id: `prop_constraint_locked_${prop.id}_${contact.id}`,
+        propId: prop.id,
+        startSec,
+        endSec,
+        mode: 'blocked',
+        driverActorId: contact.actorId,
+        driverLimb: contact.contactType === 'kick' ? 'rightFoot' : 'rightHand',
+        targetPath: [base.position],
+        friction: 1,
+        massHint,
+        lockedAxes: ['x', 'y', 'z', 'rotX', 'rotY', 'rotZ'],
+        notes: [`道具已锁定，保留原位置：${prop.name}`]
+      });
+      warnings.push(`碰撞约束：${prop.name} 已锁定，不能被自动移动`);
+      return;
+    }
+    const mode: PropConstraint['mode'] = contact.contactType === 'kick' || contact.contactType === 'hit'
+      ? (prop.shape === 'sphere' ? 'roll' : 'slide')
+      : contact.contactType === 'hold'
+        ? 'carry'
+        : 'slide';
+    constraints.push({
+      id: `prop_constraint_${prop.id}_${contact.id}`,
+      propId: prop.id,
+      startSec,
+      endSec,
+      mode: blocked.blockedBy ? 'blocked' : mode,
+      driverActorId: contact.actorId,
+      driverLimb: contact.contactType === 'kick' ? 'rightFoot' : 'rightHand',
+      targetPath: path,
+      friction,
+      massHint,
+      lockedAxes: mode === 'slide' ? ['y'] : [],
+      notes: [`碰撞约束：${contact.contactType} ${prop.name}，位移 ${vecDistance(path[0], path[path.length - 1]).toFixed(2)}m`]
+    });
+  });
+  return { propConstraints: constraints.slice(0, 32), warnings };
+}
+
+function propTransformForCollision(scene: Scene3DState, propId: string | undefined, timeSec: number, propConstraints?: PropConstraint[]) {
+  const prop = scene.objects.props.find((item) => item.id === propId);
+  if (!prop) return null;
+  const base = propBaseTransform(prop);
+  return samplePropConstraintTransform(base, propConstraints, prop.id, timeSec) || base;
+}
+
+function detectSceneContacts(
+  colliders: SceneCollider[],
+  samples: AnimationClipSample[],
+  propTransforms?: (propId: string | undefined, timeSec: number) => PoseTransform | null,
+  actorId?: string
+): SceneContactDiagnostic[] {
+  const diagnostics: SceneContactDiagnostic[] = [];
+  const movingCharacter = actorId
+    ? colliders.find((collider) => collider.ownerType === 'character' && collider.ownerId === actorId)
+    : colliders.find((collider) => collider.ownerType === 'character' && !collider.isStatic);
+  const staticColliders = colliders.filter((collider) => collider.enabled && collider.id !== movingCharacter?.id);
+  samples.forEach((sample, sampleIndex) => {
+    if (!movingCharacter) return;
+    const bodyAabb = colliderAabb(movingCharacter, sample.transform);
+    staticColliders.forEach((collider) => {
+      if (collider.ownerType === 'ground') return;
+      const transform = collider.ownerType === 'prop' ? propTransforms?.(collider.ownerId, sample.timeSec) : null;
+      const overlap = aabbOverlap(bodyAabb, colliderAabb(collider, transform || undefined));
+      if (!overlap) return;
+      diagnostics.push({
+        id: `scene_contact_${sampleIndex}_${collider.id}`,
+        colliderAId: movingCharacter.id,
+        colliderBId: collider.id,
+        contactPoint: overlap.point,
+        normal: overlap.normal,
+        penetrationDepth: Number(overlap.depth.toFixed(4)),
+        timeSec: sample.timeSec,
+        role: collider.ownerType === 'character' ? 'body_body' : collider.collisionRole === 'obstacle' ? 'obstacle' : 'body_prop'
+      });
+    });
+    if (sample.transform.position.y < -0.002) {
+      diagnostics.push({
+        id: `scene_ground_${sampleIndex}`,
+        colliderAId: movingCharacter.id,
+        colliderBId: 'collider_ground',
+        contactPoint: vec(sample.transform.position.x, 0, sample.transform.position.z),
+        normal: vec(0, 1, 0),
+        penetrationDepth: Number(Math.abs(sample.transform.position.y).toFixed(4)),
+        timeSec: sample.timeSec,
+        role: 'foot_ground'
+      });
+    }
+  });
+  return diagnostics.slice(0, 160);
+}
+
+function resolveObstacleAvoidance(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[], colliders: SceneCollider[]) {
+  const warnings: string[] = [];
+  if (samples.length <= 2) return { samples, diagnostics: [] as SceneContactDiagnostic[], warnings, avoided: false };
+  const movingCharacter = colliders.find((collider) => collider.ownerType === 'character' && collider.ownerId === transition.characterId);
+  if (!movingCharacter) return { samples, diagnostics: [] as SceneContactDiagnostic[], warnings, avoided: false };
+  const protectedTimes = explicitMiddleKeyframeTimes(transition, transition.durationSec);
+  const obstacles = colliders.filter((collider) => collider.enabled && collider.id !== movingCharacter.id && collider.ownerType !== 'ground');
+  let avoided = false;
+  const next = samples.map(cloneAnimationSample);
+  for (let index = 1; index < next.length - 1; index += 1) {
+    const sample = next[index];
+    if (protectedTimes.some((timeSec) => Math.abs(timeSec - sample.timeSec) <= 0.001)) continue;
+    const bodyAabb = colliderAabb(movingCharacter, sample.transform);
+    const hit = obstacles.find((obstacle) => aabbOverlap(bodyAabb, colliderAabb(obstacle)));
+    if (!hit) continue;
+    const prev = next[index - 1].transform.position;
+    const current = sample.transform.position;
+    const travel = subtractVec3(current, prev);
+    const side = Math.abs(travel.x) + Math.abs(travel.z) > 0.001 ? vec(-travel.z, 0, travel.x) : vec(1, 0, 0);
+    const sideLen = Math.hypot(side.x, side.z) || 1;
+    const direction = vec(side.x / sideLen, 0, side.z / sideLen);
+    const offset = Math.min(0.28, 0.1 + (hit.size?.x || hit.radius || 0.2) * 0.18);
+    const candidates = [1, -1].map((sign) => vec(current.x + direction.x * offset * sign, current.y, current.z + direction.z * offset * sign));
+    const candidate = candidates.find((position) => !aabbOverlap(colliderAabb(movingCharacter, { ...sample.transform, position }), colliderAabb(hit)));
+    if (candidate) {
+      sample.transform.position = { x: Number(candidate.x.toFixed(4)), y: sample.transform.position.y, z: Number(candidate.z.toFixed(4)) };
+      avoided = true;
+    } else {
+      warnings.push(`阻挡警告：角色路径穿过 ${hit.ownerId || hit.id}，未能自动绕开`);
+    }
+  }
+  const diagnostics = detectSceneContacts(colliders, next, (propId, timeSec) => propTransformForCollision(scene, propId, timeSec, transition.propConstraints), transition.characterId);
+  if (avoided) warnings.push('阻挡警告：角色路径穿过障碍，已尝试侧向绕行');
+  return { samples: alignSampleEndpoints(next, transition), diagnostics, warnings, avoided };
+}
+
+function appendCollisionQualityReport(
+  transition: PoseTransition,
+  report: MotionQualityReport,
+  diagnostics: SceneContactDiagnostic[],
+  propConstraints: PropConstraint[],
+  obstacleAvoided: boolean
+): MotionQualityReport {
+  const issues: MotionQualityIssue[] = [];
+  const penetrationDiagnostics = diagnostics.filter((item) => item.penetrationDepth > 0.015 && item.role !== 'foot_ground');
+  const maxPenetrationDepth = penetrationDiagnostics.reduce((max, item) => Math.max(max, item.penetrationDepth), 0);
+  const characterOverlapCount = diagnostics.filter((item) => item.role === 'body_body').length;
+  const groundViolationCount = diagnostics.filter((item) => item.role === 'foot_ground' && item.penetrationDepth > 0.01).length;
+  const requiredPropContacts = transition.interactionDraft?.contacts.filter((contact) => (
+    contact.required && contact.targetType === 'prop' && ['push', 'pull', 'hit', 'hold', 'receive'].includes(contact.contactType)
+  )).length || 0;
+  const propConstraintMotionDistance = propConstraints.reduce((total, constraint) => (
+    total + (constraint.targetPath.length > 1 ? vecDistance(constraint.targetPath[0], constraint.targetPath[constraint.targetPath.length - 1]) : 0)
+  ), 0);
+  const propContactSuccessRatio = requiredPropContacts ? clamp01(propConstraints.filter((constraint) => constraint.mode !== 'blocked' && constraint.targetPath.length > 1).length / requiredPropContacts) : undefined;
+  if (penetrationDiagnostics.length) {
+    issues.push({
+      id: createId('collision_quality'),
+      severity: maxPenetrationDepth > 0.18 ? 'error' : 'warning',
+      metric: 'collision',
+      message: `碰撞检测：发现 ${penetrationDiagnostics.length} 处角色/道具穿透`,
+      value: Number(maxPenetrationDepth.toFixed(3))
+    });
+  }
+  if (groundViolationCount) {
+    issues.push({
+      id: createId('collision_quality'),
+      severity: 'warning',
+      metric: 'collision',
+      message: `地面约束：发现 ${groundViolationCount} 处低于地面`,
+      value: groundViolationCount
+    });
+  }
+  if (requiredPropContacts && propContactSuccessRatio !== undefined && propContactSuccessRatio < 0.55) {
+    issues.push({
+      id: createId('collision_quality'),
+      severity: 'warning',
+      metric: 'collision',
+      message: '道具约束：必要的道具接触没有形成稳定的预览运动',
+      value: Number(propContactSuccessRatio.toFixed(2))
+    });
+  }
+  const penalty = issues.reduce((total, issue) => total + (issue.severity === 'error' ? 10 : 4), 0);
+  return {
+    ...report,
+    score: clampNumber(report.score - penalty, 0, 100),
+    issues: [...report.issues, ...issues].slice(0, 96),
+    metrics: {
+      ...report.metrics,
+      colliderPenetrationCount: penetrationDiagnostics.length,
+      maxPenetrationDepth: Number(maxPenetrationDepth.toFixed(4)),
+      propContactSuccessRatio: propContactSuccessRatio === undefined ? undefined : Number(propContactSuccessRatio.toFixed(3)),
+      obstacleAvoidanceSuccess: obstacleAvoided || !penetrationDiagnostics.some((item) => item.role === 'obstacle') ? 1 : 0,
+      propConstraintMotionDistance: Number(propConstraintMotionDistance.toFixed(3)),
+      characterOverlapCount,
+      groundViolationCount
+    }
+  };
+}
+
+function applySceneCollisionAndPropConstraints(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[], warningSet: Set<string>) {
+  const colliders = buildSceneColliders(scene);
+  if (!colliders.length) return { transition, samples, diagnostics: [] as SceneContactDiagnostic[], propConstraints: [] as PropConstraint[], obstacleAvoided: false };
+  const propSolve = solvePropConstraints(scene, transition, samples, transition.interactionDraft);
+  propSolve.warnings.forEach((warning) => warningSet.add(warning));
+  propSolve.propConstraints.forEach((constraint) => constraint.notes.forEach((note) => warningSet.add(note)));
+  const constrainedTransition: PoseTransition = { ...transition, propConstraints: propSolve.propConstraints.length ? propSolve.propConstraints : transition.propConstraints };
+  const avoidance = resolveObstacleAvoidance(scene, constrainedTransition, samples, colliders);
+  avoidance.warnings.forEach((warning) => warningSet.add(warning));
+  const diagnostics = avoidance.diagnostics.length
+    ? avoidance.diagnostics
+    : detectSceneContacts(colliders, avoidance.samples, (propId, timeSec) => propTransformForCollision(scene, propId, timeSec, constrainedTransition.propConstraints), constrainedTransition.characterId);
+  return {
+    transition: constrainedTransition,
+    samples: restoreExplicitMiddleKeyframeSamples(avoidance.samples, constrainedTransition),
+    diagnostics,
+    propConstraints: constrainedTransition.propConstraints || [],
+    obstacleAvoided: avoidance.avoided
+  };
+}
+
 function propBaseTransform(prop: PropObject): PoseTransform {
   return clampTransformToGround('prop', {
     position: { ...prop.position },
@@ -12076,6 +18732,255 @@ function approximateHandWorldPosition(sample: AnimationClipSample, limb: Animati
     sample.transform.position.z
   ));
   return vec(Number(world.x.toFixed(4)), Number(world.y.toFixed(4)), Number(world.z.toFixed(4)));
+}
+
+function motionIkConstraintStrength(constraint: MotionIkConstraint, timeSec: number) {
+  if (timeSec < constraint.startSec || timeSec > constraint.endSec) return 0;
+  const span = Math.max(0.0001, constraint.endSec - constraint.startSec);
+  const fade = Math.min(span * 0.34, 0.22);
+  const fadeIn = clamp01((timeSec - constraint.startSec) / Math.max(0.0001, fade));
+  const fadeOut = constraint.lockMode === 'release'
+    ? clamp01((constraint.endSec - timeSec) / Math.max(0.0001, fade))
+    : 1;
+  return clamp01(easeCurve('ease_in_out', Math.min(fadeIn, fadeOut)) * constraint.weight);
+}
+
+function motionIkTargetPosition(scene: Scene3DState, transition: PoseTransition, constraint: MotionIkConstraint, sample: AnimationClipSample) {
+  if (constraint.targetPosition) return constraint.targetPosition;
+  const target = findSceneObject(scene, constraint.targetId);
+  if (!target) return undefined;
+  return semanticContactAnchorPosition(target, sample.transform.position, semanticContactActionAtTime(transition, clamp01(sample.timeSec / Math.max(0.0001, transition.durationSec))) || transition.actionPlan.semanticPlan?.actionType);
+}
+
+function applyFingerGripForIk(
+  fingerPoseValue: StandardHumanFingerPose,
+  hand: 'left' | 'right',
+  lockMode: MotionIkConstraint['lockMode'],
+  strength: number,
+  mapping?: CharacterRigMapping
+) {
+  const gripCurl = lockMode === 'release'
+    ? 4
+    : lockMode === 'hold' || lockMode === 'push' || lockMode === 'pull' || lockMode === 'receive'
+      ? 88 * (mapping?.handProfile.gripStrength || 0.72)
+      : 42;
+  const target = cloneFingerPose(fingerPoseValue);
+  target[hand] = handFingerPose(clampNumber(gripCurl, FINGER_CURL_MIN, FINGER_CURL_MAX), lockMode === 'release' ? 4 : 0);
+  return lerpFingerPose(fingerPoseValue, target, clamp01(strength));
+}
+
+function applyMotionIkConstraintsToSample(input: {
+  scene: Scene3DState;
+  transition: PoseTransition;
+  sample: AnimationClipSample;
+  pose: StandardHumanRigPose;
+  transform: PoseTransform;
+  fingerPose?: StandardHumanFingerPose;
+  constraints: MotionIkConstraint[];
+  rigMapping?: CharacterRigMapping;
+  referencePose: StandardHumanRigPose;
+  warningSet?: Set<string>;
+}) {
+  const { scene, transition, sample, constraints, rigMapping, referencePose, warningSet } = input;
+  let pose = clonePose(input.pose);
+  let transform = clonePoseTransform(input.transform);
+  let fingerPoseValue = cloneFingerPose(input.fingerPose);
+  const active = constraints
+    .map((constraint) => ({ constraint, strength: motionIkConstraintStrength(constraint, sample.timeSec) }))
+    .filter((item) => item.strength > 0.001 && (item.constraint.actorId === transition.characterId || item.constraint.actorId === transition.interactionDraft?.primaryActorId));
+  active.forEach(({ constraint, strength }) => {
+    const targetPosition = motionIkTargetPosition(scene, transition, constraint, sample);
+    if (!targetPosition && constraint.limb !== 'body') {
+      warningSet?.add(`IK target missing for ${constraint.note}`);
+      return;
+    }
+    if (constraint.limb === 'leftHand' || constraint.limb === 'rightHand') {
+      const hand = constraint.limb === 'leftHand' ? 'left' : 'right';
+      const solved = solveArmIkToTarget(
+        pose,
+        hand,
+        targetPosition,
+        transform.position,
+        constraint.lockMode === 'release' ? 0.1 : constraint.lockMode === 'push' || constraint.lockMode === 'pull' ? 0.035 : 0.06
+      );
+      pose = blendPose(pose, solved.pose, Math.min(0.94, strength));
+      fingerPoseValue = applyFingerGripForIk(fingerPoseValue, hand, constraint.lockMode, strength, rigMapping);
+      if (solved.warning) warningSet?.add(solved.warning);
+    } else if (constraint.limb === 'leftFoot' || constraint.limb === 'rightFoot') {
+      const joint = constraint.limb;
+      const planted = referencePose[joint] || pose[joint];
+      pose[joint] = slerpRotation(pose[joint], planted, Math.min(0.86, strength));
+      if (constraint.lockMode === 'plant' && targetPosition) {
+        transform.position.y = Number(Math.max(transform.position.y, targetPosition.y).toFixed(4));
+      }
+    } else if (constraint.limb === 'head') {
+      pose = blendPose(pose, applyHeadLookAt(pose, targetPosition, transform.position), Math.min(0.74, strength));
+    } else if (constraint.limb === 'body' && targetPosition) {
+      const away = new THREE.Vector3(transform.position.x - targetPosition.x, 0, transform.position.z - targetPosition.z);
+      if (away.lengthSq() > 0.0001) {
+        away.normalize().multiplyScalar(0.12 * strength);
+        transform.position = vec(
+          Number((transform.position.x + away.x).toFixed(4)),
+          transform.position.y,
+          Number((transform.position.z + away.z).toFixed(4))
+        );
+        pose = patchPose(pose, {
+          pelvis: { z: (away.x >= 0 ? 1 : -1) * 6 * strength },
+          chest: { z: (away.x >= 0 ? -1 : 1) * 8 * strength }
+        });
+      }
+    }
+  });
+  return { pose, transform, fingerPose: fingerPoseValue };
+}
+
+function applyMotionIkConstraintSamples(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  samples: AnimationClipSample[],
+  constraints: MotionIkConstraint[],
+  rigMapping?: CharacterRigMapping,
+  warningSet?: Set<string>,
+  strength = 0.82
+) {
+  if (!constraints.length || samples.length <= 2) return samples;
+  const scaledConstraints = constraints.map((constraint) => ({
+    ...constraint,
+    weight: clampNumber(constraint.weight * strength, 0, 1)
+  }));
+  const referencePose = samples[0]?.pose || zeroPose();
+  const next = samples.map((sample, index) => {
+    if (index === 0 || index === samples.length - 1) return cloneAnimationSample(sample);
+    const solved = applyMotionIkConstraintsToSample({
+      scene,
+      transition,
+      sample,
+      pose: sample.pose,
+      transform: sample.transform,
+      fingerPose: sample.fingerPose,
+      constraints: scaledConstraints,
+      rigMapping,
+      referencePose,
+      warningSet
+    });
+    return {
+      ...cloneAnimationSample(sample),
+      transform: solved.transform,
+      pose: solved.pose,
+      fingerPose: solved.fingerPose
+    };
+  });
+  return alignSampleEndpoints(next, transition);
+}
+
+function appendMotionIkQualityReport(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  clip: SerializedAnimationClip,
+  report: MotionQualityReport,
+  constraints: MotionIkConstraint[],
+  rigMapping?: CharacterRigMapping
+): MotionQualityReport {
+  const issues: MotionQualityIssue[] = [];
+  let handTargetMaxDistance = 0;
+  let footPlantDrift = 0;
+  let propContactDistance = 0;
+  constraints.forEach((constraint) => {
+    const sample = sampleClipAtTime(clip, (constraint.startSec + constraint.endSec) * 0.5);
+    if (!sample) return;
+    const targetPosition = motionIkTargetPosition(scene, transition, constraint, sample);
+    if (!targetPosition && constraint.targetType !== 'point') {
+      issues.push({
+        id: createId('ik_quality'),
+        severity: 'warning',
+        metric: 'contact',
+        message: `IK target missing: ${constraint.note}`
+      });
+      return;
+    }
+    if ((constraint.limb === 'leftHand' || constraint.limb === 'rightHand') && targetPosition) {
+      const distance = vecDistance(approximateHandWorldPosition(sample, constraint.limb), targetPosition);
+      handTargetMaxDistance = Math.max(handTargetMaxDistance, distance);
+      if (constraint.targetType === 'prop') propContactDistance = Math.max(propContactDistance, distance);
+      const limit = constraint.lockMode === 'release' ? 0.62 : constraint.lockMode === 'reach' ? 0.5 : 0.42;
+      if (distance > limit) {
+        issues.push({
+          id: createId('ik_quality'),
+          severity: distance > limit * 1.7 ? 'error' : 'warning',
+          metric: 'contact',
+          message: `IK hand target distance is too large for ${constraint.note}`,
+          timeSec: sample.timeSec,
+          value: Number(distance.toFixed(3))
+        });
+      }
+    }
+    if (constraint.limb === 'leftFoot' || constraint.limb === 'rightFoot') {
+      const startSample = sampleClipAtTime(clip, constraint.startSec);
+      const endSample = sampleClipAtTime(clip, constraint.endSec);
+      const reference = startSample?.pose[constraint.limb] || sample.pose[constraint.limb];
+      const drift = poseJointDelta(sample.pose[constraint.limb], reference);
+      const endDrift = endSample ? poseJointDelta(endSample.pose[constraint.limb], reference) : drift;
+      const maxDrift = Math.max(drift, endDrift);
+      footPlantDrift = Math.max(footPlantDrift, maxDrift);
+      const isLocomotionPlant = isLocomotionActionType(sequenceLocomotionActionType(transition)) && constraint.lockMode === 'plant';
+      const limit = isLocomotionPlant ? 18 : 10;
+      if (constraint.lockMode === 'plant' && maxDrift > limit) {
+        issues.push({
+          id: createId('ik_quality'),
+          severity: maxDrift > limit * 2 ? 'error' : 'warning',
+          metric: 'foot_lock',
+          message: `IK foot plant drift is too large for ${constraint.limb}`,
+          timeSec: sample.timeSec,
+          value: Number(maxDrift.toFixed(2))
+        });
+      }
+    }
+  });
+  let handoffSyncDistance = 0;
+  transition.interactionDraft?.syncMarkers
+    .filter((marker) => marker.markerType === 'release' || marker.markerType === 'receive')
+    .forEach((marker) => {
+      const contacts = transition.interactionDraft?.contacts.filter((contact) => Math.abs(contact.timeSec - marker.timeSec) <= 0.08) || [];
+      for (let a = 0; a < contacts.length; a += 1) {
+        for (let b = a + 1; b < contacts.length; b += 1) {
+          const pa = contacts[a].worldPosition;
+          const pb = contacts[b].worldPosition;
+          if (pa && pb) handoffSyncDistance = Math.max(handoffSyncDistance, vecDistance(pa, pb));
+        }
+      }
+    });
+  if (handoffSyncDistance > 0.38) {
+    issues.push({
+      id: createId('ik_quality'),
+      severity: 'warning',
+      metric: 'contact',
+      message: 'IK handoff sync distance is too large',
+      value: Number(handoffSyncDistance.toFixed(3))
+    });
+  }
+  if (rigMapping && rigMapping.confidence < 0.58) {
+    issues.push({
+      id: createId('ik_quality'),
+      severity: 'warning',
+      metric: 'pose',
+      message: `Retarget confidence is low for ${rigMapping.characterId}`,
+      value: Number(rigMapping.confidence.toFixed(2))
+    });
+  }
+  const penalty = issues.reduce((total, issue) => total + (issue.severity === 'error' ? 9 : 4), 0);
+  return {
+    ...report,
+    score: clampNumber(report.score - penalty, 0, 100),
+    issues: [...report.issues, ...issues].slice(0, 80),
+    metrics: {
+      ...report.metrics,
+      ikHandTargetMaxDistance: handTargetMaxDistance ? Number(handTargetMaxDistance.toFixed(3)) : undefined,
+      ikFootPlantDrift: footPlantDrift ? Number(footPlantDrift.toFixed(2)) : undefined,
+      ikHandoffSyncDistance: handoffSyncDistance ? Number(handoffSyncDistance.toFixed(3)) : undefined,
+      ikPropContactDistance: propContactDistance ? Number(propContactDistance.toFixed(3)) : undefined,
+      retargetConfidence: rigMapping ? Number(rigMapping.confidence.toFixed(3)) : undefined
+    }
+  };
 }
 
 function latestContactBefore(contacts: AnimationContactFrame[], propId: string, timeSec: number, kind: AnimationContactFrame['kind']) {
@@ -12185,6 +19090,78 @@ function semanticPropMotionTransform(base: PoseTransform, prop: PropObject, tran
   return null;
 }
 
+function mergePartialTransform(base: PoseTransform, partial: Partial<PoseTransform>): PoseTransform {
+  return {
+    position: partial.position ? { ...partial.position } : { ...base.position },
+    rotation: partial.rotation ? { ...partial.rotation } : { ...base.rotation },
+    scale: partial.scale ? { ...partial.scale } : { ...base.scale }
+  };
+}
+
+function sampleInteractionPropMotion(base: PoseTransform, motion: PropMotionDraft, timeSec: number): PoseTransform | null {
+  const frames = motion.transformKeyframes
+    .filter((frame) => frame.timeSec >= motion.startSec && frame.timeSec <= motion.endSec)
+    .sort((a, b) => a.timeSec - b.timeSec);
+  if (!frames.length || timeSec < motion.startSec || timeSec > motion.endSec) return null;
+  const first = frames[0];
+  const last = frames[frames.length - 1];
+  if (timeSec <= first.timeSec) return mergePartialTransform(base, first.transform);
+  if (timeSec >= last.timeSec) return mergePartialTransform(base, last.transform);
+  const nextIndex = frames.findIndex((frame) => frame.timeSec >= timeSec);
+  const before = frames[Math.max(0, nextIndex - 1)];
+  const after = frames[nextIndex];
+  const local = clamp01((timeSec - before.timeSec) / Math.max(0.0001, after.timeSec - before.timeSec));
+  const beforeTransform = mergePartialTransform(base, before.transform);
+  const afterTransform = mergePartialTransform(base, after.transform);
+  return {
+    position: lerpVec3(beforeTransform.position, afterTransform.position, local),
+    rotation: slerpRotation(beforeTransform.rotation, afterTransform.rotation, local),
+    scale: lerpVec3(beforeTransform.scale, afterTransform.scale, local)
+  };
+}
+
+function interactionPropMotionTransform(base: PoseTransform, prop: PropObject, transition: PoseTransition, sample: AnimationClipSample): PoseTransform | null {
+  const constrainedMotion = samplePropConstraintTransform(base, transition.propConstraints, prop.id, sample.timeSec);
+  if (constrainedMotion) return constrainedMotion;
+  const motion = transition.interactionDraft?.propMotions.find((item) => item.propId === prop.id);
+  if (motion) return sampleInteractionPropMotion(base, motion, sample.timeSec);
+  const draft = transition.interactionDraft;
+  if (!draft) return null;
+  const release = draft.contacts.find((contact) => contact.targetId === prop.id && contact.contactType === 'release');
+  const receive = draft.contacts.find((contact) => contact.targetId === prop.id && contact.contactType === 'receive');
+  if (release?.worldPosition && receive?.worldPosition && sample.timeSec >= release.timeSec && sample.timeSec <= receive.timeSec) {
+    const t = clamp01((sample.timeSec - release.timeSec) / Math.max(0.0001, receive.timeSec - release.timeSec));
+    return {
+      ...base,
+      position: lerpVec3(release.worldPosition, receive.worldPosition, easeCurve('ease_in_out', t))
+    };
+  }
+  const pushContact = draft.contacts
+    .filter((contact) => contact.targetId === prop.id && ['push', 'pull', 'hit', 'touch'].includes(contact.contactType) && contact.timeSec <= sample.timeSec)
+    .sort((a, b) => b.timeSec - a.timeSec)[0];
+  if (!pushContact) return null;
+  const elapsed = clamp01((sample.timeSec - pushContact.timeSec) / Math.max(0.16, transition.durationSec * 0.34));
+  const actorPosition = sample.transform.position;
+  const direction = new THREE.Vector3(prop.position.x - actorPosition.x, 0, prop.position.z - actorPosition.z);
+  if (direction.lengthSq() < 0.0001) direction.set(0, 0, -1);
+  direction.normalize();
+  const sign = pushContact.contactType === 'pull' ? -1 : 1;
+  const amount = sign * 0.34 * easeCurve('ease_out', elapsed);
+  return {
+    ...base,
+    position: vec(
+      Number((base.position.x + direction.x * amount).toFixed(4)),
+      base.position.y,
+      Number((base.position.z + direction.z * amount).toFixed(4))
+    ),
+    rotation: {
+      x: Number((base.rotation.x + 10 * elapsed).toFixed(3)),
+      y: base.rotation.y,
+      z: Number((base.rotation.z + 8 * elapsed * sign).toFixed(3))
+    }
+  };
+}
+
 function propPreviewTransform(
   prop: PropObject,
   transition: PoseTransition | null,
@@ -12192,10 +19169,13 @@ function propPreviewTransform(
 ): PoseTransform {
   const base = propBaseTransform(prop);
   const contacts = transition?.animationClip?.contacts || [];
-  if (!transition || !sample || !contacts.length) return base;
+  if (!transition || !sample) return base;
   const timeSec = sample.timeSec;
+  const interactionMotion = interactionPropMotionTransform(base, prop, transition, sample);
+  if (interactionMotion) return interactionMotion;
   const semanticMotion = semanticPropMotionTransform(base, prop, transition, sample);
   if (semanticMotion) return semanticMotion;
+  if (!contacts.length) return base;
   const grasp = latestContactBefore(contacts, prop.id, timeSec, 'grasp');
   if (!grasp) return base;
   const release = latestContactBefore(contacts, prop.id, timeSec, 'release');
@@ -12240,7 +19220,7 @@ function buildPreviewPropTransforms(
   }, {});
 }
 
-function generateTransition(scene: Scene3DState, transition: PoseTransition): PoseTransition {
+function generateTransition(scene: Scene3DState, transition: PoseTransition, options: { promptAdherenceCorrectionPass?: number; localResolvePass?: number } = {}): PoseTransition {
   const jointProfile = jointAxisProfileForScene(scene);
   const sequencedTransition = transitionWithRescheduledActionSequence(transition);
   const targetApproachTransition = transitionWithPromptTargetApproachRootMotion(scene, sequencedTransition);
@@ -12253,19 +19233,49 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
         jointLimitsEnabled: rootMotionTransition.constraints.jointLimitsEnabled
       }
     : rootMotionTransition.constraints;
-  const effectiveTransition = effectiveConstraints === rootMotionTransition.constraints ? rootMotionTransition : { ...rootMotionTransition, constraints: effectiveConstraints };
+  let effectiveTransition = effectiveConstraints === rootMotionTransition.constraints ? rootMotionTransition : { ...rootMotionTransition, constraints: effectiveConstraints };
   const warningSet = new Set(transition.actionPlan.notes);
+  if (!effectiveTransition.promptRequirementGraph) {
+    effectiveTransition = { ...effectiveTransition, promptRequirementGraph: compilePromptRequirements(scene, effectiveTransition) };
+  }
+  const requirementGraph = effectiveTransition.promptRequirementGraph;
+  if (requirementGraph?.requirements.length) {
+    const requiredCount = requirementGraph.requirements.filter((item) => item.priority === 'required').length;
+    const preferredCount = requirementGraph.requirements.length - requiredCount;
+    warningSet.add(`提示词需求：${requiredCount}条 required / ${preferredCount}条 preferred / ${requirementGraph.unresolved.length}条未解析`);
+    requirementGraph.warnings.forEach((warning) => warningSet.add(warning));
+  }
+  const negativeConstraints = buildNegativeConstraints(scene, effectiveTransition, requirementGraph);
+  warningSet.add(negativeConstraintSummary(negativeConstraints));
+  const motionStyleProfile = resolveMotionStyleProfile(scene, effectiveTransition, requirementGraph, effectiveTransition.motionDraft, negativeConstraints);
+  effectiveTransition = { ...effectiveTransition, motionStyleProfile };
+  const styleSummary = motionStyleSummary(motionStyleProfile);
+  if (styleSummary) warningSet.add(styleSummary);
+  motionStyleProfile.warnings.forEach((warning) => warningSet.add(warning));
   const { issues } = validateTransition(scene, effectiveTransition);
   if (issues.length) {
+    const negativeConstraintReport = inspectNegativeConstraints(scene, effectiveTransition, undefined, negativeConstraints);
+    negativeConstraintReportNotes(negativeConstraintReport).forEach((note) => warningSet.add(note));
     return {
       ...transition,
       animationClip: undefined,
       qualityReport: undefined,
+      negativeConstraintReport,
       warnings: Array.from(warningSet),
       error: issues.join(' ')
     };
   }
   const durationSec = Math.max(0.1, transition.durationSec);
+  const draftKeyframePlan = buildMotionDraftKeyframePlan(effectiveTransition, effectiveTransition.motionDraft, { jointProfile, negativeConstraints });
+  effectiveTransition = transitionWithMotionDraftCompileInput(scene, effectiveTransition, draftKeyframePlan, warningSet);
+  const motionSkillSequence = buildMotionSkillSequence(effectiveTransition, effectiveTransition.motionDraft);
+  if (motionSkillSequence?.summary) warningSet.add(motionSkillSequence.summary);
+  motionSkillSequence?.warnings.forEach((warning) => warningSet.add(warning));
+  if (motionSkillSequence?.steps.length === 1) {
+    const template = motionSkillTemplateForAction(motionSkillSequence.steps[0].actionType);
+    const skillTemplateNote = motionSkillTemplateSummary(template);
+    if (skillTemplateNote) warningSet.add(skillTemplateNote);
+  }
   const useRigPoseForSemanticMotion = semanticMotionUsesRigPose(effectiveTransition);
   const sampleBonePoseForSemanticMotion = (bonePose?: Scene3DBonePose) => (
     useRigPoseForSemanticMotion ? undefined : bonePose
@@ -12280,6 +19290,15 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
   const sampleTimes = sampleTimesForKeyframeTrack(durationSec, sampleCount, keyframeTrack);
   const samples: AnimationClipSample[] = [];
   const contactFrames = buildContactFrames(scene, effectiveTransition, durationSec);
+  const transitionCharacter = scene.objects.characters.find((item) => item.id === effectiveTransition.characterId);
+  const rigMapping = transitionCharacter ? inferCharacterRigMapping(transitionCharacter) : undefined;
+  const ikPlan = buildMotionIkConstraints(scene, effectiveTransition, contactFrames);
+  if (rigMapping) {
+    warningSet.add(`Retarget mapping: ${rigMapping.sourceRigType} confidence ${rigMapping.confidence.toFixed(2)}`);
+    rigMapping.warnings.slice(0, 4).forEach((warning) => warningSet.add(warning));
+  }
+  if (ikPlan.summary) warningSet.add(ikPlan.summary);
+  ikPlan.warnings.forEach((warning) => warningSet.add(warning));
   contactFrames.forEach((frame) => {
     if (!frame.targetObjectId && (frame.kind === 'grasp' || frame.kind === 'release' || frame.kind === 'reach')) {
       warningSet.add(`${frame.note} contact is outside the reachable range`);
@@ -12293,13 +19312,15 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
     const segment = keyframeSegmentAt(keyframeTrack, timeSec);
     const eased = easeCurve(transition.curve, segment.localT);
     const keyframeSample = interpolateKeyframeSample(segment.from, segment.to, eased, timeSec);
-    const hardKeyframe = exactKeyframeAtTime(keyframeTrack, timeSec);
+    const exactKeyframe = exactKeyframeAtTime(keyframeTrack, timeSec);
+    const hardKeyframe = exactKeyframe && !isMotionDraftKeyframe(exactKeyframe) ? exactKeyframe : undefined;
     const transform = hardKeyframe ? clonePoseTransform(hardKeyframe.transform) : keyframeSample.transform;
     const baseTransform = clonePoseTransform(transform);
     let nextPose = hardKeyframe ? clonePose(hardKeyframe.pose) : keyframeSample.pose;
+    let nextFingerPose = hardKeyframe ? cloneFingerPose(hardKeyframe.fingerPose) : cloneFingerPose(keyframeSample.fingerPose);
     if (!hardKeyframe) {
       if (!shouldCompileBasicMotionWithSemanticLayer(effectiveTransition)) {
-        nextPose = applyUniversalMotionOverlay(nextPose, transform, effectiveTransition.actionPlan.universal, motionT, jointProfile);
+        nextPose = applyUniversalMotionOverlay(nextPose, transform, effectiveTransition.actionPlan.universal, motionT, jointProfile, motionStyleProfile);
       }
       for (const template of effectiveTransition.actionPlan.templates) {
         if (templateAppliesToBasicMotion(template, effectiveTransition)) {
@@ -12313,6 +19334,17 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
         effectiveTransition.actionPlan.semanticPlan?.actionSequence?.length ? t : motionT,
         jointProfile
       );
+      if (motionSkillSequence?.steps.length) {
+        const sequenced = applyMotionSkillSequenceOverlay(
+          nextPose,
+          transform,
+          effectiveTransition,
+          motionSkillSequence,
+          t,
+          { jointProfile, motionStyleProfile }
+        );
+        nextPose = sequenced.pose;
+      }
       nextPose = applyRealisticMotionGuard(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition);
       nextPose = applyGroundedBalanceAndFooting(keyframeSample.pose, nextPose, transform, baseTransform, effectiveTransition, motionT, jointProfile);
       const targets = targetPositionForConstraint(scene, effectiveTransition, transform, motionT);
@@ -12353,6 +19385,25 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
           nextPose.rightFoot = { ...startFrame.pose.rightFoot };
         }
       }
+      if (ikPlan.constraints.length) {
+        const solvedIk = applyMotionIkConstraintsToSample({
+          scene,
+          transition: effectiveTransition,
+          sample: { timeSec, transform, pose: nextPose, fingerPose: nextFingerPose },
+          pose: nextPose,
+          transform,
+          fingerPose: nextFingerPose,
+          constraints: ikPlan.constraints,
+          rigMapping,
+          referencePose: startFrame.pose,
+          warningSet
+        });
+        nextPose = solvedIk.pose;
+        transform.position = solvedIk.transform.position;
+        transform.rotation = solvedIk.transform.rotation;
+        transform.scale = solvedIk.transform.scale;
+        nextFingerPose = solvedIk.fingerPose;
+      }
     }
     if (effectiveTransition.constraints.jointLimitsEnabled) nextPose = clampPoseWithJointProfile(nextPose, jointProfile);
     const baseSample: AnimationClipSample = {
@@ -12376,7 +19427,7 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
       },
       pose: nextPose,
       bonePose: hardKeyframe ? cloneBonePose(hardKeyframe.bonePose) : sampleBonePoseForSemanticMotion(keyframeSample.bonePose),
-      fingerPose: hardKeyframe ? cloneFingerPose(hardKeyframe.fingerPose) : keyframeSample.fingerPose,
+      fingerPose: nextFingerPose,
       toePose: hardKeyframe ? cloneToePose(hardKeyframe.toePose) : keyframeSample.toePose,
       libTvJointAngles: hardKeyframe ? cloneLibTvJointAngles(hardKeyframe.libTvJointAngles) : keyframeSample.libTvJointAngles
     };
@@ -12413,11 +19464,24 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
       ),
       0.62
     );
+    finalSamples = applyMotionIkConstraintSamples(scene, effectiveTransition, finalSamples, ikPlan.constraints, rigMapping, warningSet, 0.84);
     finalSamples = finalizeLocomotionGoldenStandard(effectiveTransition, finalSamples, 0.68);
     finalSamples = restoreExplicitMiddleKeyframeSamples(finalSamples, effectiveTransition);
-    let cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples));
+    let collisionPass = applySceneCollisionAndPropConstraints(scene, effectiveTransition, finalSamples, warningSet);
+    effectiveTransition = collisionPass.transition;
+    finalSamples = collisionPass.samples;
+    const cameraMotionSequence = buildCameraMotionSequence(scene, effectiveTransition, motionSkillSequence, contactFrames, motionStyleProfile);
+    if (cameraMotionSequence?.summary) warningSet.add(cameraMotionSequence.summary);
+    cameraMotionSequence?.warnings.forEach((warning) => warningSet.add(warning));
+    let cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples, contactFrames, motionSkillSequence, motionStyleProfile));
     let animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, finalSamples, contactFrames, jointProfile, cameraSamples));
-    let qualityReport = inspectMotionQuality(scene, effectiveTransition, animationClip);
+    let qualityReport = appendCollisionQualityReport(
+      effectiveTransition,
+      appendMotionIkQualityReport(scene, effectiveTransition, animationClip, inspectMotionQuality(scene, effectiveTransition, animationClip), ikPlan.constraints, rigMapping),
+      collisionPass.diagnostics,
+      collisionPass.propConstraints,
+      collisionPass.obstacleAvoided
+    );
     for (let correctionPass = 0; correctionPass < 3 && motionQualityNeedsAutoCorrection(qualityReport); correctionPass += 1) {
       const correction = autoCorrectMotionSamples(scene, effectiveTransition, finalSamples, qualityReport, contactFrames);
       correction.notes.forEach((note) => warningSet.add(note));
@@ -12427,20 +19491,133 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
         stabilizeActionSequenceBridgeSamples(effectiveTransition, stabilizeTargetApproachSequenceSamples(scene, effectiveTransition, correction.samples), 0.68),
         0.72
       );
+      finalSamples = applyMotionIkConstraintSamples(scene, effectiveTransition, finalSamples, ikPlan.constraints, rigMapping, warningSet, 0.9);
       finalSamples = finalizeLocomotionGoldenStandard(effectiveTransition, finalSamples, 0.78);
       finalSamples = restoreExplicitMiddleKeyframeSamples(finalSamples, effectiveTransition);
-      cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples));
+      collisionPass = applySceneCollisionAndPropConstraints(scene, effectiveTransition, finalSamples, warningSet);
+      effectiveTransition = collisionPass.transition;
+      finalSamples = collisionPass.samples;
+      cameraSamples = smoothCameraMotionSamples(buildCameraMotionSamples(scene, effectiveTransition, finalSamples, contactFrames, motionSkillSequence, motionStyleProfile));
       animationClip = applyRegenerateLockScope(effectiveTransition, createSerializedClip(effectiveTransition, finalSamples, contactFrames, jointProfile, cameraSamples));
-      qualityReport = inspectMotionQuality(scene, effectiveTransition, animationClip);
+      qualityReport = appendCollisionQualityReport(
+        effectiveTransition,
+        appendMotionIkQualityReport(scene, effectiveTransition, animationClip, inspectMotionQuality(scene, effectiveTransition, animationClip), ikPlan.constraints, rigMapping),
+        collisionPass.diagnostics,
+        collisionPass.propConstraints,
+        collisionPass.obstacleAvoided
+      );
     }
     motionQualityFeedbackNotes(qualityReport).forEach((note) => warningSet.add(note));
     qualityReport.issues.forEach((issue) => {
       if (issue.severity !== 'info') warningSet.add(issue.message);
     });
+    let negativeConstraintReport = inspectNegativeConstraints(scene, effectiveTransition, animationClip, negativeConstraints);
+    negativeConstraintReportNotes(negativeConstraintReport).forEach((note) => warningSet.add(note));
+    let motionEvidenceBundle = collectMotionEvidence(scene, effectiveTransition, animationClip, {
+      promptRequirementGraph: effectiveTransition.promptRequirementGraph,
+      motionDraft: effectiveTransition.motionDraft,
+      interactionDraft: effectiveTransition.interactionDraft,
+      motionSkillSequence,
+      cameraMotionSequence,
+      collisionDiagnostics: collisionPass.diagnostics,
+      ikConstraints: ikPlan.constraints,
+      propConstraints: collisionPass.propConstraints,
+      motionQualityReport: qualityReport,
+      negativeConstraintReport,
+      motionStyleProfile
+    });
+    motionEvidenceBundleNotes(motionEvidenceBundle).forEach((note) => warningSet.add(note));
+    let promptAdherenceReport = inspectPromptAdherence(scene, effectiveTransition, animationClip, qualityReport, motionEvidenceBundle);
+    let localResolveResult: LocalResolveResult | undefined;
+    if (promptAdherenceNeedsAutoCorrection(promptAdherenceReport) && (options.localResolvePass || 0) < 1) {
+      const regions = buildLocalResolveRegions(scene, effectiveTransition, motionEvidenceBundle, promptAdherenceReport, negativeConstraintReport);
+      const patches = buildLocalResolvePatches(scene, effectiveTransition, regions, motionEvidenceBundle, negativeConstraints);
+      localResolveResult = buildLocalResolveResult(regions, patches, regions.some((region) => region.reason.includes('35%-65%')) ? ['Some local resolve regions used conservative middle fallback windows.'] : []);
+      localResolveResultNotes(localResolveResult).forEach((note) => warningSet.add(note));
+      if (localResolveResult.appliedPatchIds.length) {
+        const locallyResolvedTransition = {
+          ...applyLocalResolvePatches(effectiveTransition, patches),
+          localResolveResult,
+          warnings: Array.from(new Set([...effectiveTransition.warnings, ...Array.from(warningSet)]))
+        };
+        const resolvedResult = generateTransition(scene, locallyResolvedTransition, {
+          ...options,
+          localResolvePass: (options.localResolvePass || 0) + 1
+        });
+        return {
+          ...resolvedResult,
+          localResolveResult: resolvedResult.localResolveResult || localResolveResult,
+          warnings: Array.from(new Set([
+            ...Array.from(warningSet),
+            ...(resolvedResult.warnings || [])
+          ]))
+        };
+      }
+    }
+    if (promptAdherenceNeedsAutoCorrection(promptAdherenceReport) && (options.localResolvePass || 0) < 1 && (options.promptAdherenceCorrectionPass || 0) < 1) {
+      const correction = buildPromptAdherenceCorrection(effectiveTransition, promptAdherenceReport, negativeConstraintReport);
+      if (!correction.applied && correction.notes.length) {
+        correction.notes.forEach((note) => warningSet.add(note));
+        negativeConstraintReport = {
+          ...negativeConstraintReport,
+          blockedCorrections: Array.from(new Set([...negativeConstraintReport.blockedCorrections, ...correction.notes])).slice(0, 40)
+        };
+      }
+      if (correction.applied) {
+        correction.notes.forEach((note) => warningSet.add(note));
+        const correctedTransition = {
+          ...correction.transition,
+          actionPlan: {
+            ...correction.transition.actionPlan,
+            notes: [...correction.transition.actionPlan.notes, ...correction.notes]
+          },
+          warnings: Array.from(new Set([...correction.transition.warnings, ...Array.from(warningSet)]))
+        };
+        const correctedResult = generateTransition(scene, correctedTransition, {
+          promptAdherenceCorrectionPass: (options.promptAdherenceCorrectionPass || 0) + 1,
+          localResolvePass: options.localResolvePass
+        });
+        return {
+          ...correctedResult,
+          warnings: Array.from(new Set([
+            ...Array.from(warningSet),
+            ...correction.notes,
+            ...(correctedResult.warnings || [])
+          ]))
+        };
+      }
+    }
+    motionEvidenceBundle = collectMotionEvidence(scene, effectiveTransition, animationClip, {
+      promptRequirementGraph: effectiveTransition.promptRequirementGraph,
+      motionDraft: effectiveTransition.motionDraft,
+      interactionDraft: effectiveTransition.interactionDraft,
+      motionSkillSequence,
+      cameraMotionSequence,
+      collisionDiagnostics: collisionPass.diagnostics,
+      ikConstraints: ikPlan.constraints,
+      propConstraints: collisionPass.propConstraints,
+      motionQualityReport: qualityReport,
+      negativeConstraintReport,
+      motionStyleProfile
+    });
+    promptAdherenceReport = inspectPromptAdherence(scene, effectiveTransition, animationClip, qualityReport, motionEvidenceBundle);
+    warningSet.add(`提示词遵循度评分：${Math.round(promptAdherenceReport.score)}/100`);
+    promptAdherenceReport.requirementResults
+      .filter((result) => !result.passed)
+      .slice(0, 4)
+      .forEach((result) => warningSet.add(`提示词未完全落实：${result.text}。${result.failedReason || ''}${result.suggestedFix ? ` 建议：${result.suggestedFix}` : ''}`));
+    promptAdherenceReport.correctionHints.slice(0, 3).forEach((hint) => warningSet.add(`提示词修正建议：${hint}`));
     return {
       ...transition,
+      propConstraints: effectiveTransition.propConstraints,
+      promptRequirementGraph: effectiveTransition.promptRequirementGraph,
+      motionStyleProfile: effectiveTransition.motionStyleProfile,
       animationClip,
       qualityReport,
+      promptAdherenceReport,
+      negativeConstraintReport,
+      motionEvidenceBundle,
+      localResolveResult,
       warnings: Array.from(warningSet),
       error: undefined,
       updatedAt: new Date().toISOString()
@@ -12450,6 +19627,10 @@ function generateTransition(scene: Scene3DState, transition: PoseTransition): Po
       ...transition,
       animationClip: undefined,
       qualityReport: undefined,
+      promptAdherenceReport: undefined,
+      negativeConstraintReport: undefined,
+      motionEvidenceBundle: undefined,
+      localResolveResult: undefined,
       warnings: Array.from(warningSet),
       error: error?.message || 'Animation generation failed',
       updatedAt: new Date().toISOString()
@@ -12717,6 +19898,16 @@ async function captureSceneCanvas({
 
 function sceneObjectSummary(scene: Scene3DState) {
   return {
+    characters: scene.objects.characters.slice(0, 12).map((character) => ({
+      id: character.id,
+      name: character.name,
+      position: character.position,
+      rotation: character.rotation,
+      scale: character.scale,
+      visible: character.visible,
+      posePresetId: character.posePresetId,
+      normalizedHeight: character.model.normalizedHeight
+    })),
     cameras: scene.objects.cameras.slice(0, 8).map((camera) => ({
       id: camera.id,
       name: camera.name,
@@ -12738,6 +19929,24 @@ function sceneObjectSummary(scene: Scene3DState) {
   };
 }
 
+function serializableCharacterRigMapping(mapping: CharacterRigMapping) {
+  return {
+    characterId: mapping.characterId,
+    sourceRigType: mapping.sourceRigType,
+    targetRigType: mapping.targetRigType,
+    boneMap: mapping.boneMap,
+    scaleProfile: mapping.scaleProfile,
+    handProfile: {
+      leftGripBoneCount: mapping.handProfile.leftGripBones.length,
+      rightGripBoneCount: mapping.handProfile.rightGripBones.length,
+      gripStrength: mapping.handProfile.gripStrength
+    },
+    footProfile: mapping.footProfile,
+    confidence: mapping.confidence,
+    warnings: mapping.warnings
+  };
+}
+
 function buildMotionRefinePayload(input: {
   node: CanvasNode;
   scene: Scene3DState;
@@ -12745,10 +19954,14 @@ function buildMotionRefinePayload(input: {
   character: CharacterObject;
   currentProjectId?: string | null;
 }) {
-  const { cameras, props } = sceneObjectSummary(input.scene);
+  const { characters, cameras, props } = sceneObjectSummary(input.scene);
   const referenceCapture = input.scene.captures[input.scene.captures.length - 1];
   const localActionPlan = input.transition.actionPlan;
   const localCompilerContract = motionIntentLocalCompilerContract(input.transition, localActionPlan);
+  const characterRigMappings = input.scene.objects.characters.slice(0, 12).map((item) => serializableCharacterRigMapping(inferCharacterRigMapping(item)));
+  const promptRequirementGraph = input.transition.promptRequirementGraph || compilePromptRequirements(input.scene, input.transition);
+  const negativeConstraints = buildNegativeConstraints(input.scene, input.transition, promptRequirementGraph);
+  const motionStyleProfile = resolveMotionStyleProfile(input.scene, input.transition, promptRequirementGraph, input.transition.motionDraft, negativeConstraints);
   return {
     projectId: input.currentProjectId || undefined,
     nodeId: input.node.id,
@@ -12768,6 +19981,7 @@ function buildMotionRefinePayload(input: {
     startToePose: input.transition.startToePose,
     endToePose: input.transition.endToePose,
     fixedPoseConstraints: localCompilerContract.fixedPoseConstraints,
+    fixedPoseSegments: localCompilerContract.fixedPoseSegments,
     middleKeyframeConstraints: localCompilerContract.fixedPoseConstraints.filter((frame) => frame.role === 'middle'),
     currentCharacterTransform: {
       position: input.character.position,
@@ -12779,6 +19993,9 @@ function buildMotionRefinePayload(input: {
     localSemanticPlan: localActionPlan.semanticPlan,
     localActionPlan,
     localCompilerContract,
+    promptRequirementGraph,
+    negativeConstraints: serializableNegativeConstraints(negativeConstraints),
+    motionStyleProfile,
     availableSemanticStageTemplates: Array.from(new Set([
       input.transition.actionPlan.semanticPlan?.actionType,
       'walk',
@@ -12798,8 +20015,11 @@ function buildMotionRefinePayload(input: {
       stages: motionStagesForAction(actionType as MotionSemanticActionType)
     })),
     availableActionSkills: serializableMotionActionSkills(),
+    characters,
+    characterRigMappings,
     cameras,
     props,
+    sceneContext: input.scene,
     activeCameraId: input.scene.activeCameraId,
     activeViewMode: input.scene.activeViewMode,
     coordinateSystemDescription: 'Scene3D uses right-handed Three.js-style world coordinates: X left/right, Y up/down, Z depth. Rotations are degrees in XYZ order. Character transforms are world-space. Bone rotations are local joint rotations in degrees.',
@@ -12809,12 +20029,12 @@ function buildMotionRefinePayload(input: {
       applicationMode: input.scene.jointAxisProfile?.applicationMode || 'rest_quaternion_multiply_delta',
       joints: jointAxisProfileSummary(jointAxisProfileForScene(input.scene))
     },
-    motionSolverInstruction: 'Return MotionIntent only. Do not generate raw per-frame joint rotations, raw keyframes, transforms, animationClip, bonePose, jointRotations, or constraints. Treat localCompilerContract as the executable truth: preserve locked actionType/actionFamily, actionSequence, poseStages, contacts, target object, grounded/airborne limits, and quality expectations. Choose actionFamily/actionType from availableActionSkills. The frontend compiler will map intent into root trajectory, contacts, and local XYZ joint deltas using jointAxisProfile ranges and semantics.',
+    motionSolverInstruction: 'Return JSON with motionIntent, optional motionDraft, and optional interactionDraft for multi-character or prop interactions. Do not generate animationClip, samples, tracks, raw frame arrays, video URLs, fake progress, or final rendered results. Start/end frames and middleKeyframeConstraints are hard constraints; fixedPoseSegments is the ordered adjacent hard-keyframe relationship contract, so motionDraft must plan only inside each segment and must never reorder, skip, replace, or smooth away any fixed pose. interactionDraft may only reference existing character, prop, or camera ids from the compact scene context, or point targets with worldPosition. The only allowed structured keyframes are motionDraft.transformKeyframes, motionDraft.boneKeyframes, motionDraft.contactFrames, and interactionDraft.propMotions.transformKeyframes; do not place raw keyframes or final animation data at the top level. Treat promptRequirementGraph.requirements as the local parsed user requirements: motionDraft.promptRequirements should preserve their ids/text and promptRequirementMap must reference those ids when covered. Treat motionStyleProfile as numeric action style control for timing, amplitude, root motion, arm swing, stride, contact hold, recovery, lift, and camera intensity; reflect it in phasePlan, keyframe timing, contactFrames, and generatedMotionPrompt without violating negativeConstraints. Treat negativeConstraints as hard do-not/avoid constraints; never violate no_endpoint_override, no_manual_keyframe_override, no_unmapped_actor, no_target_ignore, no_unreachable_contact, no_collision, no_foot_slide, no_camera_jump, or no_prop_teleport. Treat localCompilerContract as the executable truth: preserve locked actionType/actionFamily, actionSequence, poseStages, contacts, target object, grounded/airborne limits, quality expectations, fixedPoseConstraints, and fixedPoseSegments. Choose actionFamily/actionType from availableActionSkills. Use characterRigMappings to warn about low-confidence retargeting or missing hand/foot bones, but do not invent bones or final joint tracks. The frontend stores drafts and uses them as deterministic compile hints; they are not final animation output.',
     referenceImageAssetId: referenceCapture?.mediaAssetId
   };
 }
 
-async function requestMotionIntent(payload: ReturnType<typeof buildMotionRefinePayload>): Promise<MotionIntent> {
+async function requestMotionIntent(payload: ReturnType<typeof buildMotionRefinePayload>): Promise<MotionRefineResult> {
   const response = await fetch('/api/workflow/scene3d/refine-motion', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -12827,7 +20047,10 @@ async function requestMotionIntent(payload: ReturnType<typeof buildMotionRefineP
   }
   const intent = normalizeMotionIntent(body.motionIntent, payload.durationSec);
   if (!intent) throw new Error('AI 返回结果缺少 MotionIntent');
-  return intent;
+  const promptRequirementGraph = normalizePromptRequirementGraph(body.promptRequirementGraph || payload.promptRequirementGraph, payload.durationSec);
+  const motionDraft = motionDraftWithPromptRequirementGraph(normalizeMotionDraft(body.motionDraft, payload.durationSec), promptRequirementGraph);
+  const interactionDraft = normalizeInteractionDraft(body.interactionDraft || body.motionDraft?.interactionDraft, payload.durationSec);
+  return { motionIntent: intent, motionDraft, interactionDraft, promptRequirementGraph };
 }
 
 function buildPoseReferenceSolvePayload(input: {
@@ -13158,8 +20381,8 @@ function DirectorStage({
   const previewCleanFrame = Boolean(previewLocked && preview.playing);
 
   useEffect(() => {
-    if (!previewCleanFrame) setTimelinePreviewExitConfirmOpen(false);
-  }, [previewCleanFrame]);
+    if (!previewLocked) setTimelinePreviewExitConfirmOpen(false);
+  }, [previewLocked]);
 
   const exitTimelinePreview = () => {
     setTimelinePreviewExitConfirmOpen(false);
@@ -13169,7 +20392,7 @@ function DirectorStage({
   };
 
   const askExitTimelinePreview = () => {
-    if (!previewCleanFrame) return;
+    if (!previewLocked) return;
     setTimelinePreviewExitConfirmOpen(true);
   };
 
@@ -13247,12 +20470,16 @@ function DirectorStage({
     if (!preview.playing || !activeTransition?.animationClip) return undefined;
     const transitionId = activeTransition.id;
     let lastAt = performance.now();
-    const timer = window.setInterval(() => {
-      const now = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
       const delta = (now - lastAt) / 1000;
       lastAt = now;
+      let shouldContinue = true;
       setPreview((current) => {
-        if (!current.playing || current.transitionId !== transitionId) return current;
+        if (!current.playing || current.transitionId !== transitionId) {
+          shouldContinue = false;
+          return current;
+        }
         const duration = activeTransition.animationClip?.durationSec || activeTransition.durationSec;
         let nextTime = current.currentTimeSec + delta;
         let nextPlaying: boolean = current.playing;
@@ -13263,10 +20490,13 @@ function DirectorStage({
             nextPlaying = false;
           }
         }
+        shouldContinue = nextPlaying;
         return { ...current, currentTimeSec: nextTime, playing: nextPlaying, enabled: true };
       });
-    }, 33);
-    return () => window.clearInterval(timer);
+      if (shouldContinue) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
   }, [preview.playing, activeTransition]);
 
   useEffect(() => {
@@ -13715,7 +20945,7 @@ function DirectorStage({
                   previewTransitionId={preview.transitionId}
                   previewLocked={previewLocked}
                   previewSample={previewSample}
-                  presentation={captureCleanFrame || previewCleanFrame ? 'clean' : 'editor'}
+                  presentation={captureCleanFrame || previewLocked ? 'clean' : 'editor'}
                   onDragging={handleViewportDragging}
                   onBlankPointerDown={handleViewportBlankPointerDown}
                   onBlankPointerUp={handleViewportBlankPointerUp}
@@ -13725,15 +20955,10 @@ function DirectorStage({
                 />
               </Suspense>
             </ThreeCanvas>
-            {previewCleanFrame && (
+            {previewLocked && (
               <div
                 className="absolute inset-0 z-20 cursor-not-allowed bg-transparent"
                 onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  askExitTimelinePreview();
-                }}
-                onDoubleClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
                   askExitTimelinePreview();
@@ -13748,16 +20973,16 @@ function DirectorStage({
                   event.stopPropagation();
                   askExitTimelinePreview();
                 }}
-                title={'当前正在播放时间轴动态'}
+                title="当前正在预览时间轴动态"
               />
             )}
-            {timelinePreviewExitConfirmOpen && previewCleanFrame && (
+            {timelinePreviewExitConfirmOpen && previewLocked && (
               <div
                 className="absolute left-1/2 top-1/2 z-40 w-[min(360px,86%)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[#10131b] p-4 text-center shadow-2xl"
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className="text-sm font-semibold text-zinc-100">当前正在播放时间轴动态</div>
-                <div className="mt-2 text-[12px] leading-relaxed text-zinc-400">是否要退出预览？确认后会停止播放并回到可编辑状态，取消则继续预览。</div>
+                <div className="text-sm font-semibold text-zinc-100">当前正在预览时间轴动态</div>
+                <div className="mt-2 text-[12px] leading-relaxed text-zinc-400">是否要退出预览？确认后会停止播放并回到可编辑状态，取消则继续停留在预览状态。</div>
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -13842,10 +21067,14 @@ function SceneViewport({
   const { camera } = useThree();
   const isClean = presentation === 'clean';
   const suppressSceneSelectUntilRef = useRef(0);
+  const orbitControlsRef = useRef<any>(null);
+  const lastDirectorViewTargetRef = useRef<Vec3>(scene.directorViewTarget || DEFAULT_DIRECTOR_VIEW_TARGET);
+  const lastDirectorFocusNonceRef = useRef<number | undefined>(scene.directorViewFocusNonce);
   const activeCamera = scene.objects.cameras.find((item) => item.id === scene.activeCameraId) || scene.objects.cameras[0];
   const previewTransition = scene.poseTransitions.find((item) => item.id === previewTransitionId) || null;
   const previewCameraActive = Boolean(previewLocked && previewSample && previewTransition?.animationClip?.cameraSamples?.length);
   const previewCharacterId = previewTransition?.characterId;
+  const directorViewTarget = scene.directorViewTarget || DEFAULT_DIRECTOR_VIEW_TARGET;
   const previewPropTransforms = useMemo(
     () => (previewLocked ? buildPreviewPropTransforms(scene, previewTransition, previewSample) : {}),
     [scene, previewTransition, previewSample, previewLocked]
@@ -13859,6 +21088,34 @@ function SceneViewport({
       perspectiveCamera.updateProjectionMatrix();
     }
   }, [camera, isClean, scene.activeViewMode, scene.sceneZoomPercent]);
+
+  useEffect(() => {
+    if (isClean || scene.activeViewMode !== 'director' || previewLocked || previewCameraActive) return;
+    const controls = orbitControlsRef.current;
+    if (!controls?.target) return;
+    const previousTarget = lastDirectorViewTargetRef.current || DEFAULT_DIRECTOR_VIEW_TARGET;
+    const shouldShiftCamera = scene.directorViewFocusNonce !== undefined
+      && scene.directorViewFocusNonce !== lastDirectorFocusNonceRef.current;
+    if (shouldShiftCamera) {
+      camera.position.x += directorViewTarget.x - previousTarget.x;
+      camera.position.y += directorViewTarget.y - previousTarget.y;
+      camera.position.z += directorViewTarget.z - previousTarget.z;
+    }
+    controls.target.set(directorViewTarget.x, directorViewTarget.y, directorViewTarget.z);
+    controls.update?.();
+    lastDirectorViewTargetRef.current = directorViewTarget;
+    lastDirectorFocusNonceRef.current = scene.directorViewFocusNonce;
+  }, [
+    camera,
+    directorViewTarget.x,
+    directorViewTarget.y,
+    directorViewTarget.z,
+    isClean,
+    previewCameraActive,
+    previewLocked,
+    scene.activeViewMode,
+    scene.directorViewFocusNonce
+  ]);
 
   useEffect(() => {
     if (!activeCamera || dragging) return;
@@ -14067,7 +21324,14 @@ function SceneViewport({
           </Transformable>
         ))}
       </group>
-      {!isClean && <OrbitControls enabled={!dragging && scene.activeViewMode === 'director' && !previewCameraActive} target={[0, 0.95, 0]} makeDefault />}
+      {!isClean && (
+        <OrbitControls
+          ref={orbitControlsRef}
+          enabled={!dragging && !previewLocked && scene.activeViewMode === 'director' && !previewCameraActive}
+          target={[directorViewTarget.x, directorViewTarget.y, directorViewTarget.z]}
+          makeDefault
+        />
+      )}
       {!isClean && (
         <GizmoHelper alignment="bottom-right" margin={[70, 70]}>
           <GizmoViewport />
@@ -14158,6 +21422,321 @@ function MotionPathOverlay({
   );
 }
 
+function cameraMotionSequenceSummary(sequence?: CameraMotionSequence) {
+  if (!sequence?.steps.length) return '';
+  return '镜头序列：' + sequence.steps
+    .map((step) => `${step.label} ${Math.round(step.startRatio * 100)}-${Math.round(step.endRatio * 100)}%`)
+    .join(' / ');
+}
+
+function cameraMotionTypeForSkillStep(step: MotionSkillSequenceStep): CameraMotionType {
+  if (isLocomotionActionType(step.actionType)) return step.actionType === 'dash' ? 'close_follow' : 'follow_character';
+  if (step.actionType === 'push' || step.actionType === 'pull' || step.actionType === 'reach') return 'dolly_in';
+  if (step.actionType === 'throw') return 'truck_right';
+  if (step.actionType === 'punch' || step.actionType === 'kick' || step.actionType === 'side_kick') return 'close_follow';
+  if (step.actionType === 'jump') return 'low_tilt_up';
+  if (step.actionType === 'fall' || step.actionType === 'get_up') return 'handheld';
+  if (step.actionType === 'turn') return 'orbit';
+  return 'follow_character';
+}
+
+function cameraMotionStepFromConfig(
+  config: CameraMotionConfig,
+  transition: PoseTransition,
+  source: CameraMotionSequenceStep['trigger'],
+  options: Partial<CameraMotionSequenceStep> = {}
+): CameraMotionSequenceStep | undefined {
+  if (!config.enabled || config.type === 'none') return undefined;
+  const durationSec = Math.max(0.1, transition.durationSec);
+  const startRatio = clamp01(options.startRatio ?? config.startTimeSec / durationSec);
+  const endRatio = clampNumber(options.endRatio ?? config.endTimeSec / durationSec, startRatio + 0.04, 1);
+  const span = Math.max(0.001, endRatio - startRatio);
+  const fade = clampNumber(span * 0.22, 0.035, 0.14);
+  return {
+    id: options.id || `camera_${source}_${config.type}`,
+    type: options.type || config.type,
+    label: options.label || CAMERA_MOTION_LABELS[options.type || config.type] || config.type,
+    startRatio,
+    endRatio,
+    fadeInRatio: options.fadeInRatio ?? fade,
+    fadeOutRatio: options.fadeOutRatio ?? fade,
+    intensity: clampNumber(options.intensity ?? config.intensity, 0.05, 1.2),
+    distance: clampNumber(options.distance ?? config.distance, 0.35, 8),
+    heightOffset: clampNumber(options.heightOffset ?? config.heightOffset, -2.2, 2.2),
+    orbitAngleDeg: clampNumber(options.orbitAngleDeg ?? config.orbitAngleDeg, -180, 180),
+    targetCharacterId: options.targetCharacterId || config.targetCharacterId || transition.characterId,
+    targetPhaseId: options.targetPhaseId,
+    targetSkillStepId: options.targetSkillStepId,
+    trigger: source,
+    keepCharacterInFrame: options.keepCharacterInFrame ?? config.keepCharacterInFrame,
+    notes: options.notes || []
+  };
+}
+
+function cameraMotionConfigForSequenceStep(type: CameraMotionType, transition: PoseTransition, step: MotionSkillSequenceStep, motionStyleProfile?: MotionStyleProfile): CameraMotionConfig {
+  const base = normalizeCameraMotion(transition.cameraMotion, transition.durationSec, transition.characterId);
+  const styleProfile = motionStyleProfileAtRatio(motionStyleProfile, (step.startRatio + step.endRatio) * 0.5);
+  const styleCameraScale = clampNumber((styleProfile?.cameraIntensity ?? 0.45) / 0.45, 0.62, 1.42);
+  const intensity = (step.actionType === 'punch' || step.actionType === 'kick' || step.actionType === 'fall'
+    ? 0.42
+    : isLocomotionActionType(step.actionType)
+      ? 0.5
+      : 0.58) * styleCameraScale;
+  return normalizeCameraMotion({
+    ...base,
+    enabled: true,
+    type,
+    targetCharacterId: transition.characterId,
+    intensity,
+    startTimeSec: step.startRatio * transition.durationSec,
+    endTimeSec: step.endRatio * transition.durationSec,
+    distance: type === 'close_follow' ? 1.15 : type === 'dolly_in' ? 0.82 : base.distance || 1.4,
+    heightOffset: type === 'low_tilt_up' ? -0.22 : type === 'top_tilt_down' ? 0.6 : 0,
+    orbitAngleDeg: type === 'orbit' ? 28 : type === 'truck_right' || type === 'truck_left' ? 14 : base.orbitAngleDeg,
+    keepCharacterInFrame: true
+  }, transition.durationSec, transition.characterId);
+}
+
+function cameraMotionSequenceFromSkillSequence(transition: PoseTransition, motionSkillSequence?: MotionSkillSequence, motionStyleProfile?: MotionStyleProfile) {
+  if (!motionSkillSequence?.steps.length) return [];
+  return motionSkillSequence.steps
+    .map((skillStep, index) => {
+      const type = cameraMotionTypeForSkillStep(skillStep);
+      const styleProfile = motionStyleProfileAtRatio(motionStyleProfile, (skillStep.startRatio + skillStep.endRatio) * 0.5);
+      const config = cameraMotionConfigForSequenceStep(type, transition, skillStep, styleProfile);
+      const lowImpact = /recover|settle|回收|稳定/.test(`${skillStep.label} ${skillStep.notes.join(' ')}`);
+      return cameraMotionStepFromConfig(config, transition, 'phase', {
+        id: `camera_skill_${skillStep.id || index}`,
+        label: `${skillStep.label}${type === 'dolly_in' ? '推近' : type === 'close_follow' ? '近景跟随' : type === 'follow_character' ? '跟随' : CAMERA_MOTION_LABELS[type] || type}`,
+        startRatio: skillStep.startRatio,
+        endRatio: skillStep.endRatio,
+        intensity: lowImpact ? 0.24 * (styleProfile?.recoveryScale ?? 1) : config.intensity,
+        targetSkillStepId: skillStep.id,
+        targetPhaseId: skillStep.phaseId,
+        notes: [`skill:${skillStep.actionType}`, styleProfile?.label ? `style:${styleProfile.label}` : '', ...skillStep.notes].filter(Boolean)
+      });
+    })
+    .filter((step): step is CameraMotionSequenceStep => Boolean(step));
+}
+
+function cameraMotionSequenceFromContacts(transition: PoseTransition, contacts: AnimationContactFrame[], motionStyleProfile?: MotionStyleProfile) {
+  const durationSec = Math.max(0.1, transition.durationSec);
+  const locomotionAction = sequenceLocomotionActionType(transition);
+  const suppressLocomotionFootImpacts = isLocomotionActionType(locomotionAction);
+  const isFootContact = (contact: AnimationContactFrame) => contact.kind === 'foot_lock' || contact.limb === 'leftFoot' || contact.limb === 'rightFoot';
+  const isExplicitImpactContact = (contact: AnimationContactFrame) => /impact|冲击|重落地|摔|跌|砸|slam|crash/i.test(contact.note || '');
+  return contacts
+    .filter((contact) => {
+      if (suppressLocomotionFootImpacts && isFootContact(contact)) return isExplicitImpactContact(contact);
+      return contact.kind === 'grasp' || contact.kind === 'release' || /impact|落地|接触|释放|冲击/.test(contact.note);
+    })
+    .slice(0, 8)
+    .map((contact, index) => {
+      const ratio = clamp01(contact.timeSec / durationSec);
+      const styleProfile = motionStyleProfileAtRatio(motionStyleProfile, ratio);
+      const styleCameraScale = clampNumber((styleProfile?.cameraIntensity ?? 0.45) / 0.45, 0.62, 1.45);
+      const isRelease = contact.kind === 'release';
+      const isImpact = /impact|落地|冲击/.test(contact.note);
+      const type: CameraMotionType = isRelease ? 'truck_right' : isImpact ? 'handheld' : 'dolly_in';
+      const config = normalizeCameraMotion({
+        ...transition.cameraMotion,
+        enabled: true,
+        type,
+        intensity: (isImpact ? 0.32 : isRelease ? 0.38 : 0.42) * styleCameraScale,
+        distance: isRelease ? 0.65 : 0.5,
+        heightOffset: isImpact ? -0.12 : 0,
+        orbitAngleDeg: isRelease ? 18 : 0,
+        startTimeSec: durationSec * clamp01(ratio - 0.08),
+        endTimeSec: durationSec * clamp01(ratio + 0.12),
+        keepCharacterInFrame: true
+      }, durationSec, transition.characterId);
+      return cameraMotionStepFromConfig(config, transition, isRelease ? 'release' : isImpact ? 'impact' : 'contact', {
+        id: `camera_contact_${index}_${contact.kind}`,
+        label: isRelease ? '释放跟随' : isImpact ? '冲击轻晃' : '接触推近',
+        startRatio: clamp01(ratio - 0.08),
+        endRatio: clampNumber(ratio + 0.12, ratio + 0.02, 1),
+        notes: [contact.note]
+      });
+    })
+    .filter((step): step is CameraMotionSequenceStep => Boolean(step));
+}
+
+function normalizeCameraMotionSequenceSteps(steps: CameraMotionSequenceStep[]) {
+  return steps
+    .map((step) => {
+      const minDuration = 0.035;
+      const startRatio = clampNumber(step.startRatio, 0, 1 - minDuration);
+      const endRatio = clampNumber(step.endRatio, startRatio + minDuration, 1);
+      const span = Math.max(0.001, endRatio - startRatio);
+      return {
+        ...step,
+        startRatio: Number(startRatio.toFixed(3)),
+        endRatio: Number(endRatio.toFixed(3)),
+        fadeInRatio: Number(clampNumber(step.fadeInRatio, 0.015, span * 0.5).toFixed(3)),
+        fadeOutRatio: Number(clampNumber(step.fadeOutRatio, 0.015, span * 0.5).toFixed(3)),
+        intensity: Number(clampNumber(step.intensity, 0.04, 1.15).toFixed(3)),
+        distance: Number(clampNumber(step.distance, 0.35, 8).toFixed(3)),
+        heightOffset: Number(clampNumber(step.heightOffset, -2.2, 2.2).toFixed(3)),
+        orbitAngleDeg: Number(clampNumber(step.orbitAngleDeg, -180, 180).toFixed(3))
+      };
+    })
+    .filter((step) => step.type !== 'none' && step.endRatio > step.startRatio)
+    .sort((a, b) => a.startRatio - b.startRatio || a.endRatio - b.endRatio)
+    .slice(0, 12);
+}
+
+function buildCameraMotionSequence(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  motionSkillSequence?: MotionSkillSequence,
+  contacts: AnimationContactFrame[] = [],
+  motionStyleProfile?: MotionStyleProfile
+): CameraMotionSequence | undefined {
+  void scene;
+  const promptMotion = cameraMotionFromPrompt(transition.actionPrompt, transition.durationSec, transition.characterId, transition.cameraMotion);
+  const manualMotion = normalizeCameraMotion(transition.cameraMotion, transition.durationSec, transition.characterId);
+  const semanticCamera = transition.actionPlan.semanticPlan?.cameraIntent;
+  const hasManual = manualMotion.enabled && manualMotion.type !== 'none';
+  const hasPrompt = promptMotion.matched && promptMotion.motion.enabled && promptMotion.motion.type !== 'none';
+  const hasSemantic = Boolean(semanticCamera && semanticCamera.type !== 'none');
+  const hasDraftCamera = Boolean(transition.motionDraft?.promptRequirements.some((item) => item.category === 'camera'));
+  const styleWantsCamera = motionStyleWantsCamera(motionStyleProfile);
+  const autoAllowed = hasManual || hasPrompt || hasSemantic || hasDraftCamera || styleWantsCamera;
+  if (!autoAllowed) return undefined;
+  const warnings: string[] = [];
+  const steps: CameraMotionSequenceStep[] = [];
+  const explicitConfig = hasPrompt
+    ? promptMotion.motion
+    : hasManual
+      ? manualMotion
+      : hasSemantic
+        ? normalizeCameraMotion({ ...manualMotion, enabled: true, type: semanticCamera!.type }, transition.durationSec, transition.characterId)
+        : manualMotion;
+  const explicitStep = cameraMotionStepFromConfig(explicitConfig, transition, hasPrompt ? 'prompt' : hasManual ? 'manual' : 'phase', {
+    id: hasPrompt ? 'camera_prompt_primary' : hasManual ? 'camera_manual_primary' : 'camera_semantic_primary',
+    label: hasPrompt ? `提示词${CAMERA_MOTION_LABELS[explicitConfig.type] || explicitConfig.type}` : hasManual ? `手动${CAMERA_MOTION_LABELS[explicitConfig.type] || explicitConfig.type}` : semanticCamera?.label,
+    notes: [hasPrompt ? 'prompt camera motion' : hasManual ? 'manual camera motion' : semanticCamera?.description || 'semantic camera intent'].filter(Boolean)
+  });
+  if (explicitStep) steps.push(explicitStep);
+  if (!hasManual || hasPrompt || hasSemantic || hasDraftCamera) {
+    steps.push(...cameraMotionSequenceFromSkillSequence(transition, motionSkillSequence, motionStyleProfile));
+    steps.push(...cameraMotionSequenceFromContacts(transition, contacts, motionStyleProfile));
+  } else if (motionSkillSequence?.steps.length && explicitStep) {
+    warnings.push('检测到手动运镜设置，动作阶段镜头只做时间对齐，不覆盖手动运镜类型。');
+  }
+  if (styleWantsCamera && !hasManual) warnings.push(`MotionStyle camera control active: ${motionStyleSummary(motionStyleProfile)}`);
+  const normalizedSteps = normalizeCameraMotionSequenceSteps(steps);
+  if (!normalizedSteps.length) return undefined;
+  const sequence: CameraMotionSequence = {
+    version: 1,
+    steps: normalizedSteps,
+    warnings,
+    summary: ''
+  };
+  sequence.summary = cameraMotionSequenceSummary(sequence);
+  return sequence;
+}
+
+function cameraMotionSequenceStepWeight(step: CameraMotionSequenceStep, ratio: number) {
+  if (ratio < step.startRatio || ratio > step.endRatio) return 0;
+  const span = Math.max(0.001, step.endRatio - step.startRatio);
+  const fadeIn = clampNumber(step.fadeInRatio, 0.001, span);
+  const fadeOut = clampNumber(step.fadeOutRatio, 0.001, span);
+  const inWeight = clamp01((ratio - step.startRatio) / fadeIn);
+  const outWeight = clamp01((step.endRatio - ratio) / fadeOut);
+  return easeCurve('ease_in_out', Math.min(inWeight, outWeight)) * clampNumber(step.intensity, 0.04, 1.15);
+}
+
+function activeCameraMotionSequenceSteps(sequence: CameraMotionSequence, ratio: number) {
+  const active = sequence.steps
+    .map((step) => ({ step, rawWeight: cameraMotionSequenceStepWeight(step, clamp01(ratio)) }))
+    .filter((item) => item.rawWeight > 0.001);
+  const total = active.reduce((sum, item) => sum + item.rawWeight, 0);
+  if (total <= 1) return active.map((item) => ({ step: item.step, weight: clamp01(item.rawWeight) }));
+  return active.map((item) => ({ step: item.step, weight: item.rawWeight / total }));
+}
+
+function sampleCameraMotionSequence(
+  scene: Scene3DState,
+  transition: PoseTransition,
+  sequence: CameraMotionSequence,
+  characterSamples: AnimationClipSample[],
+  timeSec: number
+): CameraMotionSample | undefined {
+  const baseCamera = scene.objects.cameras.find((item) => item.id === scene.activeCameraId) || scene.objects.cameras[0];
+  if (!baseCamera) return undefined;
+  const focusedBaseCamera = { ...baseCamera, targetPosition: cameraEffectiveTargetPosition(baseCamera) };
+  const durationSec = Math.max(0.1, transition.durationSec);
+  const ratio = clamp01(timeSec / durationSec);
+  const characterSample = sampleAnimationSamplesAtTime(characterSamples, timeSec);
+  if (!characterSample) return undefined;
+  const active = activeCameraMotionSequenceSteps(sequence, ratio);
+  if (!active.length) {
+    return {
+      timeSec,
+      position: { ...focusedBaseCamera.position },
+      targetPosition: cameraEffectiveTargetPosition(focusedBaseCamera),
+      fov: focusedBaseCamera.fov
+    };
+  }
+  let mixedPosition = new THREE.Vector3(focusedBaseCamera.position.x, focusedBaseCamera.position.y, focusedBaseCamera.position.z);
+  let mixedTarget = new THREE.Vector3(focusedBaseCamera.targetPosition.x, focusedBaseCamera.targetPosition.y, focusedBaseCamera.targetPosition.z);
+  let mixedFov = focusedBaseCamera.fov;
+  let accumulated = 0;
+  active.forEach(({ step, weight }) => {
+    const config = normalizeCameraMotion({
+      enabled: true,
+      type: step.type,
+      targetCharacterId: step.targetCharacterId || transition.characterId,
+      intensity: step.intensity,
+      startTimeSec: step.startRatio * durationSec,
+      endTimeSec: step.endRatio * durationSec,
+      distance: step.distance,
+      heightOffset: step.heightOffset,
+      orbitAngleDeg: step.orbitAngleDeg,
+      keepCharacterInFrame: step.keepCharacterInFrame
+    }, durationSec, transition.characterId);
+    const sample = cameraSampleForMotion(focusedBaseCamera, config, characterSample);
+    if (!sample) return;
+    const mix = accumulated > 0 ? weight / (accumulated + weight) : 1;
+    mixedPosition = new THREE.Vector3(
+      lerp(mixedPosition.x, sample.position.x, mix),
+      lerp(mixedPosition.y, sample.position.y, mix),
+      lerp(mixedPosition.z, sample.position.z, mix)
+    );
+    mixedTarget = new THREE.Vector3(
+      lerp(mixedTarget.x, sample.targetPosition.x, mix),
+      lerp(mixedTarget.y, sample.targetPosition.y, mix),
+      lerp(mixedTarget.z, sample.targetPosition.z, mix)
+    );
+    mixedFov = clampNumber(lerp(mixedFov, sample.fov ?? focusedBaseCamera.fov, mix), 12, 100);
+    accumulated += weight;
+  });
+  const characterTarget = new THREE.Vector3(
+    characterSample.transform.position.x,
+    characterSample.transform.position.y + 1.05,
+    characterSample.transform.position.z
+  );
+  const keepInFrame = active.some(({ step }) => step.keepCharacterInFrame);
+  if (keepInFrame) mixedTarget.lerp(characterTarget, 0.42);
+  const cameraDistance = mixedPosition.distanceTo(mixedTarget);
+  if (cameraDistance < 0.55) {
+    const away = mixedPosition.clone().sub(mixedTarget);
+    if (away.lengthSq() < 0.0001) away.set(0, 0.4, 1);
+    away.normalize();
+    mixedPosition = mixedTarget.clone().add(away.multiplyScalar(0.55));
+  }
+  if (cameraDistance > 9) {
+    mixedPosition.lerp(mixedTarget, clamp01((cameraDistance - 9) / Math.max(cameraDistance, 0.001)));
+  }
+  return {
+    timeSec,
+    position: vec(Number(mixedPosition.x.toFixed(4)), Number(mixedPosition.y.toFixed(4)), Number(mixedPosition.z.toFixed(4))),
+    targetPosition: vec(Number(mixedTarget.x.toFixed(4)), Number(mixedTarget.y.toFixed(4)), Number(mixedTarget.z.toFixed(4))),
+    fov: Number(clampNumber(mixedFov, 12, 100).toFixed(3))
+  };
+}
+
 function cameraMotionProgress(config: CameraMotionConfig, timeSec: number) {
   if (!config.enabled || config.type === 'none') return 0;
   const span = Math.max(0.0001, config.endTimeSec - config.startTimeSec);
@@ -14215,7 +21794,14 @@ function cameraSampleForMotion(baseCamera: CameraObject | undefined, config: Cam
   };
 }
 
-function buildCameraMotionSamples(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[]): CameraMotionSample[] | undefined {
+function buildCameraMotionSamples(scene: Scene3DState, transition: PoseTransition, samples: AnimationClipSample[], contacts: AnimationContactFrame[] = [], motionSkillSequence?: MotionSkillSequence, motionStyleProfile?: MotionStyleProfile): CameraMotionSample[] | undefined {
+  const cameraSequence = buildCameraMotionSequence(scene, transition, motionSkillSequence, contacts, motionStyleProfile);
+  if (cameraSequence?.steps.length) {
+    const sequenceSamples = samples
+      .map((sample) => sampleCameraMotionSequence(scene, transition, cameraSequence, samples, sample.timeSec))
+      .filter((sample): sample is CameraMotionSample => Boolean(sample));
+    return sequenceSamples.length ? sequenceSamples : undefined;
+  }
   if (!transition.cameraMotion.enabled || transition.cameraMotion.type === 'none') return undefined;
   const baseCamera = scene.objects.cameras.find((item) => item.id === scene.activeCameraId) || scene.objects.cameras[0];
   const focusedBaseCamera = baseCamera
@@ -15633,9 +23219,12 @@ function PropertyPanel({
       ...(invalidatesMotionIntent ? {
         aiActionIntent: undefined,
         generatedMotionPrompt: undefined,
-        motionIntent: undefined
+        motionIntent: undefined,
+        motionDraft: undefined
       } : {}),
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       error: undefined
     }, {
       label: '修改动态片段',
@@ -15706,7 +23295,10 @@ function PropertyPanel({
       aiActionIntent: undefined,
       generatedMotionPrompt: undefined,
       motionIntent: undefined,
+      motionDraft: undefined,
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       error: undefined
     } as Partial<PoseTransition>, { label: mode === 'start' ? '设置起点姿势' : '设置终点姿势' });
     if (wasSaved) pulseCheckpoint(`${transition.id}:${mode}`);
@@ -15726,10 +23318,26 @@ function PropertyPanel({
       aiActionIntent: undefined,
       generatedMotionPrompt: undefined,
       motionIntent: undefined,
+      motionDraft: undefined,
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       error: undefined
     } as Partial<PoseTransition>, { label: mode === 'start' ? '清除起点姿势' : '清除终点姿势' });
     onError('');
+  };
+
+  const focusDirectorViewOnPose = (transform: PoseTransform) => {
+    onPatch({
+      selectedObjectId: character?.id,
+      activeViewMode: 'director',
+      directorViewTarget: {
+        x: transform.position.x,
+        y: transform.position.y + 0.95,
+        z: transform.position.z
+      },
+      directorViewFocusNonce: Date.now()
+    }, { history: false });
   };
 
   const jumpToTransitionPose = (mode: 'start' | 'end') => {
@@ -15757,6 +23365,7 @@ function PropertyPanel({
       toePose: cloneToePose(toePoseValue),
       rigPose: pose
     });
+    focusDirectorViewOnPose(transform);
     onPreviewChange((current) => ({
       ...current,
       transitionId: currentTransition.id,
@@ -15793,6 +23402,8 @@ function PropertyPanel({
     patchTransition(currentTransition.id, {
       keyframes: [...currentTransition.keyframes, frame].sort((a, b) => a.timeSec - b.timeSec),
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       updatedAt: new Date().toISOString()
     }, { label: '添加中间关键帧' });
   };
@@ -15808,6 +23419,8 @@ function PropertyPanel({
           }
         : item).sort((a, b) => a.timeSec - b.timeSec),
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       updatedAt: new Date().toISOString()
     }, { label: '调整中间关键帧' });
   };
@@ -15827,6 +23440,8 @@ function PropertyPanel({
     patchTransition(currentTransition.id, {
       keyframes: currentTransition.keyframes.filter((item) => item.id !== frameId),
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       updatedAt: new Date().toISOString()
     }, { label: '删除中间关键帧' });
   };
@@ -15845,13 +23460,22 @@ function PropertyPanel({
       toePose: cloneToePose(frame.toePose),
       rigPose: frame.pose
     });
-    onPreviewChange((current) => ({ ...current, transitionId: currentTransition.id, currentTimeSec: frame.timeSec, playing: false, enabled: true }));
+    focusDirectorViewOnPose(frame.transform);
+    onPreviewChange((current) => ({
+      ...current,
+      transitionId: currentTransition.id,
+      currentTimeSec: frame.timeSec,
+      playing: false,
+      enabled: false
+    }));
   };
 
   const appendMotionHistory = (
     transition: PoseTransition,
     mode: MotionRefineHistoryEntry['mode'],
     motionIntent: MotionIntent | undefined,
+    motionDraft?: MotionDraft,
+    interactionDraft?: InteractionDraft,
     error?: string
   ): MotionRefineHistoryEntry[] => ([
     ...(transition.motionRefineHistory || []),
@@ -15868,6 +23492,8 @@ function PropertyPanel({
         usedReferenceAssetId: scene.captures[scene.captures.length - 1]?.mediaAssetId
       },
       motionIntent,
+      motionDraft,
+      interactionDraft,
       error
     }
   ]).slice(-20);
@@ -15885,7 +23511,39 @@ function PropertyPanel({
       : undefined
   });
 
-  const localPlanFromIntent = (transition: PoseTransition, intent: MotionIntent | undefined) => {
+  const motionDraftPlanNotes = (motionDraft: MotionDraft | undefined) => {
+    if (!motionDraft) return [];
+    const phaseLabels = motionDraft.phasePlan
+      .map((phase) => `${phase.label} ${phase.startSec.toFixed(2)}-${phase.endSec.toFixed(2)}s`)
+      .slice(0, 6);
+    return [
+      phaseLabels.length ? `MotionDraft 阶段规划：${phaseLabels.join(' → ')}` : '',
+      `MotionDraft 中间规划：${motionDraft.transformKeyframes.length} 个根节点关键帧、${motionDraft.boneKeyframes.length} 个骨骼关键帧、${motionDraft.contactFrames.length} 个接触帧、${motionDraft.constraints.length} 条约束。`,
+      motionDraft.promptRequirements.length ? `MotionDraft 提示词拆解：${motionDraft.promptRequirements.map((item) => item.text).slice(0, 4).join('；')}` : '',
+      ...motionDraft.warnings
+    ].filter(Boolean);
+  };
+
+  const interactionDraftPlanNotes = (interactionDraft: InteractionDraft | undefined) => {
+    if (!interactionDraft) return [];
+    const actorSummary = interactionDraft.actors
+      .map((actor) => `${actor.actorId}:${actor.actionType}${actor.targetObjectId ? `->${actor.targetObjectId}` : ''}`)
+      .slice(0, 5)
+      .join(' / ');
+    const clipSummary = interactionDraft.interactionClips
+      .map((clip) => `${clip.label} ${clip.startSec.toFixed(2)}-${clip.endSec.toFixed(2)}s`)
+      .slice(0, 4)
+      .join(' / ');
+    return [
+      actorSummary ? `InteractionDraft actors: ${actorSummary}` : '',
+      clipSummary ? `InteractionDraft clips: ${clipSummary}` : '',
+      `InteractionDraft structure: ${interactionDraft.contacts.length} contacts, ${interactionDraft.syncMarkers.length} sync markers, ${interactionDraft.propMotions.length} prop motions`,
+      ...interactionDraft.spatialConstraints.map((item) => `InteractionDraft spatial constraint: ${item}`),
+      ...interactionDraft.warnings
+    ].filter(Boolean);
+  };
+
+  const localPlanFromIntent = (transition: PoseTransition, intent: MotionIntent | undefined, motionDraft?: MotionDraft, interactionDraft?: InteractionDraft) => {
     const localPlan = stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition));
     if (!intent) return localPlan;
     const constrained = constrainMotionIntentForLocalCompiler(transition, localPlan, intent);
@@ -15916,6 +23574,8 @@ function PropertyPanel({
           explain: [
             ...localPlan.semanticPlan.explain,
             middleKeyframeConstraintNote(transition),
+            ...motionDraftPlanNotes(motionDraft),
+            ...interactionDraftPlanNotes(interactionDraft),
             safeIntent.intent ? `AI理解：${safeIntent.intent}` : '',
             safeIntent.generatedMotionPrompt ? `AI补全动作：${safeIntent.generatedMotionPrompt}` : '',
             ...constrained.notes
@@ -15932,6 +23592,8 @@ function PropertyPanel({
         safeIntent.generatedMotionPrompt ? `AI 生成动作提示：${safeIntent.generatedMotionPrompt}` : '',
         ...(safeIntent.keyframeHints || []).map((hint) => `关键帧建议 ${Math.round(hint.timeRatio * 100)}%：${hint.label}`),
         middleKeyframeConstraintNote(transition),
+        ...motionDraftPlanNotes(motionDraft),
+        ...interactionDraftPlanNotes(interactionDraft),
         ...constrained.notes,
         ...safeIntent.warnings,
         ...localPlan.notes
@@ -15956,33 +23618,46 @@ function PropertyPanel({
       actionPlan: localPlan,
       warnings: localPlan.notes,
       animationClip: undefined,
+      qualityReport: undefined,
+      promptAdherenceReport: undefined,
       error: undefined
     };
     try {
       setMotionResolving(true);
-      const intent = await requestMotionIntent(buildMotionRefinePayload({ node, scene, transition: locallyResolvedTransition, character, currentProjectId }));
-      const plan = localPlanFromIntent(locallyResolvedTransition, intent);
+      const refine = await requestMotionIntent(buildMotionRefinePayload({ node, scene, transition: locallyResolvedTransition, character, currentProjectId }));
+      const intent = refine.motionIntent;
+      const motionDraft = refine.motionDraft;
+      const interactionDraft = refine.interactionDraft;
+      const promptRequirementGraph = refine.promptRequirementGraph || compilePromptRequirements(scene, locallyResolvedTransition);
+      const plan = localPlanFromIntent(locallyResolvedTransition, intent, motionDraft, interactionDraft);
       patchTransition(transition.id, {
         actionPlan: plan,
         aiActionIntent: intent.intent,
         generatedMotionPrompt: intent.generatedMotionPrompt,
         motionIntent: intent,
+        motionDraft,
+        interactionDraft,
+        promptRequirementGraph,
         cameraMotion: cameraMotionForAiIntent(transition, intent),
-        motionRefineHistory: appendMotionHistory(locallyResolvedTransition, 'resolve', intent),
-        warnings: [...intent.warnings, ...plan.notes],
+        motionRefineHistory: appendMotionHistory(locallyResolvedTransition, 'resolve', intent, motionDraft, interactionDraft),
+        warnings: [...intent.warnings, ...(motionDraft?.warnings || []), ...(interactionDraft?.warnings || []), ...(promptRequirementGraph?.warnings || []), ...plan.notes],
         animationClip: undefined,
+        qualityReport: undefined,
+        promptAdherenceReport: undefined,
         error: undefined
       }, { label: 'AI 解析动作' });
-      onError(intent.warnings.join(' '));
+      onError([...intent.warnings, ...(motionDraft?.warnings || []), ...(interactionDraft?.warnings || []), ...(promptRequirementGraph?.warnings || [])].join(' '));
     } catch (error: any) {
       const message = error?.message || 'AI 解析失败';
       const plan = localPlan;
       const fallbackNote = `AI 解析失败，已保留本地模板解析：${message}`;
       patchTransition(transition.id, {
         actionPlan: plan,
-        motionRefineHistory: appendMotionHistory(locallyResolvedTransition, 'resolve', undefined, message),
+        motionRefineHistory: appendMotionHistory(locallyResolvedTransition, 'resolve', undefined, undefined, undefined, message),
         warnings: [fallbackNote, ...plan.notes],
         animationClip: undefined,
+        qualityReport: undefined,
+        promptAdherenceReport: undefined,
         error: message
       }, { label: 'AI 解析失败' });
       onError(fallbackNote);
@@ -15996,16 +23671,25 @@ function PropertyPanel({
     if (!transition) return;
     try {
       setMotionGenerating(true);
-      const intent = transition.motionIntent || await requestMotionIntent(buildMotionRefinePayload({ node, scene, transition, character, currentProjectId }));
-      const plan = localPlanFromIntent(transition, intent);
+      const refine = transition.motionIntent
+        ? { motionIntent: transition.motionIntent, motionDraft: transition.motionDraft, interactionDraft: transition.interactionDraft, promptRequirementGraph: transition.promptRequirementGraph }
+        : await requestMotionIntent(buildMotionRefinePayload({ node, scene, transition, character, currentProjectId }));
+      const intent = refine.motionIntent;
+      const motionDraft = refine.motionDraft;
+      const interactionDraft = refine.interactionDraft;
+      const promptRequirementGraph = refine.promptRequirementGraph || compilePromptRequirements(scene, transition);
+      const plan = localPlanFromIntent(transition, intent, motionDraft, interactionDraft);
       const merged = buildCompiledTransition({
         ...transition,
         aiActionIntent: intent.intent,
         generatedMotionPrompt: intent.generatedMotionPrompt,
         motionIntent: intent,
+        motionDraft,
+        interactionDraft,
+        promptRequirementGraph,
         cameraMotion: cameraMotionForAiIntent(transition, intent),
-        motionRefineHistory: appendMotionHistory(transition, 'generate', intent),
-        warnings: [...intent.warnings, ...plan.notes]
+        motionRefineHistory: appendMotionHistory(transition, 'generate', intent, motionDraft, interactionDraft),
+        warnings: [...intent.warnings, ...(motionDraft?.warnings || []), ...(interactionDraft?.warnings || []), ...(promptRequirementGraph?.warnings || []), ...plan.notes]
       }, plan);
       patchTransition(transition.id, merged, { label: 'AI 生成动态' });
       onSelectTransition(transition.id);
@@ -16017,7 +23701,7 @@ function PropertyPanel({
       const fallbackTransition = {
         ...transition,
         actionPlan: stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition)),
-        motionRefineHistory: appendMotionHistory(transition, 'generate', undefined, message),
+        motionRefineHistory: appendMotionHistory(transition, 'generate', undefined, undefined, undefined, message),
         updatedAt: new Date().toISOString()
       };
       const merged = buildCompiledTransition(fallbackTransition, stampActionPlanForTransition(transition, resolveTransitionActionPlan(transition)));
@@ -16603,7 +24287,9 @@ function MotionPipelinePanel({
 }) {
   const actionSkill = transition?.actionPlan.semanticPlan?.actionSkill;
   const qualityReport = transition?.qualityReport;
+  const promptAdherenceReport = transition?.promptAdherenceReport;
   const visibleQualityIssues = qualityReport?.issues.filter((issue) => issue.severity !== 'info').slice(0, 3) || [];
+  const failedPromptRequirements = promptAdherenceReport?.requirementResults.filter((result) => !result.passed) || [];
   const expectationCount = qualityReport?.metrics.motionExpectationCount || 0;
   const expectationFailedCount = qualityReport?.metrics.motionExpectationFailedCount || 0;
   const expectationPassCount = Math.max(0, expectationCount - expectationFailedCount);
@@ -16643,7 +24329,7 @@ function MotionPipelinePanel({
         onClick={onGenerate}
         primary
       />
-      {(actionSkill || qualityReport) && (
+      {(actionSkill || qualityReport || promptAdherenceReport) && (
         <div className="space-y-1 rounded border border-white/10 bg-black/25 px-2 py-1.5">
           {actionSkill && (
             <div className="space-y-0.5">
@@ -16673,6 +24359,21 @@ function MotionPipelinePanel({
                   ))}
                 </div>
               )}
+            </div>
+          )}
+          {promptAdherenceReport && (
+            <div className="space-y-0.5">
+              <div className={promptAdherenceReport.score >= 80 ? 'text-[10px] font-medium text-emerald-100' : promptAdherenceReport.score >= 60 ? 'text-[10px] font-medium text-amber-100' : 'text-[10px] font-medium text-red-100'}>
+                提示词遵循度：{Math.round(promptAdherenceReport.score)}/100
+              </div>
+              {failedPromptRequirements.length > 0 && (
+                <div className="text-[10px] text-zinc-500">
+                  未落实要求：{failedPromptRequirements.length} 条
+                </div>
+              )}
+              {promptAdherenceReport.correctionHints.slice(0, 2).map((hint) => (
+                <div key={hint} className="truncate text-[10px] text-zinc-500">{hint}</div>
+              ))}
             </div>
           )}
         </div>
